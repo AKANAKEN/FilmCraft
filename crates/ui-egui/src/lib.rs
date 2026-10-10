@@ -210,6 +210,10 @@ pub struct Playback {
 /// under this.
 pub const AUDIO_STALL_S: f64 = 1.0;
 
+/// Dropping a folder: how deep its subfolders are followed, and how many entries are read in all.
+const MAX_FOLDER_IMPORT_DEPTH: usize = 16;
+const MAX_FOLDER_IMPORT_ENTRIES: usize = 20_000;
+
 /// How long `ui.screenshot` waits for the window to present the frame.
 const SCREENSHOT_TIMEOUT_S: f64 = 10.0;
 /// How long `ui.screenshot` waits for the UI to settle (monitors showing their exact frames, the
@@ -1185,12 +1189,16 @@ impl FilmcraftApp {
         };
         let dropped = ctx.input(|i| i.raw.dropped_files.clone());
         let mut paths = Vec::new();
+        let mut folders = Vec::new();
         for f in dropped {
             let p = f.path();
-            if p.exists() {
+            if p.is_dir() {
+                folders.push(p.to_path_buf());
+            } else if p.exists() {
                 paths.push(p.to_string_lossy().to_string());
             }
         }
+        let bin = self.import_bin().0;
         if !paths.is_empty() {
             let pointer = self.drop_pointer(ctx);
             let imported = self.session.execute("file.import", json!({"paths": paths, "bin": self.import_bin().0}));
@@ -1204,6 +1212,35 @@ impl FilmcraftApp {
                     self.pending_timeline_drop = Some((items, pos));
                 }
             }
+        }
+        // a dropped folder becomes a bin of the same name holding its files (subfolders: sub-bins)
+        let mut budget = MAX_FOLDER_IMPORT_ENTRIES;
+        for dir in folders {
+            self.import_folder(&dir, bin, 0, &mut budget);
+        }
+    }
+
+    /// Import the files of `dir` into a new bin under `parent`, and each subfolder into a sub-bin.
+    /// Depth and entry count are capped so a huge or cyclic tree cannot hang the UI.
+    fn import_folder(&mut self, dir: &std::path::Path, parent: u64, depth: usize, budget: &mut usize) {
+        if depth > MAX_FOLDER_IMPORT_DEPTH || *budget == 0 {
+            return;
+        }
+        let name = dir.file_name().map(|n| n.to_string_lossy().to_string()).filter(|n| !n.is_empty()).unwrap_or_else(|| "Folder".into());
+        let Ok(created) = self.session.execute("file.newBin", json!({"name": name, "parent": parent})) else { return };
+        let Some(bin) = created["bin"].as_u64() else { return };
+        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        let mut entries: Vec<std::path::PathBuf> =
+            rd.flatten().filter(|e| !e.file_name().to_string_lossy().starts_with('.')).map(|e| e.path()).take(*budget).collect();
+        *budget = budget.saturating_sub(entries.len());
+        entries.sort_by_key(|p| p.file_name().map(|n| n.to_string_lossy().to_lowercase()));
+        let (subdirs, files): (Vec<_>, Vec<_>) = entries.into_iter().partition(|p| p.is_dir());
+        let files: Vec<String> = files.iter().map(|p| p.to_string_lossy().to_string()).collect();
+        if !files.is_empty() {
+            let _ = self.session.execute("file.import", json!({"paths": files, "bin": bin}));
+        }
+        for sub in subdirs {
+            self.import_folder(&sub, bin, depth + 1, budget);
         }
     }
 
