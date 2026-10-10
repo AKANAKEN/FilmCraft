@@ -358,3 +358,101 @@ fn transcript_background_cannot_apply_to_a_reopened_project() {
     assert!(finish(&mut s, r["job"].as_u64().unwrap())["result"]["error"].is_string());
     assert_eq!(*s.project, *reopened);
 }
+
+#[test]
+fn speaker_assignment_is_precise_undoable_and_persistent() {
+    let (mut s, item, _) = session();
+    s.execute("transcript.generate", json!({"item": item.0})).unwrap();
+    let before = s.project.clone();
+    let expected = json!([{"index": 0, "word": before.transcripts[&item].words[0]}, {"index": 2, "word": before.transcripts[&item].words[2]}]);
+    let params = json!({"item": item.0, "indices": [2, 0, 2], "name": "Alice", "expected": expected});
+    let r = s.execute("transcript.assignSpeaker", params.clone()).unwrap();
+    assert_eq!(r["words"], 2);
+    let after = s.project.clone();
+    let tr = &after.transcripts[&item];
+    assert_eq!(tr.speakers[2].name, "Alice");
+    for (i, (old, new)) in before.transcripts[&item].words.iter().zip(&tr.words).enumerate() {
+        let mut want = old.clone();
+        if i == 0 || i == 2 {
+            want.speaker = Some(2);
+        }
+        assert_eq!(*new, want, "only selected speaker assignments may change");
+    }
+    assert!(s.execute("transcript.assignSpeaker", params).is_err(), "stale speaker assignment rejected");
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(*s.project, *before);
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(*s.project, *after);
+    let path = std::env::temp_dir().join(format!("filmcraft-speaker-persistence-{}.fcproj", std::process::id()));
+    s.execute("file.saveAs", json!({"path": path})).unwrap();
+    s.execute("file.open", json!({"path": path})).unwrap();
+    assert_eq!(s.project.transcripts, after.transcripts);
+    std::fs::remove_file(path).unwrap();
+    s.execute("transcript.assignSpeaker", json!({"item": item.0, "indices": [0], "speaker": null})).unwrap();
+    assert_eq!(s.project.transcripts[&item].words[0].speaker, None);
+    s.execute("transcript.assignSpeaker", json!({"item": item.0, "indices": [1], "name": "Alice"})).unwrap();
+    assert_eq!(s.project.transcripts[&item].speakers.len(), 3, "existing name reused");
+}
+
+#[test]
+fn speaker_commands_reject_hostile_input_without_changes() {
+    let (mut s, item, _) = session();
+    s.execute("transcript.generate", json!({"item": item.0})).unwrap();
+    let before = s.project.clone();
+    for params in [
+        json!({}),
+        json!({"item": 999999, "indices": [0], "speaker": 0}),
+        json!({"item": item.0, "indices": [], "speaker": 0}),
+        json!({"item": item.0, "indices": [0, 9999], "speaker": 0}),
+        json!({"item": item.0, "indices": [-1], "speaker": 0}),
+        json!({"item": item.0, "indices": ["0"], "speaker": 0}),
+        json!({"item": item.0, "indices": [u64::MAX], "speaker": 0}),
+        json!({"item": item.0, "indices": [0], "speaker": u64::MAX}),
+        json!({"item": item.0, "indices": [0], "name": "x", "speaker": 0}),
+        json!({"item": item.0, "indices": [0], "name": "\n"}),
+        json!({"item": item.0, "indices": [0], "name": "x".repeat(257)}),
+        json!({"item": item.0, "indices": [0], "expected": [], "speaker": 0}),
+    ] {
+        assert!(s.execute("transcript.assignSpeaker", params.clone()).is_err(), "{params}");
+        assert_eq!(*s.project, *before);
+    }
+    for params in [
+        json!({"item": 999999, "speaker": "Speaker 1", "name": "Bad"}),
+        json!({"item": "invalid", "speaker": "Speaker 1", "name": "Bad"}),
+        json!({"item": item.0, "speaker": 0, "name": "A\nB"}),
+        json!({"item": item.0, "speaker": 0, "name": "Alice", "expected": "Different"}),
+    ] {
+        assert!(s.execute("transcript.renameSpeaker", params).is_err());
+        assert_eq!(*s.project, *before, "invalid item must never rename other transcripts");
+    }
+}
+
+#[test]
+fn identify_speakers_reuses_existing_words_without_a_speech_model() {
+    let (mut s, item, _) = session();
+    assert!(s.execute("transcript.identifySpeakers", json!({"item": item.0})).is_err());
+    s.execute("transcript.generate", json!({"item": item.0})).unwrap();
+    s.transcriber = None;
+    let before = s.project.clone();
+    let started = s.execute("transcript.identifySpeakers", json!({"item": item.0, "maxSpeakers": 1, "wait": false})).unwrap();
+    let job = started["job"].as_u64().unwrap();
+    assert!(finish(&mut s, job)["result"]["error"].is_null());
+    let transcript = &s.project.transcripts[&item];
+    assert_eq!(transcript.speakers.len(), 1);
+    for (old, new) in before.transcripts[&item].words.iter().zip(&transcript.words) {
+        let mut want = old.clone();
+        want.speaker = Some(0);
+        assert_eq!(*new, want);
+    }
+    assert_eq!(transcript.source, before.transcripts[&item].source);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(*s.project, *before);
+    let started = s.execute("transcript.identifySpeakers", json!({"item": item.0, "wait": false})).unwrap();
+    s.execute("jobs.cancel", json!({"job": started["job"]})).unwrap();
+    assert!(finish(&mut s, started["job"].as_u64().unwrap())["result"]["error"].is_string());
+    assert_eq!(*s.project, *before);
+    let started = s.execute("transcript.identifySpeakers", json!({"item": item.0, "wait": false})).unwrap();
+    s.execute("transcript.renameSpeaker", json!({"item": item.0, "speaker": 0, "name": "Edited"})).unwrap();
+    assert!(finish(&mut s, started["job"].as_u64().unwrap())["result"]["error"].as_str().unwrap().contains("changed"));
+    assert_eq!(s.project.transcripts[&item].speakers[0].name, "Edited");
+}

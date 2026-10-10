@@ -328,6 +328,30 @@ fn transcript(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
             }
         });
         app.auto.add("text.transcript.models", menu.response.rect, "Speech models");
+        let menu = egui::containers::menu::MenuButton::new(tl!("Speakers"))
+            .config(egui::containers::menu::MenuConfig::new().close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside))
+            .ui(ui, |ui| {
+                ui.label(tl!("Maximum speakers"));
+                let limit = ui.add(egui::DragValue::new(&mut app.ui.transcript_speaker_limit).range(1..=32));
+                app.auto.add("text.transcript.speakers.limit", limit.rect, "Maximum speakers");
+                ui.label(tl!("Replaces speaker names and assignments. Undo is available."));
+                let items: Vec<_> = if app.ui.transcript_source {
+                    app.session.state.source_item.into_iter().collect()
+                } else {
+                    filmcraft_engine::transcript::sequence_words(&app.session).iter().map(|w| w.item).collect()
+                };
+                let enabled = !items.is_empty() && app.session.transcript_jobs.is_empty();
+                let identify = ui.add_enabled(enabled, egui::Button::new(tl!("Identify Speakers")));
+                app.auto.add("text.transcript.speakers.identify", identify.rect, "Identify speakers");
+                if identify.clicked() {
+                    actions.push((
+                        "transcript.identifySpeakers".into(),
+                        json!({"items": items.iter().map(|i| i.0).collect::<Vec<_>>(), "maxSpeakers": app.ui.transcript_speaker_limit, "wait": false}),
+                    ));
+                    ui.close();
+                }
+            });
+        app.auto.add("text.transcript.speakers", menu.0.rect, "Speakers");
     });
     let rect = Rect::from_min_max(rect.min + vec2(0.0, 30.0), rect.max);
     let source = app.ui.transcript_source;
@@ -338,12 +362,14 @@ fn transcript(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         .jobs
         .iter()
         .rev()
-        .find(|j| matches!(j.label.as_str(), "Transcribe" | "Download Speech Model") && !j.to_json()["finished"].as_bool().unwrap_or(false))
+        .find(|j| {
+            matches!(j.label.as_str(), "Transcribe" | "Download Speech Model" | "Identify Speakers") && !j.to_json()["finished"].as_bool().unwrap_or(false)
+        })
         .cloned()
     {
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
         child.vertical(|ui| {
-            ui.label(job.label.clone());
+            ui.label(crate::i18n::t(&job.label));
             let status = job.progress.status.lock().unwrap_or_else(|e| e.into_inner()).clone();
             let progress = ui.add(egui::ProgressBar::new(job.progress.fraction()).text(status));
             app.auto.add("text.transcript.progress", progress.rect, "Transcription progress");
@@ -441,8 +467,12 @@ fn transcript(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         for (pi, pr) in paras.iter().enumerate() {
             let w0 = &words[pr.start];
             let head = format!("{}  {}", w0.speaker.as_deref().unwrap_or(tl!("Speaker")), format_time(w0.start, rate, df, TimeDisplay::Timecode, 48_000));
-            let hr = ui.label(egui::RichText::new(head).size(11.0).color(t.text_dim).strong());
-            app.auto.add(&format!("text.transcript.paragraph.{pi}"), hr.rect, "Paragraph");
+            let menu = egui::containers::menu::MenuButton::new(egui::RichText::new(head).size(11.0).color(t.text_dim).strong())
+                .config(egui::containers::menu::MenuConfig::new().close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside))
+                .ui(ui, |ui| {
+                    speaker_menu(app, ui, &words[pr.clone()], pi, &mut actions);
+                });
+            app.auto.add(&format!("text.transcript.paragraph.{pi}"), menu.0.rect, "Paragraph");
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing = vec2(4.0, 3.0);
                 for i in pr.clone() {
@@ -505,6 +535,69 @@ fn transcript(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     }
 
     run(app, ui, actions);
+}
+
+fn speaker_menu(
+    app: &mut FilmcraftApp,
+    ui: &mut egui::Ui,
+    words: &[filmcraft_edit::transcript::SeqWord],
+    paragraph: usize,
+    actions: &mut Vec<(String, Value)>,
+) {
+    let Some(first) = words.first() else { return };
+    if words.iter().any(|w| w.item != first.item) {
+        ui.label(tl!("Choose a passage from one source clip."));
+        return;
+    }
+    let Some(transcript) = app.session.project.transcripts.get(&first.item).cloned() else { return };
+    let mut indices: Vec<_> = words.iter().map(|w| w.index).collect();
+    indices.sort_unstable();
+    indices.dedup();
+    let expected: Vec<_> = indices.iter().filter_map(|i| transcript.words.get(*i).map(|w| json!({"index": i, "word": w}))).collect();
+    let id = format!("text.transcript.speaker.{paragraph}");
+    ui.label(tl!("Assign passage to speaker"));
+    for (index, speaker) in transcript.speakers.iter().enumerate() {
+        let button = ui.button(&speaker.name);
+        app.auto.add(&format!("{id}.assign.{index}"), button.rect, &speaker.name);
+        if button.clicked() {
+            actions.push(("transcript.assignSpeaker".into(), json!({"item": first.item.0, "indices": indices, "speaker": index, "expected": expected})));
+            ui.close();
+        }
+    }
+    let clear = ui.button(tl!("No speaker"));
+    app.auto.add(&format!("{id}.clear"), clear.rect, "No speaker");
+    if clear.clicked() {
+        actions.push(("transcript.assignSpeaker".into(), json!({"item": first.item.0, "indices": indices, "speaker": null, "expected": expected})));
+        ui.close();
+    }
+    ui.separator();
+    let name = ui.add(egui::TextEdit::singleline(&mut app.ui.transcript_speaker_name).hint_text(tl!("Speaker name")));
+    app.auto.add(&format!("{id}.name"), name.rect, "Speaker name");
+    let valid = !app.ui.transcript_speaker_name.trim().is_empty();
+    let add = ui.add_enabled(valid, egui::Button::new(tl!("Assign to new speaker")));
+    app.auto.add(&format!("{id}.new"), add.rect, "Assign to new speaker");
+    if add.clicked() {
+        actions.push((
+            "transcript.assignSpeaker".into(),
+            json!({"item": first.item.0, "indices": indices, "name": app.ui.transcript_speaker_name, "expected": expected}),
+        ));
+        app.ui.transcript_speaker_name.clear();
+        ui.close();
+    }
+    if let Some(index) = transcript.words.get(first.index).and_then(|w| w.speaker)
+        && let Some(speaker) = transcript.speakers.get(index as usize)
+    {
+        let rename = ui.add_enabled(valid, egui::Button::new(tl!("Rename speaker")));
+        app.auto.add(&format!("{id}.rename"), rename.rect, "Rename speaker");
+        if rename.clicked() {
+            actions.push((
+                "transcript.renameSpeaker".into(),
+                json!({"item": first.item.0, "speaker": index, "name": app.ui.transcript_speaker_name, "expected": speaker.name}),
+            ));
+            app.ui.transcript_speaker_name.clear();
+            ui.close();
+        }
+    }
 }
 
 fn filmcraft_speech_available(app: &FilmcraftApp) -> bool {

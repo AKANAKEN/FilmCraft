@@ -31,7 +31,9 @@ the control channel and MCP agents can do the same.
 | `transcript.search` | Word-index ranges matching a phrase (case and punctuation ignored; the last word may be a prefix). |
 | `transcript.select` | Mark In/Out around words `from..=to` (frame-snapped outward) and move the playhead there. |
 | `transcript.extract` / `transcript.lift` | Extract (ripple) or lift the words' frames on the targeted tracks. |
-| `transcript.renameSpeaker` | Rename a speaker by name (every transcript) or by index in one `item`. |
+| `transcript.renameSpeaker` | Rename a speaker by name (every transcript) or by index in one `item`; optional `expected` checks the old name. Invalid item IDs never widen the operation to other clips. |
+| `transcript.identifySpeakers` | Identify speakers in existing transcripts without rerunning Whisper. Same item targeting as generate; `maxSpeakers` (1–32, default 6), `wait` (default true). Replaces names/assignments in one undo step. No model download required. |
+| `transcript.assignSpeaker` | Assign specific original media word `indices` in one `item` to an existing `speaker` index, `null` (no speaker), or a `name` (create/reuse). Optional `expected` word snapshots reject stale edits. |
 | `transcript.removeFillers` | Ripple-delete filler words (`fillers`, default um/uh/erm/…; phrases such as "you know" allowed). |
 | `transcript.removePauses` | Ripple-delete pauses longer than `minSeconds`, keeping `keepSeconds` of air on both sides. |
 | `transcript.createCaptions` | Lay the words out as captions on a new caption track (`maxChars`, `lines`, `minSeconds`, `maxSeconds`, `gapFrames`). |
@@ -45,7 +47,7 @@ with timestamp decoding, language detection and word times from cross-attention 
 `filmcraft_speech::whisper` module docs). Speakers are labelled by clustering per-chunk MFCC
 statistics (`filmcraft_speech::diarize`); no model is involved.
 
-Both are **optional features**, off by default and never built for the web:
+Whisper inference and model downloads are **optional features**, off by default and never built for the web. Classical speaker analysis is always available for an existing transcript (synchronous on the web):
 
 - `whisper` (on `filmcraft-speech`, `filmcraft-engine`, and the `filmcraft` / `filmcraft-cli`
   apps, where it also enables downloads): candle inference.
@@ -78,6 +80,16 @@ Open **Text ▸ Transcript ▸ Speech models** to explicitly download a model, t
 
 For automation, `wait: true` keeps the synchronous command behavior. With `wait: false`, commands return a `job` ID; use `jobs.list` / `jobs.cancel`. Hosts must call `Session::poll_persistence` on their update loop to apply completed transcripts. Cancelled, failed, or stale results do not change the project. Opening another project cancels pending transcription. Multi-item transcription applies atomically as one undo step.
 
+### Speaker workflow
+
+Open **Text ▸ Transcript ▸ Speakers** to set a maximum number of speakers and choose **Identify Speakers**. This analyses each source's existing word-timed transcript and local audio, leaving recognized text, word timing, language and recognition confidence unchanged. It runs in a background job on desktop, with progress and cancellation. Results replace existing speaker names and assignments; undo restores them. Cancelled or stale results cannot overwrite manual changes.
+
+Click a paragraph's speaker/timecode header to assign that visible passage to an existing speaker, clear its assignment, or enter a name to create a speaker or rename its current speaker. Renaming affects that speaker throughout its source transcript; assignment affects only the words in the passage. Names and assignments persist in project files and feed captions created afterwards; existing caption tracks are independent and do not update automatically. Speaker numbers are local to each source: this does not recognize a person's real identity or link voices across different source files. A passage spanning multiple sources must be corrected in Source view instead.
+
+Speaker names are limited to 256 bytes without control characters; manual creation supports up to 64 speakers per transcript. Assignment accepts up to 10,000 explicit word indices, so sequence edits never cause hidden words between disjoint visible indices to be reassigned. For automation, `expected` is the sorted list of `{index, word}` snapshots from the original media transcript.
+
+The detector uses the existing MFCC clustering method, not a neural speaker embedding model. Its maximum is an upper bound rather than an exact speaker count. Similar voices, short turns, music and overlap can confuse it; review the labels and correct them as needed. Analysis rejects more than 512 speech chunks to bound clustering cost. Cancellation is observed between feature and clustering operations, not during an individual spectral transform.
+
 ### Testing
 
 Unit and engine tests use a fake `Transcriber` (`FixedTranscriber`), so CI needs no model. The
@@ -90,7 +102,7 @@ Apple-silicon laptop CPU).
 
 ## Limits
 
-- One transcription job and one model download can run at a time.
+- One transcription or speaker-identification job and one model download can run at a time.
 - Audio is decoded in cancellable chunks, but inference retains the full mono source in memory; each media item is limited to one hour until streaming inference is available.
 - Model loading and an individual decode/inference operation may finish before cancellation is observed.
 - Source view supports navigation and spelling correction; extract, lift and caption creation use Sequence view.

@@ -308,12 +308,16 @@ fn extract_or_lift(s: &mut Session, p: &Value, extract: bool) -> Result<Value> {
 }
 
 fn rename_speaker(s: &mut Session, p: &Value) -> Result<Value> {
-    let name = str_p(p, "name").map(str::trim).filter(|n| !n.is_empty()).ok_or_else(|| bad("transcript.renameSpeaker", "`name` is required"))?.to_string();
-    let item = u64_p(p, "item").map(ItemId).and_then(|i| media_item(s, i));
+    let name = speaker_name(p, "transcript.renameSpeaker")?;
+    let item = if p.get("item").is_some() {
+        Some(u64_p(p, "item").map(ItemId).and_then(|i| media_item(s, i)).ok_or_else(|| bad("transcript.renameSpeaker", "no such media item"))?)
+    } else {
+        None
+    };
     // `speaker`: the current name (every transcript), or an index (needs `item`)
     let (old_name, index) = match p.get("speaker") {
         Some(Value::String(n)) => (Some(n.clone()), None),
-        Some(v) if v.is_u64() => (None, v.as_u64().map(|n| n as usize)),
+        Some(v) if v.is_u64() => (None, v.as_u64().and_then(|n| usize::try_from(n).ok())),
         _ => return Err(bad("transcript.renameSpeaker", "`speaker` (name, or index with `item`) is required")),
     };
     if index.is_some() && item.is_none() {
@@ -328,6 +332,9 @@ fn rename_speaker(s: &mut Session, p: &Value) -> Result<Value> {
         let tt = Arc::make_mut(t);
         for (k, sp) in tt.speakers.iter_mut().enumerate() {
             if old_name.as_ref().is_some_and(|o| *o == sp.name) || index == Some(k) {
+                if p.get("expected").is_some_and(|expected| expected.as_str() != Some(sp.name.as_str())) {
+                    return Err(bad("transcript.renameSpeaker", "speaker changed; reopen the speaker menu"));
+                }
                 sp.name = name.clone();
                 n += 1;
             }
@@ -341,6 +348,73 @@ fn rename_speaker(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(())
     })?;
     Ok(json!({"renamed": n}))
+}
+
+fn speaker_name(p: &Value, cmd: &str) -> Result<String> {
+    str_p(p, "name")
+        .map(str::trim)
+        .filter(|n| !n.is_empty() && n.len() <= 256 && !n.chars().any(char::is_control))
+        .map(str::to_string)
+        .ok_or_else(|| bad(cmd, "speaker name must be nonempty, at most 256 bytes, without control characters"))
+}
+
+/// Assign exactly the visible media words, even when sequence edits make their indices disjoint.
+fn assign_speaker(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "transcript.assignSpeaker";
+    let item = u64_p(p, "item").map(ItemId).and_then(|i| media_item(s, i)).ok_or_else(|| bad(CMD, "no such media item"))?;
+    let indices = p["indices"].as_array().filter(|a| !a.is_empty() && a.len() <= 10_000).ok_or_else(|| bad(CMD, "need 1 to 10000 word indices"))?;
+    let mut indices =
+        indices.iter().map(|v| v.as_u64().and_then(|n| usize::try_from(n).ok()).ok_or_else(|| bad(CMD, "invalid word index"))).collect::<Result<Vec<_>>>()?;
+    indices.sort_unstable();
+    indices.dedup();
+    let mut transcript = s.project.transcripts.get(&item).ok_or_else(|| bad(CMD, "no transcript for this item"))?.as_ref().clone();
+    let mut expected = Vec::new();
+    for index in &indices {
+        let word = transcript.words.get(*index).ok_or_else(|| bad(CMD, "word index is out of range"))?;
+        expected.push(json!({"index": index, "word": word}));
+    }
+    if p.get("expected").is_some_and(|value| value != &json!(expected)) {
+        return Err(bad(CMD, "transcript changed; reopen the speaker menu"));
+    }
+    let speaker = if p.get("name").is_some() {
+        if p.get("speaker").is_some() {
+            return Err(bad(CMD, "pass either speaker or name"));
+        }
+        let name = speaker_name(p, CMD)?;
+        let index = if let Some(index) = transcript.speakers.iter().position(|sp| sp.name == name) {
+            index
+        } else {
+            if transcript.speakers.len() >= 64 {
+                return Err(bad(CMD, "a transcript supports at most 64 manually named speakers"));
+            }
+            transcript.speakers.push(filmcraft_project::Speaker { name });
+            transcript.speakers.len() - 1
+        };
+        Some(u32::try_from(index).map_err(|_| bad(CMD, "speaker index is too large"))?)
+    } else {
+        match p.get("speaker") {
+            Some(Value::Null) => None,
+            Some(value) => Some(
+                value
+                    .as_u64()
+                    .and_then(|n| u32::try_from(n).ok())
+                    .filter(|n| (*n as usize) < transcript.speakers.len())
+                    .ok_or_else(|| bad(CMD, "speaker index is out of range"))?,
+            ),
+            None => return Err(bad(CMD, "pass speaker (index or null) or a new name")),
+        }
+    };
+    for index in &indices {
+        if let Some(word) = transcript.words.get_mut(*index) {
+            word.speaker = speaker;
+        }
+    }
+    transcript.check().map_err(EngineError::Other)?;
+    s.edit("Assign Speaker", move |pr, _| {
+        pr.transcripts.insert(item, Arc::new(transcript));
+        Ok(())
+    })?;
+    Ok(json!({"item": item.0, "words": indices.len(), "speaker": speaker}))
 }
 
 fn remove_ranges(s: &mut Session, label: &str, ranges: Vec<TimeRange>) -> Result<Value> {
@@ -439,6 +513,24 @@ pub fn commands() -> Vec<CommandSpec> {
         ),
         spec("transcript.correctWord", "Correct Transcript Word", &[], r#"{"item":id,"index":n,"text":str,"expected":str?}"#, always, correct_word, true),
         spec(
+            "transcript.identifySpeakers",
+            "Identify Speakers",
+            &[],
+            r#"{"items":[id]?,"item":id?,"maxSpeakers":n?,"wait":bool=true}"#,
+            always,
+            jobs::identify,
+            true,
+        ),
+        spec(
+            "transcript.assignSpeaker",
+            "Assign Speaker",
+            &[],
+            r#"{"item":id,"indices":[n],"speaker":n|null?,"name":str?,"expected":[{index:n,word:word}]?}"#,
+            always,
+            assign_speaker,
+            true,
+        ),
+        spec(
             "transcript.source",
             "Inspect Source Transcript",
             &[],
@@ -459,7 +551,7 @@ pub fn commands() -> Vec<CommandSpec> {
             "transcript.renameSpeaker",
             "Rename Speaker…",
             &[],
-            r#"{"speaker":"Speaker 1"|index,"name":str,"item":id?}"#,
+            r#"{"speaker":"Speaker 1"|index,"name":str,"item":id?,"expected":str?}"#,
             has_transcripts,
             rename_speaker,
             true,

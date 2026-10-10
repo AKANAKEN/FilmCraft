@@ -159,3 +159,62 @@ fn transcript_tab_selects_and_extracts_words() {
     d.frames(3);
     assert!(progress.cancel.load(std::sync::atomic::Ordering::Relaxed));
 }
+
+#[test]
+fn speaker_menu_renames_assigns_and_starts_background_identification() {
+    let mut d = Driver::demo();
+    d.ok("ui.set", json!({"workspace": "Captions and Graphics"}));
+    d.ok("ui.click", json!({"id": "text.tab.Transcript"}));
+    let item = d.harness.state().session.active_sequence().unwrap().audio_tracks[0].items[0].item;
+    d.ok(
+        "engine.execute",
+        json!({"command": "transcript.set", "params": {"item": item.0, "transcript": {"words": [
+            {"text": "Hello", "start": 0, "end": filmcraft_time::TICKS_PER_SECOND, "speaker": 0},
+            {"text": "again", "start": filmcraft_time::TICKS_PER_SECOND, "end": 2 * filmcraft_time::TICKS_PER_SECOND, "speaker": 0}
+        ]}}}),
+    );
+    d.ok("engine.execute", json!({"command": "source.open", "params": {"item": item.0}}));
+    d.frames(3);
+    d.ok("ui.panel.show", json!({"panel": "Text"}));
+    d.frames(3);
+    d.ok("ui.click", json!({"id": "text.transcript.view.source"}));
+    d.frames(3);
+    d.ok("ui.click", json!({"id": "text.transcript.paragraph.0"}));
+    d.frames(3);
+    d.ok("ui.click", json!({"id": "text.transcript.speaker.0.name"}));
+    d.ok("ui.type", json!({"text": "Host"}));
+    d.frames(2);
+    d.snapshot("speaker-menu");
+    d.ok("ui.click", json!({"id": "text.transcript.speaker.0.rename"}));
+    d.frames(3);
+    assert_eq!(d.harness.state().session.project.transcripts[&item].speakers[0].name, "Host");
+    d.ok("ui.click", json!({"id": "text.transcript.paragraph.0"}));
+    d.frames(3);
+    d.ok("ui.click", json!({"id": "text.transcript.speaker.0.name"}));
+    d.ok("ui.type", json!({"text": "Guest"}));
+    d.frames(2);
+    d.ok("ui.click", json!({"id": "text.transcript.speaker.0.new"}));
+    d.frames(3);
+    assert!(d.harness.state().session.project.transcripts[&item].words.iter().all(|w| w.speaker == Some(1)));
+    d.ok("ui.click", json!({"id": "text.transcript.paragraph.0"}));
+    d.frames(3);
+    d.ok("ui.click", json!({"id": "text.transcript.speaker.0.clear"}));
+    d.frames(3);
+    assert!(d.harness.state().session.project.transcripts[&item].words.iter().all(|w| w.speaker.is_none()));
+    d.ok("ui.click", json!({"id": "text.transcript.speakers"}));
+    d.frames(3);
+    d.snapshot("speaker-identification");
+    assert_eq!(d.ids("text.transcript.speakers.limit").len(), 1);
+    d.ok("ui.click", json!({"id": "text.transcript.speakers.identify"}));
+    for _ in 0..2000 {
+        if d.harness.state().session.transcript_jobs.is_empty() {
+            break;
+        }
+        d.frames(1);
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(d.harness.state().session.transcript_jobs.is_empty());
+    assert_eq!(d.harness.state().session.jobs.last().unwrap().label, "Identify Speakers");
+    assert!(d.harness.state().session.project.transcripts[&item].words.iter().all(|w| w.speaker == Some(0)));
+    d.snapshot("speakers-identified");
+}

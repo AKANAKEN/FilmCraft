@@ -10,6 +10,7 @@ use crate::{EngineError, Job, Result, Session};
 
 pub struct PendingTranscript {
     pub job: u64,
+    label: &'static str,
     project: Arc<Project>,
     media: Arc<crate::MediaPool>,
     results: Arc<Mutex<Option<Vec<(ItemId, Transcript)>>>>,
@@ -23,17 +24,27 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 enum Recognizer {
     Installed(Arc<dyn Transcriber>),
     Model(std::path::PathBuf, String),
+    Speakers,
 }
 impl Recognizer {
-    fn load(self) -> std::result::Result<Arc<dyn Transcriber>, String> {
+    fn load(self) -> std::result::Result<Option<Arc<dyn Transcriber>>, String> {
         match self {
-            Self::Installed(t) => Ok(t),
-            Self::Model(dir, id) => filmcraft_speech::load(&dir, &id).map_err(|e| e.to_string()),
+            Self::Installed(t) => Ok(Some(t)),
+            Self::Model(dir, id) => filmcraft_speech::load(&dir, &id).map(Some).map_err(|e| e.to_string()),
+            Self::Speakers => Ok(None),
         }
     }
 }
 
 pub(super) fn generate(s: &mut Session, p: &Value) -> Result<Value> {
+    start(s, p, false)
+}
+
+pub(super) fn identify(s: &mut Session, p: &Value) -> Result<Value> {
+    start(s, p, true)
+}
+
+fn start(s: &mut Session, p: &Value, speakers_only: bool) -> Result<Value> {
     poll(s);
     if !s.transcript_jobs.is_empty() {
         return Err(EngineError::Other("transcription is already running; wait or cancel it in Progress".into()));
@@ -42,7 +53,9 @@ pub(super) fn generate(s: &mut Session, p: &Value) -> Result<Value> {
     if items.is_empty() {
         return Err(EngineError::Other("nothing to transcribe (select media or open a sequence with audio)".into()));
     }
-    let recognizer = if let Some(t) = &s.transcriber {
+    let recognizer = if speakers_only {
+        Recognizer::Speakers
+    } else if let Some(t) = &s.transcriber {
         Recognizer::Installed(t.clone())
     } else {
         let id = str_p(p, "model").unwrap_or(&s.prefs.media_analysis.whisper_model);
@@ -64,6 +77,9 @@ pub(super) fn generate(s: &mut Session, p: &Value) -> Result<Value> {
     let mut work = Vec::new();
     let mut skipped = Vec::new();
     for item in items {
+        if speakers_only && s.project.transcripts.get(&item).is_none_or(|t| t.words.is_empty()) {
+            return Err(EngineError::Other("identify speakers requires an existing nonempty transcript for every media item".into()));
+        }
         let Some(m) = s.project.item(item).and_then(|i| match &i.kind {
             ItemKind::Media(m) => Some(m),
             _ => None,
@@ -85,10 +101,11 @@ pub(super) fn generate(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(EngineError::Other("none of the clips has audio to transcribe".into()));
     }
     let id = s.jobs.iter().map(|j| j.id).max().unwrap_or(0).checked_add(1).ok_or_else(|| EngineError::Other("job id limit reached".into()))?;
-    let job = Job { id, label: "Transcribe".into(), progress: Default::default(), result: Default::default() };
+    let label = if speakers_only { "Identify Speakers" } else { "Transcribe" };
+    let job = Job { id, label: label.into(), progress: Default::default(), result: Default::default() };
     job.progress.total.store(10_000, Ordering::Relaxed);
     let results = Arc::new(Mutex::new(None));
-    let pending = PendingTranscript { job: id, project: s.project.clone(), media: s.media.clone(), results: results.clone() };
+    let pending = PendingTranscript { job: id, label, project: s.project.clone(), media: s.media.clone(), results: results.clone() };
     let (project, media, services) = (s.project.clone(), s.media.clone(), s.services.clone());
     let (progress, result, output) = (job.progress.clone(), job.result.clone(), results.clone());
     let run = move || {
@@ -97,7 +114,7 @@ pub(super) fn generate(s: &mut Session, p: &Value) -> Result<Value> {
             if progress.cancel.load(Ordering::Relaxed) {
                 return Err("stopped".into());
             }
-            *lock(&progress.status) = "Loading speech model".into();
+            *lock(&progress.status) = if speakers_only { "Preparing speaker analysis" } else { "Loading speech model" }.into();
             let recognizer = recognizer.load()?;
             let mut transcripts = Vec::new();
             let total = work.len() as f32;
@@ -119,14 +136,20 @@ pub(super) fn generate(s: &mut Session, p: &Value) -> Result<Value> {
                     }
                     audio.extend(mono);
                 }
-                let mut transcript = recognizer
-                    .transcribe(&audio, &opts, &mut |fraction, status| {
-                        let fraction = if fraction.is_finite() { fraction.clamp(0.0, 1.0) } else { 0.0 };
-                        progress.done.store(((n as f32 + fraction) / total * 10_000.0) as u64, Ordering::Relaxed);
-                        *lock(&progress.status) = format!("{} of {}: {status}", n + 1, work.len());
-                        !progress.cancel.load(Ordering::Relaxed)
-                    })
-                    .map_err(|e| e.to_string())?;
+                let mut report_progress = |fraction: f32, status: &str| {
+                    let fraction = if fraction.is_finite() { fraction.clamp(0.0, 1.0) } else { 0.0 };
+                    progress.done.store(((n as f32 + fraction) / total * 10_000.0) as u64, Ordering::Relaxed);
+                    *lock(&progress.status) = format!("{} of {}: {status}", n + 1, work.len());
+                    !progress.cancel.load(Ordering::Relaxed)
+                };
+                let mut transcript = if let Some(recognizer) = &recognizer {
+                    recognizer.transcribe(&audio, &opts, &mut report_progress).map_err(|e| e.to_string())?
+                } else {
+                    let mut transcript = project.transcripts.get(item).ok_or("transcript is unavailable")?.as_ref().clone();
+                    let params = filmcraft_speech::diarize::Params { max_speakers: opts.max_speakers, ..Default::default() };
+                    filmcraft_speech::diarize::diarize_with_progress(&audio, &mut transcript, &params, &mut report_progress).map_err(|e| e.to_string())?;
+                    transcript
+                };
                 transcript.normalize();
                 transcript.check()?;
                 transcripts.push((*item, transcript));
@@ -203,6 +226,7 @@ pub(crate) fn poll(s: &mut Session) {
         }
         let pending = s.transcript_jobs.remove(i);
         let Some(job) = job else { continue };
+        let command = if pending.label == "Identify Speakers" { "transcript.identifySpeakers" } else { "transcript.generate" };
         if job.progress.cancel.load(Ordering::Relaxed) {
             *lock(&job.result) = Some(Err("stopped".into()));
             *lock(&job.progress.status) = "Stopped: nothing was changed".into();
@@ -210,7 +234,7 @@ pub(crate) fn poll(s: &mut Session) {
         }
         let Some(results) = lock(&pending.results).take() else {
             if let Some(Err(e)) = lock(&job.result).clone() {
-                s.error_toast("transcript.generate", e);
+                s.error_toast(command, e);
             }
             continue;
         };
@@ -221,7 +245,7 @@ pub(crate) fn poll(s: &mut Session) {
         let applied = if stale {
             Err(EngineError::Other("media or transcript changed during transcription; results were discarded".into()))
         } else {
-            s.edit("Transcribe", move |pr, _| {
+            s.edit(pending.label, move |pr, _| {
                 for (item, transcript) in results {
                     pr.transcripts.insert(item, Arc::new(transcript));
                 }
@@ -231,10 +255,10 @@ pub(crate) fn poll(s: &mut Session) {
         if let Err(e) = applied {
             *lock(&job.result) = Some(Err(e.to_string()));
             *lock(&job.progress.status) = e.to_string();
-            s.error_toast("transcript.generate", e.to_string());
+            s.error_toast(command, e.to_string());
         } else {
             job.progress.done.store(10_000, Ordering::Relaxed);
-            *lock(&job.progress.status) = "Transcription applied".into();
+            *lock(&job.progress.status) = if pending.label == "Identify Speakers" { "Speaker labels applied" } else { "Transcription applied" }.into();
         }
     }
 }
