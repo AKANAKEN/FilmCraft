@@ -1,8 +1,8 @@
 asset:        extract.svg
 title:        Craft NLE icon (extract)
 author:       ArtCraft Team
-source:       original work in storytold/craft-icons (Lucide-compatible; ISC)
+source:       original work in craft-icons (Lucide-compatible; ISC)
 license:      ISC
 license-file: assets/icons/craft/LICENSE
 added:        2026-10-11 by Vikram Bhaskaran
-notes:        Vendored from the craft-icons set for FilmCraft toolbar and panel icons. Stroke-only 24x24 Lucide-compatible SVG.
+notes:        Original NLE glyph, 24x24 stroke-only. Not a Lucide remix.

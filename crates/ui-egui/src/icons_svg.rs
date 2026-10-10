@@ -53,15 +53,25 @@ pub fn svg_for(icon: Icon) -> Option<&'static str> {
     })
 }
 
+/// Lucide's 24×24 viewBox keeps a 2-unit pad; mapping 2..22 onto `rect` fills a toolbar
+/// slot the way the old 16-grid icons did, instead of sitting small inside extra padding.
+const CONTENT: f32 = 20.0;
+const ORIGIN: f32 = 2.0;
+/// Lucide stroke in viewBox units.
+const STROKE: f32 = 2.0;
+
 pub fn paint(painter: &Painter, rect: Rect, svg: &str, color: Color32) {
-    let s = rect.width().min(rect.height()) / 24.0;
-    if s <= 0.0 {
+    let side = rect.width().min(rect.height());
+    if side <= 0.0 {
         return;
     }
-    let o = rect.center() - vec2(12.0 * s, 12.0 * s);
-    let map = |x: f32, y: f32| pos2(o.x + x * s, o.y + y * s);
-    let width = 2.0 * s;
+    let s = side / CONTENT;
+    let o = rect.center() - vec2((12.0 - ORIGIN) * s, (12.0 - ORIGIN) * s);
+    let map = |x: f32, y: f32| pos2(o.x + (x - ORIGIN) * s, o.y + (y - ORIGIN) * s);
+    let ppp = painter.ctx().pixels_per_point();
+    let width = (STROKE * s * ppp - 0.5).ceil().max(1.0) / ppp;
     let stroke = PathStroke::new(width, color);
+    let snap_line = |pts: Vec<(f32, f32)>, closed: bool| crisp(painter, &pts, closed, map, width);
     for el in elements(svg) {
         match el {
             El::Path(d) => {
@@ -69,7 +79,7 @@ pub fn paint(painter: &Painter, rect: Rect, svg: &str, color: Color32) {
                     if pts.len() < 2 {
                         continue;
                     }
-                    let v: Vec<Pos2> = pts.iter().map(|&(x, y)| map(x, y)).collect();
+                    let v = snap_line(pts, closed);
                     if closed {
                         painter.add(PathShape::closed_line(v, stroke.clone()));
                     } else {
@@ -78,12 +88,14 @@ pub fn paint(painter: &Painter, rect: Rect, svg: &str, color: Color32) {
                 }
             }
             El::Line(x1, y1, x2, y2) => {
-                painter.line_segment([map(x1, y1), map(x2, y2)], Stroke::new(width, color));
+                let v = snap_line(vec![(x1, y1), (x2, y2)], false);
+                if let (Some(&a), Some(&b)) = (v.first(), v.get(1)) {
+                    painter.line_segment([a, b], Stroke::new(width, color));
+                }
             }
             El::Rect(x, y, w, h, rx) => {
                 let pts = rounded_rect(x, y, w, h, rx);
-                let v: Vec<Pos2> = pts.iter().map(|&(px, py)| map(px, py)).collect();
-                painter.add(PathShape::closed_line(v, stroke.clone()));
+                painter.add(PathShape::closed_line(snap_line(pts, true), stroke.clone()));
             }
             El::Circle(cx, cy, r) => {
                 painter.circle_stroke(map(cx, cy), r * s, Stroke::new(width, color));
@@ -92,7 +104,7 @@ pub fn paint(painter: &Painter, rect: Rect, svg: &str, color: Color32) {
                 if pts.len() < 2 {
                     continue;
                 }
-                let v: Vec<Pos2> = pts.iter().map(|&(x, y)| map(x, y)).collect();
+                let v = snap_line(pts, closed);
                 if closed {
                     painter.add(PathShape::closed_line(v, stroke.clone()));
                 } else {
@@ -101,6 +113,60 @@ pub fn paint(painter: &Painter, rect: Rect, svg: &str, color: Color32) {
             }
         }
     }
+}
+
+fn snap_coord(v: f32, centre: f32, mid: bool, ppp: f32, width: f32) -> f32 {
+    let half = if mid && (width * ppp).round() as i32 % 2 == 1 { 0.5 } else { 0.0 };
+    let base = (centre * ppp).round() + half;
+    (base + ((v - centre) * ppp).round()) / ppp
+}
+
+/// Horizontal and vertical segments snap to the device pixel grid (same rule as `Pen16`).
+fn crisp(painter: &Painter, pts: &[(f32, f32)], closed: bool, map: impl Fn(f32, f32) -> Pos2, width: f32) -> Vec<Pos2> {
+    let n = pts.len();
+    let ppp = painter.ctx().pixels_per_point();
+    let c = {
+        let mut min = pos2(f32::MAX, f32::MAX);
+        let mut max = pos2(f32::MIN, f32::MIN);
+        for &(x, y) in pts {
+            let q = map(x, y);
+            min.x = min.x.min(q.x);
+            min.y = min.y.min(q.y);
+            max.x = max.x.max(q.x);
+            max.y = max.y.max(q.y);
+        }
+        pos2((min.x + max.x) * 0.5, (min.y + max.y) * 0.5)
+    };
+    let q: Vec<Pos2> = pts.iter().map(|&(x, y)| map(x, y)).collect();
+    let seg = |i: usize, j: usize| {
+        let Some(a) = q.get(i) else { return (false, false) };
+        let Some(b) = q.get(j) else { return (false, false) };
+        let d = (*a - *b) * ppp;
+        (d.x.abs() < 1.0, d.y.abs() < 1.0)
+    };
+    (0..n)
+        .map(|i| {
+            let mut vert = false;
+            let mut horiz = false;
+            if i > 0 || closed {
+                let s = seg((i + n - 1) % n, i);
+                vert |= s.0;
+                horiz |= s.1;
+            }
+            if i + 1 < n || closed {
+                let s = seg(i, (i + 1) % n);
+                vert |= s.0;
+                horiz |= s.1;
+            }
+            let Some(&q) = q.get(i) else {
+                return pos2(0.0, 0.0);
+            };
+            if !vert && !horiz {
+                return q;
+            }
+            pos2(snap_coord(q.x, c.x, vert, ppp, width), snap_coord(q.y, c.y, horiz, ppp, width))
+        })
+        .collect()
 }
 
 enum El {
@@ -117,7 +183,7 @@ fn elements(svg: &str) -> Vec<El> {
     let mut i = 0;
     let bytes = lower.as_bytes();
     while i < bytes.len() {
-        if bytes[i] != b'<' {
+        if bytes.get(i) != Some(&b'<') {
             i += 1;
             continue;
         }
@@ -158,7 +224,10 @@ fn num(attrs: &str, key: &str) -> f32 {
 
 fn parse_points(s: &str) -> Vec<(f32, f32)> {
     let nums: Vec<f32> = tokenize_nums(s);
-    nums.chunks(2).filter_map(|c| (c.len() == 2).then_some((c[0], c[1]))).collect()
+    nums.chunks(2).filter_map(|c| match c {
+        [x, y] => Some((*x, *y)),
+        _ => None,
+    }).collect()
 }
 
 fn tokenize_nums(s: &str) -> Vec<f32> {
@@ -241,104 +310,96 @@ fn tessellate_path(d: &str) -> Vec<(Vec<(f32, f32)>, bool)> {
         match c {
             'M' => {
                 flush(&mut pts, &mut out, false);
-                if a.len() >= 2 {
-                    cur = abs_pt(rel, cur, a[0], a[1]);
-                    start = cur;
-                    pts.push(cur);
-                    a = &a[2..];
-                    while a.len() >= 2 {
-                        cur = abs_pt(rel, cur, a[0], a[1]);
-                        pts.push(cur);
-                        a = &a[2..];
+                while let [x, y, rest @ ..] = a {
+                    cur = abs_pt(rel, cur, *x, *y);
+                    if pts.is_empty() {
+                        start = cur;
                     }
+                    pts.push(cur);
+                    a = rest;
                 }
                 prev_c = None;
             }
             'L' => {
-                while a.len() >= 2 {
-                    cur = abs_pt(rel, cur, a[0], a[1]);
+                while let [x, y, rest @ ..] = a {
+                    cur = abs_pt(rel, cur, *x, *y);
                     pts.push(cur);
-                    a = &a[2..];
+                    a = rest;
                 }
                 prev_c = None;
             }
             'H' => {
-                while !a.is_empty() {
-                    let x = if rel { cur.0 + a[0] } else { a[0] };
+                while let [x, rest @ ..] = a {
+                    let x = if rel { cur.0 + *x } else { *x };
                     cur = (x, cur.1);
                     pts.push(cur);
-                    a = &a[1..];
+                    a = rest;
                 }
                 prev_c = None;
             }
             'V' => {
-                while !a.is_empty() {
-                    let y = if rel { cur.1 + a[0] } else { a[0] };
+                while let [y, rest @ ..] = a {
+                    let y = if rel { cur.1 + *y } else { *y };
                     cur = (cur.0, y);
                     pts.push(cur);
-                    a = &a[1..];
+                    a = rest;
                 }
                 prev_c = None;
             }
             'C' => {
-                while a.len() >= 6 {
-                    let p1 = abs_pt(rel, cur, a[0], a[1]);
-                    let p2 = abs_pt(rel, cur, a[2], a[3]);
-                    let p3 = abs_pt(rel, cur, a[4], a[5]);
+                while let [x1, y1, x2, y2, x3, y3, rest @ ..] = a {
+                    let p1 = abs_pt(rel, cur, *x1, *y1);
+                    let p2 = abs_pt(rel, cur, *x2, *y2);
+                    let p3 = abs_pt(rel, cur, *x3, *y3);
                     sample_cubic(&mut pts, cur, p1, p2, p3);
                     prev_c = Some(p2);
                     cur = p3;
-                    a = &a[6..];
+                    a = rest;
                 }
             }
             'S' => {
-                while a.len() >= 4 {
+                while let [x2, y2, x3, y3, rest @ ..] = a {
                     let p1 = match prev_c {
                         Some(p) => (2.0 * cur.0 - p.0, 2.0 * cur.1 - p.1),
                         None => cur,
                     };
-                    let p2 = abs_pt(rel, cur, a[0], a[1]);
-                    let p3 = abs_pt(rel, cur, a[2], a[3]);
+                    let p2 = abs_pt(rel, cur, *x2, *y2);
+                    let p3 = abs_pt(rel, cur, *x3, *y3);
                     sample_cubic(&mut pts, cur, p1, p2, p3);
                     prev_c = Some(p2);
                     cur = p3;
-                    a = &a[4..];
+                    a = rest;
                 }
             }
             'Q' => {
-                while a.len() >= 4 {
-                    let p1 = abs_pt(rel, cur, a[0], a[1]);
-                    let p2 = abs_pt(rel, cur, a[2], a[3]);
+                while let [x1, y1, x2, y2, rest @ ..] = a {
+                    let p1 = abs_pt(rel, cur, *x1, *y1);
+                    let p2 = abs_pt(rel, cur, *x2, *y2);
                     sample_quad(&mut pts, cur, p1, p2);
                     prev_c = Some(p1);
                     cur = p2;
-                    a = &a[4..];
+                    a = rest;
                 }
             }
             'T' => {
-                while a.len() >= 2 {
+                while let [x, y, rest @ ..] = a {
                     let p1 = match prev_c {
                         Some(p) => (2.0 * cur.0 - p.0, 2.0 * cur.1 - p.1),
                         None => cur,
                     };
-                    let p2 = abs_pt(rel, cur, a[0], a[1]);
+                    let p2 = abs_pt(rel, cur, *x, *y);
                     sample_quad(&mut pts, cur, p1, p2);
                     prev_c = Some(p1);
                     cur = p2;
-                    a = &a[2..];
+                    a = rest;
                 }
             }
             'A' => {
-                while a.len() >= 7 {
-                    let rx = a[0].abs();
-                    let ry = a[1].abs();
-                    let rot = a[2];
-                    let large = a[3] != 0.0;
-                    let sweep = a[4] != 0.0;
-                    let end = abs_pt(rel, cur, a[5], a[6]);
-                    sample_arc(&mut pts, cur, rx, ry, rot, large, sweep, end);
+                while let [rx, ry, rot, large, sweep, x, y, rest @ ..] = a {
+                    let end = abs_pt(rel, cur, *x, *y);
+                    sample_arc(&mut pts, cur, rx.abs(), ry.abs(), *rot, *large != 0.0, *sweep != 0.0, end);
                     cur = end;
-                    a = &a[7..];
+                    a = rest;
                 }
                 prev_c = None;
             }

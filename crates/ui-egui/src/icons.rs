@@ -938,6 +938,25 @@ mod tests {
             }
             let shapes = drawn(icon, 2.0, 16.0);
             assert!(!shapes.is_empty(), "{icon:?} produced no strokes");
+            let mut stroked = false;
+            for shape in &shapes {
+                match shape {
+                    Shape::Path(p) => {
+                        let w = p.stroke.width * 2.0;
+                        assert!((w - w.round()).abs() < 1e-3 && w >= 1.0, "{icon:?} at 16px 2x: width {w} px");
+                        stroked = true;
+                    }
+                    Shape::Circle(c) => {
+                        let w = c.stroke.width * 2.0;
+                        if w > 0.0 {
+                            assert!((w - w.round()).abs() < 1e-3 && w >= 1.0, "{icon:?} at 16px 2x: circle width {w} px");
+                            stroked = true;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            assert!(stroked, "{icon:?} at 16px drew no stroked path");
         }
     }
 
@@ -948,9 +967,6 @@ mod tests {
         for &ppp in &[1.0, 2.0] {
             for &size in &[16.0, 13.0, 9.6, 20.0] {
                 for &icon in ALL {
-                    if crate::icons_svg::svg_for(icon).is_some() {
-                        continue;
-                    }
                     for shape in drawn(icon, ppp, size) {
                         if let Shape::Path(p) = shape {
                             if p.stroke.width == 0.0 || matches!(p.stroke.color, ColorMode::Solid(c) if c == Color32::TRANSPARENT) {
