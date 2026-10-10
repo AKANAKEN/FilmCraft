@@ -1595,8 +1595,21 @@ impl FilmcraftApp {
             child.set_clip_rect(g.content);
             panels::show(self, &mut child, p, g.content);
         }
+        if maximized.is_none() {
+            actions.extend(dock::drag_overlay(ui, &groups, &t));
+        }
         for a in actions {
             match a {
+                dock::DockAction::MovePanel(p, target, zone) => {
+                    if self.ui.dock.move_panel(p, target, zone) {
+                        self.ui.focused = p;
+                    }
+                }
+                dock::DockAction::MovePanelToEdge(p, zone) => {
+                    if self.ui.dock.move_panel_to_edge(p, zone) {
+                        self.ui.focused = p;
+                    }
+                }
                 dock::DockAction::Activate(p) => {
                     self.ui.dock.activate(p);
                 }

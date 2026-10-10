@@ -358,6 +358,87 @@ impl DockNode {
             *active = (*active).min(panels.len().saturating_sub(1));
         }
     }
+    /// Move panel `p` to the group holding `target`: as a tab of that group, or in a new group on
+    /// one side of it. Returns whether the panel moved. The layout is only changed when the result
+    /// holds every panel exactly once, as before; a move that would lose or duplicate a panel (a
+    /// missing panel, the same panel, a layout that is already broken) leaves it untouched.
+    pub fn move_panel(&mut self, p: PanelKind, target: PanelKind, zone: DropZone) -> bool {
+        if p == target || !self.contains(p) || !self.contains(target) {
+            return false;
+        }
+        fn go(n: &mut DockNode, p: PanelKind, target: PanelKind, zone: DropZone) -> bool {
+            if let DockNode::Split { a, b, .. } = n {
+                return go(a, p, target, zone) || go(b, p, target, zone);
+            }
+            let DockNode::Tabs { panels, active } = n else { return false };
+            if !panels.contains(&target) {
+                return false;
+            }
+            if zone == DropZone::Tabs {
+                panels.push(p);
+                *active = panels.len().saturating_sub(1);
+                return true;
+            }
+            let old = std::mem::replace(n, DockNode::Tabs { panels: Vec::new(), active: 0 });
+            let new = tabs(&[p], 0);
+            let (vertical, new_first) = match zone {
+                DropZone::Left => (false, true),
+                DropZone::Right => (false, false),
+                DropZone::Top => (true, true),
+                _ => (true, false),
+            };
+            let (a, b) = if new_first { (new, old) } else { (old, new) };
+            *n = DockNode::Split { vertical, size: SplitSize::Ratio(0.5), a: Box::new(a), b: Box::new(b) };
+            true
+        }
+        let sorted = |d: &DockNode| {
+            let mut v = Vec::new();
+            d.panels(&mut v);
+            v.sort_by_key(|p| p.id());
+            v
+        };
+        let mut next = self.clone();
+        next.close(p);
+        if go(&mut next, p, target, zone) && sorted(&next) == sorted(self) {
+            *self = next;
+            return true;
+        }
+        false
+    }
+    /// Move panel `p` into a new dock along one whole edge of the layout (`zone` is Left, Right,
+    /// Top or Bottom): it spans the full height or width, a quarter of it. Returns whether it
+    /// moved; like [`DockNode::move_panel`] the layout changes only when it still holds every panel
+    /// exactly once, and `p` alone in the layout has nowhere to go.
+    pub fn move_panel_to_edge(&mut self, p: PanelKind, zone: DropZone) -> bool {
+        if zone == DropZone::Tabs || !self.contains(p) {
+            return false;
+        }
+        let sorted = |d: &DockNode| {
+            let mut v = Vec::new();
+            d.panels(&mut v);
+            v.sort_by_key(|p| p.id());
+            v
+        };
+        let mut rest = self.clone();
+        rest.close(p);
+        if matches!(&rest, DockNode::Tabs { panels, .. } if panels.is_empty()) {
+            return false;
+        }
+        let new = tabs(&[p], 0);
+        let (vertical, new_first) = match zone {
+            DropZone::Left => (false, true),
+            DropZone::Right => (false, false),
+            DropZone::Top => (true, true),
+            _ => (true, false),
+        };
+        let (a, b, size) = if new_first { (new, rest, 0.25) } else { (rest, new, 0.75) };
+        let next = DockNode::Split { vertical, size: SplitSize::Ratio(size), a: Box::new(a), b: Box::new(b) };
+        if sorted(&next) == sorted(self) {
+            *self = next;
+            return true;
+        }
+        false
+    }
     /// Put the Timeline panel back where the workspaces keep it (left of the audio meters) after
     /// it was closed, so opening a sequence always has somewhere to show it.
     pub fn restore_timeline(&mut self) {
@@ -413,9 +494,176 @@ pub struct Group {
     pub active: usize,
 }
 
+/// Where a dragged panel tab lands on a group: into its tabs, or beside it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DropZone {
+    Tabs,
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+fn drag_id() -> egui::Id {
+    egui::Id::new("dock-panel-drag")
+}
+
+/// The drop zone of point `pos` on a group's content `c`: the outer quarter on each side splits
+/// the group, the middle adds a tab. A point outside `c` (the tab strip) or a degenerate `c` is a tab.
+pub fn drop_zone(c: Rect, pos: egui::Pos2) -> DropZone {
+    let roomy = c.width() >= 1.0 && c.height() >= 1.0;
+    if !c.contains(pos) || !roomy {
+        return DropZone::Tabs;
+    }
+    let (fx, fy) = ((pos.x - c.min.x) / c.width(), (pos.y - c.min.y) / c.height());
+    if fx < 0.25 {
+        DropZone::Left
+    } else if fx > 0.75 {
+        DropZone::Right
+    } else if fy < 0.25 {
+        DropZone::Top
+    } else if fy > 0.75 {
+        DropZone::Bottom
+    } else {
+        DropZone::Tabs
+    }
+}
+
+/// The cell of `zone` in the drop map drawn over a group's content `c`.
+fn zone_cell(c: Rect, zone: DropZone) -> Rect {
+    let (w, h) = (c.width() * 0.25, c.height() * 0.25);
+    match zone {
+        DropZone::Left => Rect::from_min_max(c.min, pos2(c.min.x + w, c.max.y)),
+        DropZone::Right => Rect::from_min_max(pos2(c.max.x - w, c.min.y), c.max),
+        DropZone::Top => Rect::from_min_max(pos2(c.min.x + w, c.min.y), pos2(c.max.x - w, c.min.y + h)),
+        DropZone::Bottom => Rect::from_min_max(pos2(c.min.x + w, c.max.y - h), pos2(c.max.x - w, c.max.y)),
+        DropZone::Tabs => Rect::from_min_max(pos2(c.min.x + w, c.min.y + h), pos2(c.max.x - w, c.max.y - h)),
+    }
+}
+
+const EDGES: [DropZone; 4] = [DropZone::Left, DropZone::Right, DropZone::Top, DropZone::Bottom];
+/// How thick the drop strip along each outer edge of the layout is, in points.
+const EDGE_STRIP: f32 = 12.0;
+
+/// The drop strip along one outer edge of the layout `all`.
+fn edge_strip(all: Rect, zone: DropZone) -> Rect {
+    let w = EDGE_STRIP.min(all.width() / 2.0).max(0.0);
+    let h = EDGE_STRIP.min(all.height() / 2.0).max(0.0);
+    match zone {
+        DropZone::Left => Rect::from_min_max(all.min, pos2(all.min.x + w, all.max.y)),
+        DropZone::Right => Rect::from_min_max(pos2(all.max.x - w, all.min.y), all.max),
+        DropZone::Top => Rect::from_min_max(all.min, pos2(all.max.x, all.min.y + h)),
+        _ => Rect::from_min_max(pos2(all.min.x, all.max.y - h), all.max),
+    }
+}
+
+/// How close to an outer edge the pointer must be for its drop strip to appear, in points.
+const EDGE_NEAR: f32 = 48.0;
+
+/// Whether `pos`, inside `all`, is within [`EDGE_NEAR`] of the outer edge `zone`.
+fn near_edge(all: Rect, pos: egui::Pos2, zone: DropZone) -> bool {
+    if !all.contains(pos) {
+        return false;
+    }
+    let d = match zone {
+        DropZone::Left => pos.x - all.min.x,
+        DropZone::Right => all.max.x - pos.x,
+        DropZone::Top => pos.y - all.min.y,
+        _ => all.max.y - pos.y,
+    };
+    d <= EDGE_NEAR
+}
+
+/// The outer edge of `all` that `pos` is on, if any. A corner goes to the side strips.
+pub fn edge_zone(all: Rect, pos: egui::Pos2) -> Option<DropZone> {
+    EDGES.into_iter().find(|z| edge_strip(all, *z).contains(pos))
+}
+
+/// The part of the layout a dock dropped on that edge would take: a quarter, the full length.
+fn edge_preview(all: Rect, zone: DropZone) -> Rect {
+    let (w, h) = (all.width() * 0.25, all.height() * 0.25);
+    match zone {
+        DropZone::Left => Rect::from_min_max(all.min, pos2(all.min.x + w, all.max.y)),
+        DropZone::Right => Rect::from_min_max(pos2(all.max.x - w, all.min.y), all.max),
+        DropZone::Top => Rect::from_min_max(all.min, pos2(all.max.x, all.min.y + h)),
+        _ => Rect::from_min_max(pos2(all.min.x, all.max.y - h), all.max),
+    }
+}
+
+/// While a panel tab is dragged: shade the group under the pointer with a map of its drop zones
+/// (a side makes a new dock beside it, the middle adds a tab), colour the zone under the pointer
+/// and, on release, return the move. Call after the groups are drawn.
+pub fn drag_overlay(ui: &egui::Ui, groups: &[Group], t: &Tokens) -> Option<DockAction> {
+    let ctx = ui.ctx();
+    let p = ctx.data(|d| d.get_temp::<PanelKind>(drag_id()))?;
+    let released = ui.input(|i| i.pointer.any_released());
+    if released || !ui.input(|i| i.pointer.any_down()) {
+        ctx.data_mut(|d| d.remove::<PanelKind>(drag_id()));
+    }
+    let pos = ctx.pointer_latest_pos().filter(|p| p.is_finite())?;
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("dock-drop")));
+    let label = painter.layout_no_wrap(crate::i18n::t(p.title()).to_string(), Tokens::ui(11.5), egui::Color32::WHITE);
+    let r = Rect::from_min_size(pos + vec2(12.0, 8.0), label.size() + vec2(16.0, 6.0));
+    painter.rect_filled(r, 4.0, egui::Color32::from_black_alpha(200));
+    painter.galley(r.min + vec2(8.0, 3.0), label, egui::Color32::WHITE);
+    // the outer edges of the whole layout: a dock as long as that edge
+    let all = groups.iter().map(|g| g.rect).reduce(Rect::union)?;
+    let green = egui::Color32::from_rgb(70, 190, 110);
+    let edge = edge_zone(all, pos);
+    // a strip shows only once the pointer heads for that edge, and is solid when it is on it
+    for z in EDGES {
+        if edge == Some(z) {
+            painter.rect_filled(edge_strip(all, z), 0.0, green);
+        } else if near_edge(all, pos, z) {
+            painter.rect_filled(edge_strip(all, z), 0.0, green.gamma_multiply(0.35));
+        }
+    }
+    if let Some(z) = edge {
+        let band = edge_preview(all, z);
+        painter.rect_filled(band, t.radius, green.gamma_multiply(0.12));
+        painter.rect_stroke(band, t.radius, Stroke::new(2.0, green), StrokeKind::Inside);
+        return released.then_some(DockAction::MovePanelToEdge(p, z));
+    }
+    let g = groups.iter().find(|g| g.rect.contains(pos))?;
+    if g.panels.len() == 1 && g.panels[0].compact() {
+        return None;
+    }
+    // the group is named by a panel other than the dragged one, so dropping a tab on its own group
+    // still works: a side splits it off into a new dock, the middle leaves it where it is
+    let target = g.panels.get(g.active).copied().filter(|x| *x != p).or_else(|| g.panels.iter().copied().find(|x| *x != p))?;
+    let c = g.content;
+    let zone = drop_zone(c, pos);
+    let own_group = g.panels.contains(&p);
+    // the map: every zone outlined on a shaded group, the one under the pointer filled in colour
+    painter.rect_filled(g.rect, t.radius, egui::Color32::from_black_alpha(55));
+    for z in [DropZone::Left, DropZone::Right, DropZone::Top, DropZone::Bottom, DropZone::Tabs] {
+        let cell = zone_cell(c, z);
+        painter.rect_filled(cell, t.radius, egui::Color32::from_white_alpha(8));
+        painter.rect_stroke(cell, t.radius, Stroke::new(1.0, egui::Color32::from_white_alpha(45)), StrokeKind::Inside);
+    }
+    // where the panel would go: the half of the group a side zone makes, the whole group for a tab
+    let preview = match zone {
+        DropZone::Tabs => g.rect,
+        DropZone::Left => Rect::from_min_max(c.min, pos2(c.center().x, c.max.y)),
+        DropZone::Right => Rect::from_min_max(pos2(c.center().x, c.min.y), c.max),
+        DropZone::Top => Rect::from_min_max(c.min, pos2(c.max.x, c.center().y)),
+        DropZone::Bottom => Rect::from_min_max(pos2(c.min.x, c.center().y), c.max),
+    };
+    painter.rect_filled(preview, t.radius, t.focus.gamma_multiply(0.12));
+    painter.rect_stroke(preview, t.radius, Stroke::new(2.0, t.focus), StrokeKind::Inside);
+    if zone != DropZone::Tabs || c.contains(pos) {
+        painter.rect_filled(zone_cell(c, zone), t.radius, t.focus.gamma_multiply(0.4));
+    }
+    (released && !(own_group && zone == DropZone::Tabs)).then_some(DockAction::MovePanel(p, target, zone))
+}
+
 /// Actions produced by interacting with the dock chrome.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DockAction {
+    /// A panel tab was dropped on a group (named by one of its panels).
+    MovePanel(PanelKind, PanelKind, DropZone),
+    /// A panel tab was dropped on an outer edge of the layout: a new dock along the whole edge.
+    MovePanelToEdge(PanelKind, DropZone),
     Activate(PanelKind),
     Focus(PanelKind),
     Close(PanelKind),
@@ -599,8 +847,11 @@ pub fn draw_group_chrome(
             // a sequence tab keeps its identity when the tabs are reordered under the pointer
             let resp = match tab.seq {
                 Some(id) => ui.interact(tab_rect, egui::Id::new(("tab-seq", g.path.clone(), id)), Sense::click_and_drag()),
-                None => ui.interact(tab_rect, egui::Id::new(("tab", g.path.clone(), i)), Sense::click()),
+                None => ui.interact(tab_rect, egui::Id::new(("tab", g.path.clone(), i)), Sense::click_and_drag()),
             };
+            if tab.seq.is_none() && !p.compact() && resp.drag_started() {
+                ui.ctx().data_mut(|d| d.insert_temp(drag_id(), *p));
+            }
             if let Some(id) = tab.seq {
                 seq_rects.push((id, tab_rect));
                 if resp.dragged() {
@@ -759,6 +1010,170 @@ mod tests {
         assert_eq!(split_first(SplitSize::Ratio(0.0), 1000.0), 20.0);
     }
 
+    #[test]
+    fn move_panel_keeps_every_panel_exactly_once() {
+        use PanelKind::*;
+        for zone in [DropZone::Tabs, DropZone::Left, DropZone::Right, DropZone::Top, DropZone::Bottom] {
+            let mut d = workspace("Editing");
+            let mut before = Vec::new();
+            d.panels(&mut before);
+            d.move_panel(History, Program, zone);
+            let mut after = Vec::new();
+            d.panels(&mut after);
+            before.sort_by_key(|p| p.id());
+            after.sort_by_key(|p| p.id());
+            assert_eq!(before, after, "{zone:?}");
+            assert!(d.contains(History));
+        }
+        // into the tabs of another group
+        let mut d = tabs(&[Project, History], 0);
+        d = hsplit(SplitSize::Ratio(0.5), d, tabs(&[Program], 0));
+        d.move_panel(History, Program, DropZone::Tabs);
+        assert!(matches!(&d, DockNode::Split { b, .. } if matches!(&**b, DockNode::Tabs { panels, .. } if panels == &[Program, History])));
+        // onto itself or a missing panel changes nothing
+        let same = d.clone();
+        d.move_panel(Program, Program, DropZone::Left);
+        d.move_panel(Libraries, Program, DropZone::Left);
+        assert_eq!(d, same);
+    }
+
+    #[test]
+    fn move_panel_reports_whether_it_moved_and_never_loses_a_panel() {
+        use PanelKind::*;
+        let mut d = tabs(&[Project, History], 0);
+        d = hsplit(SplitSize::Ratio(0.5), d, tabs(&[Program], 0));
+        let before = d.clone();
+        // nothing to move: same panel, a panel that is not there, a target that is not there
+        assert!(!d.move_panel(Program, Program, DropZone::Left));
+        assert!(!d.move_panel(Libraries, Program, DropZone::Left));
+        assert!(!d.move_panel(History, Libraries, DropZone::Tabs));
+        assert_eq!(d, before);
+        assert!(d.move_panel(History, Program, DropZone::Right));
+        assert!(d.contains(History) && d.contains(Project) && d.contains(Program));
+    }
+
+    /// Many moves in a row, across every zone and every workspace: each panel stays in the layout
+    /// exactly once, whatever order the moves come in.
+    #[test]
+    fn many_moves_keep_every_panel_exactly_once() {
+        let zones = [DropZone::Tabs, DropZone::Left, DropZone::Right, DropZone::Top, DropZone::Bottom];
+        for name in ["Assembly", "Editing", "Color", "Effects", "Audio", "Captions and Graphics"] {
+            let mut d = workspace(name);
+            let mut all = Vec::new();
+            d.panels(&mut all);
+            all.sort_by_key(|p| p.id());
+            let mut seed = 0x9E37_79B9_u64;
+            let mut next = |n: usize| {
+                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                ((seed >> 33) as usize) % n.max(1)
+            };
+            for _ in 0..400 {
+                let (p, t) = (all[next(all.len())], all[next(all.len())]);
+                d.move_panel(p, t, zones[next(zones.len())]);
+                let mut now = Vec::new();
+                d.panels(&mut now);
+                now.sort_by_key(|p| p.id());
+                assert_eq!(now, all, "{name}");
+            }
+        }
+    }
+
+    #[test]
+    fn drop_zone_splits_the_sides_and_tabs_the_middle() {
+        let c = Rect::from_min_size(pos2(100.0, 50.0), vec2(400.0, 200.0));
+        let at = |fx: f32, fy: f32| drop_zone(c, pos2(c.min.x + c.width() * fx, c.min.y + c.height() * fy));
+        assert_eq!(at(0.1, 0.5), DropZone::Left);
+        assert_eq!(at(0.9, 0.5), DropZone::Right);
+        assert_eq!(at(0.5, 0.1), DropZone::Top);
+        assert_eq!(at(0.5, 0.9), DropZone::Bottom);
+        assert_eq!(at(0.5, 0.5), DropZone::Tabs);
+        // the tab strip (above the content), outside, and a degenerate area are tabs
+        assert_eq!(drop_zone(c, pos2(300.0, 30.0)), DropZone::Tabs);
+        assert_eq!(drop_zone(Rect::from_min_size(pos2(0.0, 0.0), vec2(0.0, 0.0)), pos2(0.0, 0.0)), DropZone::Tabs);
+        assert_eq!(drop_zone(c, pos2(f32::NAN, f32::NAN)), DropZone::Tabs);
+        // each zone's cell holds the points that give that zone
+        for z in [DropZone::Left, DropZone::Right, DropZone::Top, DropZone::Bottom, DropZone::Tabs] {
+            assert_eq!(drop_zone(c, zone_cell(c, z).center()), z, "{z:?}");
+        }
+    }
+
+    /// A tab dragged to the side of its own group is split off into a new dock beside it.
+    #[test]
+    fn a_tab_dropped_on_the_side_of_its_own_group_splits_off() {
+        use PanelKind::*;
+        for (zone, vertical, new_first) in
+            [(DropZone::Right, false, false), (DropZone::Left, false, true), (DropZone::Top, true, true), (DropZone::Bottom, true, false)]
+        {
+            let mut d = tabs(&[Project, History, Info], 1);
+            assert!(d.move_panel(History, Project, zone));
+            let DockNode::Split { vertical: v, a, b, .. } = &d else { panic!("{zone:?}: not split: {d:?}") };
+            assert_eq!(*v, vertical, "{zone:?}");
+            let (new, old) = if new_first { (a, b) } else { (b, a) };
+            assert!(matches!(&**new, DockNode::Tabs { panels, .. } if panels == &[History]), "{zone:?}");
+            assert!(matches!(&**old, DockNode::Tabs { panels, .. } if panels == &[Project, Info]), "{zone:?}");
+        }
+    }
+
+    /// A tab dropped on an outer edge becomes a dock along that whole edge.
+    #[test]
+    fn a_tab_dropped_on_an_outer_edge_makes_a_dock_along_the_whole_edge() {
+        use PanelKind::*;
+        for (zone, vertical, new_first) in
+            [(DropZone::Left, false, true), (DropZone::Right, false, false), (DropZone::Top, true, true), (DropZone::Bottom, true, false)]
+        {
+            let mut d = hsplit(SplitSize::Ratio(0.5), tabs(&[Project, History], 0), tabs(&[Program], 0));
+            assert!(d.move_panel_to_edge(History, zone), "{zone:?}");
+            let DockNode::Split { vertical: v, a, b, .. } = &d else { panic!("{zone:?}: {d:?}") };
+            assert_eq!(*v, vertical, "{zone:?}");
+            let (new, rest) = if new_first { (a, b) } else { (b, a) };
+            assert!(matches!(&**new, DockNode::Tabs { panels, .. } if panels == &[History]), "{zone:?}");
+            // the rest of the layout is whole inside the other half
+            let mut left = Vec::new();
+            rest.panels(&mut left);
+            left.sort_by_key(|p| p.id());
+            let mut want = vec![Project, Program];
+            want.sort_by_key(|p| p.id());
+            assert_eq!(left, want, "{zone:?}");
+        }
+        // nowhere to go: the only panel, a missing panel, or no side
+        let mut one = tabs(&[Project], 0);
+        assert!(!one.move_panel_to_edge(Project, DropZone::Left));
+        assert!(!one.move_panel_to_edge(History, DropZone::Left));
+        assert!(!one.move_panel_to_edge(Project, DropZone::Tabs));
+        assert_eq!(one, tabs(&[Project], 0));
+    }
+
+    #[test]
+    fn edge_zone_is_a_thin_strip_along_the_layout_border() {
+        let all = Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 600.0));
+        assert_eq!(edge_zone(all, pos2(3.0, 300.0)), Some(DropZone::Left));
+        assert_eq!(edge_zone(all, pos2(997.0, 300.0)), Some(DropZone::Right));
+        assert_eq!(edge_zone(all, pos2(500.0, 3.0)), Some(DropZone::Top));
+        assert_eq!(edge_zone(all, pos2(500.0, 597.0)), Some(DropZone::Bottom));
+        assert_eq!(edge_zone(all, pos2(500.0, 300.0)), None);
+        assert_eq!(edge_zone(all, pos2(f32::NAN, 3.0)), None);
+        // a tiny layout still has strips that stay inside it
+        let tiny = Rect::from_min_size(pos2(0.0, 0.0), vec2(10.0, 10.0));
+        for z in EDGES {
+            assert!(tiny.contains_rect(edge_strip(tiny, z)), "{z:?}");
+        }
+    }
+
+    #[test]
+    fn an_edge_strip_shows_only_near_its_edge() {
+        let all = Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 600.0));
+        let mid = pos2(500.0, 300.0);
+        for z in EDGES {
+            assert!(!near_edge(all, mid, z), "{z:?}: the middle is far from every edge");
+        }
+        assert!(near_edge(all, pos2(30.0, 300.0), DropZone::Left));
+        assert!(!near_edge(all, pos2(30.0, 300.0), DropZone::Right));
+        assert!(near_edge(all, pos2(970.0, 300.0), DropZone::Right));
+        assert!(near_edge(all, pos2(500.0, 20.0), DropZone::Top));
+        assert!(near_edge(all, pos2(500.0, 580.0), DropZone::Bottom));
+        assert!(!near_edge(all, pos2(-5.0, 300.0), DropZone::Left), "outside the layout");
+        assert!(!near_edge(all, pos2(f32::NAN, 3.0), DropZone::Top));
+    }
     #[test]
     fn workspaces_contain_core_panels() {
         for w in WORKSPACES {
