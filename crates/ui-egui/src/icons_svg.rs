@@ -48,6 +48,7 @@ pub fn svg_for(icon: Icon) -> Option<&'static str> {
         Icon::Film => include_str!("../../../assets/icons/craft/film.svg"),
         Icon::Image => include_str!("../../../assets/icons/craft/image.svg"),
         Icon::Audio => include_str!("../../../assets/icons/craft/music.svg"),
+        Icon::Folder => include_str!("../../../assets/icons/craft/folder.svg"),
         _ => return None,
     })
 }

@@ -78,6 +78,8 @@ iconography, images or other Adobe assets; open licences only; every asset attri
 | `assets/icons/craft/volume-x.svg` | ArtCraft Team | original work, craft-icons (Lucide-compatible) | ISC (`assets/icons/craft/LICENSE`) |
 | `assets/icons/craft/zoom-in.svg` | ArtCraft Team | original work, craft-icons (Lucide-compatible) | ISC (`assets/icons/craft/LICENSE`) |
 | `assets/icons/craft/zoom-out.svg` | ArtCraft Team | original work, craft-icons (Lucide-compatible) | ISC (`assets/icons/craft/LICENSE`) |
+| `assets/icons/craft/folder.svg` | Lucide Contributors | Lucide, via craft-icons | ISC (`assets/icons/craft/LICENSE`) |
+| `assets/icons/craft/folder-open.svg` | Lucide Contributors | Lucide, via craft-icons | ISC (`assets/icons/craft/LICENSE`) |
 | `assets/app-icon/filmcraft.svg` | Brandon Thomas (FilmCraft owner) | Original work: FilmCraft app icon (owl with ear tufts), drawn by the owner in ArtCraft and vectorised; canonical vector | MIT OR Apache-2.0 (`assets/app-icon/LICENSE.txt`) |
 | `packaging/macos/dmg/background.svg` | @XusBadia | Original work: FilmCraft macOS DMG window background, derived from the FilmCraft app icon (`assets/app-icon/filmcraft.svg`); rendered to `background.tiff` by `packaging/macos/dmg/generate.py` | MIT OR Apache-2.0 (`LICENSE-MIT`, `LICENSE-APACHE`) |
 | `packaging/macos/dmg/background.tiff` | @XusBadia | Rendered from `packaging/macos/dmg/background.svg` by `packaging/macos/dmg/generate.py` | MIT OR Apache-2.0 (`LICENSE-MIT`, `LICENSE-APACHE`) |
