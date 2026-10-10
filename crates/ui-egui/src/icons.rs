@@ -1,5 +1,5 @@
-//! Vector icons drawn in code on a 16×16 design grid (crisp at any DPI, recolourable, no
-//! third-party or Adobe artwork). Shapes follow NLE conventions (ripple brackets, razor blade…).
+//! Vector icons: Lucide-compatible craft-icons SVGs where we have them, otherwise original
+//! 16×16 drawings (crisp at any DPI, recolourable, no Adobe artwork).
 
 use egui::epaint::{PathShape, PathStroke};
 use egui::{Color32, Painter, Pos2, Rect, Stroke, pos2, vec2};
@@ -233,6 +233,10 @@ impl Pen16<'_> {
 
 /// Paint `icon` centred in `rect`.
 pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
+    if let Some(svg) = crate::icons_svg::svg_for(icon) {
+        crate::icons_svg::paint(painter, rect, svg, color);
+        return;
+    }
     let pen = Pen16 { painter, rect, color, width: 1.25 };
     use Icon::*;
     match icon {
@@ -926,6 +930,17 @@ mod tests {
         ((v * ppp).fract().abs() - want).abs() < 1e-3 || ((v * ppp).fract().abs() - (1.0 - want)).abs() < 1e-3
     }
 
+    #[test]
+    fn craft_icons_draw_strokes() {
+        for &icon in ALL {
+            if crate::icons_svg::svg_for(icon).is_none() {
+                continue;
+            }
+            let shapes = drawn(icon, 2.0, 16.0);
+            assert!(!shapes.is_empty(), "{icon:?} produced no strokes");
+        }
+    }
+
     /// Every straight line of every icon covers whole device pixels at 1x and 2x (no half-pixel
     /// blur): a whole number of pixels wide, its middle where that width needs it.
     #[test]
@@ -933,6 +948,9 @@ mod tests {
         for &ppp in &[1.0, 2.0] {
             for &size in &[16.0, 13.0, 9.6, 20.0] {
                 for &icon in ALL {
+                    if crate::icons_svg::svg_for(icon).is_some() {
+                        continue;
+                    }
                     for shape in drawn(icon, ppp, size) {
                         if let Shape::Path(p) = shape {
                             if p.stroke.width == 0.0 || matches!(p.stroke.color, ColorMode::Solid(c) if c == Color32::TRANSPARENT) {
