@@ -1,9 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- Hardened-runtime entitlements for Filmcraft. Deliberately empty: the app is pure Rust,
-     loads no unsigned code, needs no JIT, and is not sandboxed (it opens files by path, from the
-     command line and drag-and-drop). Add exceptions here only with a reason in a comment. -->
+<!-- Hardened-runtime entitlements for Filmcraft. Deliberately minimal — the app loads no
+     unsigned code, needs no JIT, and is not sandboxed (it opens files by path, from the command
+     line and drag-and-drop). Add entries here only with a reason in a comment. -->
 <plist version="1.0">
 <dict>
+    <!-- #659: voice-over recording needs the microphone input device. macOS only grants
+         audio-input to apps whose signed entitlements declare it. -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
 </dict>
 </plist>

@@ -42,6 +42,11 @@
   <true/>
   <key>NSRequiresAquaSystemAppearance</key>
   <false/>
+  <!-- #659: macOS will only let voice-over recording open the microphone when the Info.plist
+       names a use; without it FilmCraft never appears under System Settings → Privacy &
+       Security → Microphone. -->
+  <key>NSMicrophoneUsageDescription</key>
+  <string>FilmCraft needs the microphone to record voice-over narration onto your timeline.</string>
   <key>NSHumanReadableCopyright</key>
   <string>Copyright © the FilmCraft authors. MIT OR Apache-2.0.</string>
 
