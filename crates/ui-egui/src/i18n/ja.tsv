@@ -3557,3 +3557,17 @@
 	Whisper large-v3 turbo (99 languages)	Whisper large-v3 turbo (99 言語)
 	Whisper large-v3 (99 languages, slow)	Whisper large-v3 (99 言語、低速)
 	Unsaved changes from an earlier session: File ▸ Recover Unsaved Changes…	以前のセッションの未保存の変更があります: ファイル ▸ 未保存の変更を復元…
+	Back to searching text	テキスト検索に戻る
+	Filler words ({n})	フィラーワード ({n})
+	Pauses ({n})	ポーズ ({n})
+	Find them all in the transcript	トランスクリプト内ですべて検索
+	Pause length	ポーズの長さ
+	Shorter pauses count too	短いポーズも含める
+	Only longer pauses	長いポーズのみ
+	Delete all pauses ({n})	すべてのポーズを削除 ({n})
+	Delete all filler words ({n})	すべてのフィラーワードを削除 ({n})
+	Delete all ({n})	すべて削除 ({n})
+	Removes every result at once (one undo step)	すべての結果を一度に削除します (取り消しは 1 回)
+	Removes the current result	現在の結果を削除します
+	Close the gaps (ripple)	ギャップを詰める (リップル)
+	Leave the gaps empty	ギャップを空けたままにする

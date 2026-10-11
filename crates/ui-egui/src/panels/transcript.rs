@@ -4,11 +4,14 @@
 //! `ui.set {"transcript": {...}}` and `ui.inspect` reach it).
 //!
 //! Automation ids (`text.transcript.*`): `generate` (empty state), `banner.transcribe`, `progress`,
-//! `cancel`; toolbar `search`, `filter` (menu `filter.text|fillers|pauses|searchSettings`),
-//! `autoInOut`, `extract`, `lift`, `more` (menu `more.createCaptions|transcribe|viewOptions|autoScroll`);
-//! results row `delete`, `count`, `prev`, `next`, delete row `deleteMode.extract|lift`, `deleteAll`,
-//! `deleteOne`; text `segment.<n>`, `word.<i>`, `pause.<i>` (the pause after word i). The Transcript
-//! View Options dialog: `transcriptViewOptions.fillerWords|pauses|minPauseLength|wholeWords|matchCase|save|cancel`.
+//! `cancel`; toolbar `search` (with a filter on: the pill naming it, a click goes back to text),
+//! `filter` (menu `filter.text|fillers|pauses|searchSettings`), `autoInOut`, `extract`, `lift`,
+//! `more` (menu `more.createCaptions|transcribe|viewOptions|autoScroll`); quick filters
+//! `quick.fillers|pauses` ("Pauses (12)"); results row `count`, `prev`, `next`, with the Pauses
+//! filter `minPause` and `minPause.less|more`; delete row `deleteAll`, `deleteOne`,
+//! `deleteMode.extract|lift`; text `segment.<n>`, `word.<i>`, `pause.<i>` (the pause after word i).
+//! The Transcript View Options dialog:
+//! `transcriptViewOptions.fillerWords|pauses|minPauseLength|wholeWords|matchCase|save|cancel`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -27,6 +30,10 @@ use crate::theme::Tokens;
 
 /// A pause of at least this long starts a new segment (as `transcript.inspect`'s paragraphs).
 const SEGMENT_GAP_SECONDS: f64 = 1.5;
+/// Pauses at least this long show their length ("[... 2.4 s]").
+const LONG_PAUSE_SECONDS: f64 = 1.0;
+/// The steps of the results row's pause length − / + (seconds).
+const PAUSE_STEPS: [f64; 9] = [0.1, 0.2, 0.3, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0];
 const WORD_SIZE: f32 = 13.5;
 const LINE_H: f32 = 21.0;
 
@@ -38,8 +45,7 @@ pub struct TranscriptUi {
     pub filter: Filter,
     /// The current match (∧ ∨), an index into the matches.
     pub current: usize,
-    /// The Delete row under the results row is open; `lift` = its Lift radio (else Extract).
-    pub delete_open: bool,
+    /// The Delete row's Lift radio (else Extract): Delete all / Delete leave a gap.
     pub lift: bool,
     /// The selected pause: the index of the word it follows.
     pub pause: Option<usize>,
@@ -107,7 +113,15 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     toolbar(app, ui, bar, &mut actions);
     y = bar.max.y + 6.0;
 
-    // ---- search results: matches, counter, ∧ ∨, Delete
+    // ---- quick filters: Filler words and Pauses in one click, with how many there are
+    let min_pause = filmcraft_engine::transcript::min_pause(&app.session, &json!({}));
+    let all_pauses = tx::pauses(&words, min_pause);
+    let filler_list = filmcraft_engine::transcript::filler_hits(&app.session, &words, &json!({}));
+    let row = Rect::from_min_size(pos2(rect.min.x + 10.0, y), vec2(rect.width() - 20.0, 22.0));
+    quick_filters(app, ui, row, filler_list.len(), all_pauses.len());
+    y = row.max.y + 6.0;
+
+    // ---- search results: counter, ∧ ∨ (the pause length); Delete all, Delete, Extract / Lift
     let filter = app.ui.transcript.filter;
     let query = app.ui.transcript_search.clone();
     let searching = filter != Filter::Text || !query.trim().is_empty();
@@ -128,11 +142,9 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
             scroll_to = Some(tok);
         }
         y = row.max.y + 4.0;
-        if app.ui.transcript.delete_open {
-            let row = Rect::from_min_size(pos2(rect.min.x + 10.0, y), vec2(rect.width() - 20.0, 24.0));
-            delete_row(app, ui, row, &words, &found, &query, &mut actions);
-            y = row.max.y + 4.0;
-        }
+        let row = Rect::from_min_size(pos2(rect.min.x + 10.0, y), vec2(rect.width() - 20.0, 26.0));
+        delete_row(app, ui, row, &found, &query, &mut actions);
+        y = row.max.y + 4.0;
     }
 
     // ---- transcription in progress, or clips still without a transcript
@@ -152,14 +164,9 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let hits: BTreeSet<usize> = found.iter().filter_map(|m| if let Match::Words { from, to } = m { Some(*from..=*to) } else { None }).flatten().collect();
     let pause_hits: BTreeSet<usize> = found.iter().filter_map(|m| if let Match::Pause(p) = m { Some(p.after) } else { None }).collect();
     let current_match = found.get(app.ui.transcript.current).copied();
-    let fillers: BTreeSet<usize> = if prefs.filler_words || filter == Filter::Fillers {
-        filmcraft_engine::transcript::filler_hits(&app.session, &words, &json!({})).into_iter().flatten().collect()
-    } else {
-        BTreeSet::new()
-    };
-    let min_pause = filmcraft_engine::transcript::min_pause(&app.session, &json!({}));
+    let fillers: BTreeSet<usize> = if prefs.filler_words || filter == Filter::Fillers { filler_list.into_iter().flatten().collect() } else { BTreeSet::new() };
     let pauses: BTreeMap<usize, tx::Pause> =
-        if prefs.pauses || filter == Filter::Pauses { tx::pauses(&words, min_pause).into_iter().map(|p| (p.after, p)).collect() } else { BTreeMap::new() };
+        if prefs.pauses || filter == Filter::Pauses { all_pauses.into_iter().map(|p| (p.after, p)).collect() } else { BTreeMap::new() };
     let ph = app.session.playhead();
     let rate = app.session.sequence_rate();
     let playing_pause = pauses.values().find(|p| p.start <= ph && ph < p.end).map(|p| p.after);
@@ -191,8 +198,8 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
             for i in para.clone() {
                 let Some(w) = words.get(i) else { continue };
                 toks.push((Tok::Word(i), w.text.clone()));
-                if pauses.contains_key(&i) {
-                    toks.push((Tok::Pause(i), "[...]".into()));
+                if let Some(p) = pauses.get(&i) {
+                    toks.push((Tok::Pause(i), pause_text(p)));
                 }
             }
             let (mut x, mut row) = (0.0f32, 0.0f32);
@@ -245,6 +252,8 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 }
                 let is_playing = Some(p.tok) == playing;
                 let color = match p.tok {
+                    // readable on the match highlight
+                    Tok::Pause(_) if in_sel || hit || current => t.text,
                     Tok::Pause(_) => t.text_faint,
                     _ if in_sel => t.text,
                     _ if is_playing => t.hot_text,
@@ -368,6 +377,12 @@ fn playing_word(words: &[SeqWord], ph: Tick, frame: Tick, in_pause: bool) -> Opt
     if w.end > ph || (!in_pause && words.get(i + 1).is_some_and(|n| n.start > ph)) { Some(i) } else { None }
 }
 
+/// A pause in the text: "[...]", with its length when it is a long one, so long pauses stand out.
+fn pause_text(p: &tx::Pause) -> String {
+    let secs = p.duration().seconds();
+    if secs >= LONG_PAUSE_SECONDS { format!("[... {secs:.1} s]") } else { "[...]".into() }
+}
+
 trait SubAbs {
     fn sub_abs(self, o: f32) -> f32;
 }
@@ -465,19 +480,33 @@ fn small_button(app: &mut FilmcraftApp, ui: &mut egui::Ui, r: Rect, icon: Icon, 
 fn toolbar(app: &mut FilmcraftApp, ui: &mut egui::Ui, bar: Rect, actions: &mut Vec<(String, Value)>) {
     let t = app.tokens;
     let filter = app.ui.transcript.filter;
-    // the search field (with a filter on, it names the filter and searches nothing)
+    // the search field; with a filter on, a pill naming the filter
     let sw = 220.0f32.min(bar.width() - 5.0 * 28.0).max(80.0);
-    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(Rect::from_min_size(bar.min, vec2(sw, 24.0))));
-    let hint = match filter {
-        Filter::Text => tl!("Search"),
-        Filter::Fillers => tl!("Filler words"),
-        Filter::Pauses => tl!("Pauses"),
-    };
-    let sresp = if filter == Filter::Text {
-        crate::widgets::search_field(&mut child, &mut app.ui.transcript_search, hint, sw, &t)
-    } else {
-        let mut empty = String::new();
-        crate::widgets::search_field(&mut child, &mut empty, hint, sw, &t)
+    let sresp = match filter {
+        Filter::Text => {
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(Rect::from_min_size(bar.min, vec2(sw, 24.0))));
+            crate::widgets::search_field(&mut child, &mut app.ui.transcript_search, tl!("Search"), sw, &t)
+        }
+        // a filter searches no text: it shows as a pill naming it, and a click on the pill goes
+        // back to searching text (a search field there took typing that went nowhere)
+        Filter::Fillers | Filter::Pauses => {
+            let name = if filter == Filter::Pauses { tl!("Pauses") } else { tl!("Filler words") };
+            let r = Rect::from_min_size(bar.min + vec2(0.0, 1.0), vec2(sw, 22.0));
+            let resp = ui.interact(r, egui::Id::new("transcript-filter-pill"), Sense::click());
+            let p = ui.painter();
+            p.rect_filled(r, 11.0, if resp.hovered() { t.hover } else { t.pill_active_bg });
+            icons::paint(p, Rect::from_center_size(pos2(r.min.x + 13.0, r.center().y), vec2(12.0, 12.0)), Icon::Filter, t.icon_active);
+            p.text(pos2(r.min.x + 25.0, r.center().y), Align2::LEFT_CENTER, name, Tokens::ui(12.0), t.text);
+            // ✕
+            let c = pos2(r.max.x - 11.0, r.center().y);
+            for d in [vec2(3.5, 3.5), vec2(3.5, -3.5)] {
+                p.line_segment([c - d, c + d], Stroke::new(1.3, t.text_dim));
+            }
+            if resp.clicked() {
+                app.ui.transcript.filter = Filter::Text;
+            }
+            resp.on_hover_text(tl!("Back to searching text"))
+        }
     };
     app.auto.add("text.transcript.search", sresp.rect, "Search transcript");
     if sresp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
@@ -498,7 +527,6 @@ fn toolbar(app: &mut FilmcraftApp, ui: &mut egui::Ui, bar: Rect, actions: &mut V
             elems.push((format!("text.transcript.filter.{id}"), r.rect, label.into()));
             if r.clicked() {
                 app.ui.transcript.filter = f;
-                app.ui.transcript.delete_open = false;
             }
         }
         ui.separator();
@@ -575,26 +603,59 @@ fn toolbar(app: &mut FilmcraftApp, ui: &mut egui::Ui, bar: Rect, actions: &mut V
     }
 }
 
-/// The results row: Delete, "1/33 results", ∧ ∨. Returns the match to scroll to after ∧ ∨.
+/// Quick filters under the toolbar: "Filler words (3)" and "Pauses (12)" switch the search to that
+/// filter (a second click goes back to searching text), so finding every pause is one click and
+/// shows how many there are.
+fn quick_filters(app: &mut FilmcraftApp, ui: &mut egui::Ui, row: Rect, fillers: usize, pauses: usize) {
+    let t = app.tokens;
+    let mut x = row.min.x;
+    for (f, id, label) in [
+        (Filter::Fillers, "text.transcript.quick.fillers", tlf!("Filler words ({n})", n = fillers.to_string())),
+        (Filter::Pauses, "text.transcript.quick.pauses", tlf!("Pauses ({n})", n = pauses.to_string())),
+    ] {
+        let galley = ui.painter().layout_no_wrap(label.clone(), Tokens::ui(12.0), t.text);
+        let r = Rect::from_min_size(pos2(x, row.min.y), vec2(galley.size().x + 20.0, row.height()));
+        if r.max.x > row.max.x {
+            break;
+        }
+        let on = app.ui.transcript.filter == f;
+        let resp = ui.interact(r, egui::Id::new(("transcript-quick", id)), Sense::click());
+        let p = ui.painter();
+        if on {
+            p.rect_filled(r, r.height() / 2.0, t.accent);
+        } else {
+            p.rect_filled(r, r.height() / 2.0, if resp.hovered() { t.hover } else { t.field_bg });
+            p.rect_stroke(r, r.height() / 2.0, Stroke::new(1.0, t.field_border), egui::StrokeKind::Inside);
+        }
+        p.galley(pos2(r.min.x + 10.0, r.center().y - galley.size().y / 2.0), galley, if on { Color32::WHITE } else { t.text });
+        app.auto.add(id, r, &label);
+        if resp.on_hover_text(if on { tl!("Back to searching text") } else { tl!("Find them all in the transcript") }).clicked() {
+            app.ui.transcript.filter = if on { Filter::Text } else { f };
+        }
+        x = r.max.x + 6.0;
+    }
+}
+
+/// The results row: "3/33 results" with ∧ ∨ next to it; with the Pauses filter, the shortest pause
+/// counted (− 0.75 s +) at the right. Returns the match to scroll to after ∧ ∨.
 fn results_row(app: &mut FilmcraftApp, ui: &mut egui::Ui, row: Rect, words: &[SeqWord], found: &[Match], actions: &mut Vec<(String, Value)>) -> Option<Tok> {
     let t = app.tokens;
     let n = found.len();
-    let r = Rect::from_min_size(row.min, vec2(24.0, 24.0));
-    if small_button(app, ui, r, Icon::Trash, "text.transcript.delete", tl!("Delete"), n > 0, app.ui.transcript.delete_open).clicked() {
-        app.ui.transcript.delete_open = !app.ui.transcript.delete_open;
-    }
     let cur = app.ui.transcript.current;
     let count = if n == 0 { tl!("no results").to_string() } else { tlf!("{n}/{total} results", n = (cur + 1).to_string(), total = n.to_string()) };
-    let tr = ui.painter().text(pos2(row.min.x + 32.0, row.center().y), Align2::LEFT_CENTER, &count, Tokens::ui(12.0), t.text_dim);
+    let tr = ui.painter().text(pos2(row.min.x, row.center().y), Align2::LEFT_CENTER, &count, Tokens::ui(12.0), t.text_dim);
     app.auto.add("text.transcript.count", tr, &count);
     let mut step: i64 = 0;
-    let prev = Rect::from_min_size(pos2(row.max.x - 52.0, row.min.y), vec2(24.0, 24.0));
+    let prev = Rect::from_min_size(pos2(tr.max.x + 8.0, row.min.y), vec2(24.0, 24.0));
     if small_button(app, ui, prev, Icon::ChevronUp, "text.transcript.prev", tl!("Previous result"), n > 0, false).clicked() {
         step = -1;
     }
-    let next = Rect::from_min_size(pos2(row.max.x - 24.0, row.min.y), vec2(24.0, 24.0));
+    let next = Rect::from_min_size(pos2(prev.max.x + 2.0, row.min.y), vec2(24.0, 24.0));
     if small_button(app, ui, next, Icon::ChevronDown, "text.transcript.next", tl!("Next result"), n > 0, false).clicked() {
         step = 1;
+    }
+    if app.ui.transcript.filter == Filter::Pauses {
+        pause_length(app, ui, Rect::from_min_max(pos2(next.max.x + 12.0, row.min.y), row.max));
     }
     if ui.ctx().data_mut(|d| d.remove_temp::<bool>(egui::Id::new("transcript-next"))).unwrap_or(false) {
         step = 1;
@@ -617,23 +678,70 @@ fn results_row(app: &mut FilmcraftApp, ui: &mut egui::Ui, row: Rect, words: &[Se
     })
 }
 
-/// The Delete row: Extract / Lift, "Delete all", "Delete" (the current match).
-fn delete_row(app: &mut FilmcraftApp, ui: &mut egui::Ui, row: Rect, words: &[SeqWord], found: &[Match], query: &str, actions: &mut Vec<(String, Value)>) {
+/// "Pause length − 0.75 s +" at the right of `area`: the shortest silence that counts as a pause
+/// (Transcript view options ▸ Minimum pause length), in steps.
+fn pause_length(app: &mut FilmcraftApp, ui: &mut egui::Ui, area: Rect) {
+    let t = app.tokens;
+    let cur = app.session.prefs.transcript.min_pause_length;
+    let value = format!("{cur:.2} s");
+    let plus = Rect::from_min_size(pos2(area.max.x - 24.0, area.min.y), vec2(24.0, 24.0));
+    let text_r = Rect::from_min_max(pos2(plus.min.x - 52.0, area.min.y), pos2(plus.min.x, area.max.y));
+    let minus = Rect::from_min_size(pos2(text_r.min.x - 24.0, area.min.y), vec2(24.0, 24.0));
+    let label = tl!("Pause length");
+    let label_w = ui.painter().layout_no_wrap(label.to_string(), Tokens::ui(12.0), t.text_dim).size().x;
+    if minus.min.x - label_w - 6.0 < area.min.x {
+        return;
+    }
+    ui.painter().text(pos2(minus.min.x - 6.0, area.center().y), Align2::RIGHT_CENTER, label, Tokens::ui(12.0), t.text_dim);
+    let less = PAUSE_STEPS.iter().rev().copied().find(|v| *v < cur - 1e-6);
+    let more = PAUSE_STEPS.iter().copied().find(|v| *v > cur + 1e-6);
+    let mut set = None;
+    if step_button(app, ui, minus, "text.transcript.minPause.less", "−", tl!("Shorter pauses count too"), less.is_some()).clicked() {
+        set = less;
+    }
+    ui.painter().text(text_r.center(), Align2::CENTER_CENTER, &value, Tokens::ui(12.0), t.hot_text);
+    app.auto.add("text.transcript.minPause", text_r, &value);
+    if step_button(app, ui, plus, "text.transcript.minPause.more", "+", tl!("Only longer pauses"), more.is_some()).clicked() {
+        set = more;
+    }
+    if let Some(v) = set
+        && let Err(e) = app.session.execute("prefs.set", json!({"key": "transcript.minPauseLength", "value": v}))
+    {
+        app.ui.status = e.to_string();
+    }
+}
+
+/// A small text button ("−", "+").
+fn step_button(app: &mut FilmcraftApp, ui: &mut egui::Ui, r: Rect, id: &str, text: &str, tip: &str, enabled: bool) -> egui::Response {
+    let t = app.tokens;
+    let resp = ui.interact(r, egui::Id::new(("transcript-step", id)), if enabled { Sense::click() } else { Sense::hover() });
+    if enabled && resp.hovered() {
+        ui.painter().rect_filled(r, 3.0, t.hover);
+    }
+    ui.painter().text(r.center(), Align2::CENTER_CENTER, text, Tokens::semibold(14.0), if enabled { t.icon } else { t.text_faint });
+    app.auto.add(id, r, tip);
+    resp.on_hover_text(tip)
+}
+
+/// The Delete row, under the results: "Delete all pauses (12)" removes every match in one undo step,
+/// "Delete" the current one; Extract closes the gaps, Lift leaves them.
+fn delete_row(app: &mut FilmcraftApp, ui: &mut egui::Ui, row: Rect, found: &[Match], query: &str, actions: &mut Vec<(String, Value)>) {
+    let t = app.tokens;
     let filter = app.ui.transcript.filter;
+    let n = found.len();
     let mut elems: Vec<(String, Rect, String)> = Vec::new();
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(row).id_salt("transcript-delete-row"));
     child.horizontal_centered(|ui| {
-        for (lift, id, label) in [(false, "extract", tl!("Extract")), (true, "lift", tl!("Lift"))] {
-            let r = ui.radio(app.ui.transcript.lift == lift, label);
-            elems.push((format!("text.transcript.deleteMode.{id}"), r.rect, label.into()));
-            if r.clicked() {
-                app.ui.transcript.lift = lift;
-            }
-        }
-        ui.add_space(8.0);
-        let any = !found.is_empty();
-        let r = ui.add_enabled(any, egui::Button::new(tl!("Delete all")));
-        elems.push(("text.transcript.deleteAll".into(), r.rect, "Delete all".into()));
+        let all = match filter {
+            Filter::Pauses => tlf!("Delete all pauses ({n})", n = n.to_string()),
+            Filter::Fillers => tlf!("Delete all filler words ({n})", n = n.to_string()),
+            Filter::Text => tlf!("Delete all ({n})", n = n.to_string()),
+        };
+        let b = egui::Button::new(egui::RichText::new(&all).color(if n > 0 { Color32::WHITE } else { t.text_faint }))
+            .fill(if n > 0 { t.accent } else { t.field_bg })
+            .corner_radius(11.0);
+        let r = ui.add_enabled(n > 0, b).on_hover_text(tl!("Removes every result at once (one undo step)"));
+        elems.push(("text.transcript.deleteAll".into(), r.rect, all.clone()));
         if r.clicked() {
             let mut p = json!({"filter": filter.name(), "lift": app.ui.transcript.lift});
             if filter == Filter::Text {
@@ -643,7 +751,7 @@ fn delete_row(app: &mut FilmcraftApp, ui: &mut egui::Ui, row: Rect, words: &[Seq
             app.ui.transcript_sel = None;
             app.ui.transcript.pause = None;
         }
-        let r = ui.add_enabled(any, egui::Button::new(tl!("Delete")));
+        let r = ui.add_enabled(n > 0, egui::Button::new(tl!("Delete")).corner_radius(11.0)).on_hover_text(tl!("Removes the current result"));
         elems.push(("text.transcript.deleteOne".into(), r.rect, "Delete".into()));
         if r.clicked()
             && let Some(m) = found.get(app.ui.transcript.current)
@@ -656,8 +764,17 @@ fn delete_row(app: &mut FilmcraftApp, ui: &mut egui::Ui, row: Rect, words: &[Seq
             app.ui.transcript_sel = None;
             app.ui.transcript.pause = None;
         }
+        ui.add_space(10.0);
+        for (lift, id, label, tip) in
+            [(false, "extract", tl!("Extract"), tl!("Close the gaps (ripple)")), (true, "lift", tl!("Lift"), tl!("Leave the gaps empty"))]
+        {
+            let r = ui.radio(app.ui.transcript.lift == lift, label).on_hover_text(tip);
+            elems.push((format!("text.transcript.deleteMode.{id}"), r.rect, label.into()));
+            if r.clicked() {
+                app.ui.transcript.lift = lift;
+            }
+        }
     });
-    let _ = words;
     for (id, r, l) in elems {
         app.auto.add(&id, r, &l);
     }

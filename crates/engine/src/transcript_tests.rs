@@ -463,3 +463,54 @@ fn generate_without_a_transcriber() {
     let r = s.execute("transcript.generate", json!({})).unwrap();
     assert!(r["items"].as_array().unwrap().len() >= 2, "{r}");
 }
+
+/// A recogniser that notes how loud the audio it hears is, and finds no words.
+struct Loudness(std::sync::Mutex<Vec<f32>>);
+
+impl filmcraft_speech::Transcriber for Loudness {
+    fn id(&self) -> String {
+        "loudness".into()
+    }
+    fn transcribe(&self, audio: &[f32], _: &filmcraft_speech::Options, _: filmcraft_speech::ProgressFn) -> Result<Transcript, filmcraft_speech::SpeechError> {
+        self.0.lock().unwrap().push(audio.iter().fold(0f32, |m, v| m.max(v.abs())));
+        Ok(Transcript { language: "en".into(), ..Default::default() })
+    }
+}
+
+/// ffmpeg-made AAC with two audio streams, as OBS records one per source: stream 0 a 440 Hz tone,
+/// stream 1 silence.
+fn two_stream_fixture() -> Option<std::path::PathBuf> {
+    let ffmpeg = filmcraft_testkit::oracle::ffmpeg_or_skip("transcribe_track_stream")?;
+    let out = filmcraft_testkit::fixtures_dir("engine/transcript").join("two_streams.mp4");
+    filmcraft_testkit::fixtures::generate(&out, |tmp| {
+        std::process::Command::new(&ffmpeg)
+            .args(["-y", "-loglevel", "error"])
+            .args(["-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=2"])
+            .args(["-f", "lavfi", "-t", "2", "-i", "anullsrc=r=48000:cl=mono"])
+            .args(["-map", "0:a", "-map", "1:a", "-c:a", "aac"])
+            .arg(tmp)
+            .status()
+            .is_ok_and(|s| s.success())
+    })
+}
+
+/// Transcribe ▸ Audio on track ▸ Audio 2 listens to the stream that track plays, not to stream 0:
+/// with OBS's microphone on its own track, that is the clean voice (its pauses are silent).
+#[test]
+fn transcribing_a_track_listens_to_the_stream_it_plays() {
+    let Some(path) = two_stream_fixture() else { return };
+    let mut s = Session::default();
+    let r = s.execute("file.import", json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let item = ItemId(r["items"][0].as_u64().unwrap());
+    s.execute("file.newSequenceFromClip", json!({"items": [item.0]})).unwrap();
+    let streams: Vec<usize> = s.active_sequence().unwrap().audio_tracks.iter().filter_map(|t| t.items.first()).map(|c| c.audio_stream).collect();
+    assert_eq!(streams, [0, 1], "one clip per stream");
+    let heard = Arc::new(Loudness(Default::default()));
+    s.transcriber = Some(heard.clone());
+    s.execute("sequence.transcribe", json!({"track": "A1"})).unwrap();
+    s.execute("sequence.transcribe", json!({"track": "A2"})).unwrap();
+    let peaks = heard.0.lock().unwrap().clone();
+    assert_eq!(peaks.len(), 2, "{peaks:?}");
+    assert!(peaks[0] > 0.1, "A1 plays the tone: {peaks:?}");
+    assert!(peaks[1] < 0.01, "A2 plays the silent stream: {peaks:?}");
+}

@@ -3573,3 +3573,17 @@
 	Whisper large-v3 turbo (99 languages)	Whisper large-v3 turbo (99 idiomas)
 	Whisper large-v3 (99 languages, slow)	Whisper large-v3 (99 idiomas, lento)
 	Unsaved changes from an earlier session: File ▸ Recover Unsaved Changes…	Cambios no guardados de una sesión anterior: Archivo ▸ Recuperar cambios no guardados…
+	Back to searching text	Volver a buscar texto
+	Filler words ({n})	Muletillas ({n})
+	Pauses ({n})	Pausas ({n})
+	Find them all in the transcript	Encontrarlas todas en la transcripción
+	Pause length	Duración de pausa
+	Shorter pauses count too	Contar también pausas más cortas
+	Only longer pauses	Solo pausas más largas
+	Delete all pauses ({n})	Eliminar todas las pausas ({n})
+	Delete all filler words ({n})	Eliminar todas las muletillas ({n})
+	Delete all ({n})	Eliminar todo ({n})
+	Removes every result at once (one undo step)	Elimina todos los resultados a la vez (un solo paso de deshacer)
+	Removes the current result	Elimina el resultado actual
+	Close the gaps (ripple)	Cerrar los huecos (rizo)
+	Leave the gaps empty	Dejar los huecos vacíos

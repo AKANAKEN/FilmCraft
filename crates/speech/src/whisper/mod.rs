@@ -395,6 +395,7 @@ impl Whisper {
         }
         let db = crate::vad::frame_db(audio);
         let th = crate::vad::threshold(&db);
+        let speech = crate::vad::speech_frames(&db, th);
         let silent: Vec<bool> = db.iter().map(|&v| v < th).collect();
         let content = content_frames.min(frames);
         // independent regions decoded side by side (one, without silence skipping, for the
@@ -516,7 +517,7 @@ impl Whisper {
                     }
                     // words past the region's end belong to the next region; decide by where the
                     // word's sound starts (alignment tends to start a word inside the pause before it)
-                    crate::vad::tighten_words_db(&db, th, &mut ws);
+                    crate::vad::tighten_words_speech(&speech, &mut ws);
                     ws.retain(|w| w.start < region_end);
                     words.push((c.start, ws));
                 }
@@ -541,7 +542,7 @@ impl Whisper {
         let words = words.into_iter().flat_map(|w| w.1).collect();
         let mut t = Transcript { language: language.unwrap_or_else(|| "en".into()), source: self.id.clone(), speakers: Vec::new(), words };
         t.normalize();
-        crate::vad::tighten_words(audio, &mut t.words);
+        crate::vad::tighten_words_speech(&speech, &mut t.words);
         if opts.diarize && !t.words.is_empty() {
             if !progress(0.96, "Labelling speakers") {
                 return Err(SpeechError::Cancelled);

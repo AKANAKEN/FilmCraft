@@ -168,6 +168,8 @@ struct WorkItem {
     item: ItemId,
     name: String,
     src: filmcraft_media::SharedSource,
+    /// The audio stream heard (a recording with several streams: the one the chosen track plays).
+    stream: usize,
     /// Length in 16 kHz samples.
     samples: usize,
 }
@@ -232,7 +234,7 @@ fn decode(w: &WorkItem, prog: &filmcraft_export::Progress, status: &str, base: f
             return Ok(None);
         }
         let n = chunk.min(w.samples - out.len());
-        let buf = w.src.audio(out.len() as i64, n, sr).map_err(|e| format!("{}: can't decode the audio: {e}", w.name))?;
+        let buf = w.src.audio_stream(w.stream, out.len() as i64, n, sr).map_err(|e| format!("{}: can't decode the audio: {e}", w.name))?;
         let mono = filmcraft_speech::downmix(&buf.channels);
         if mono.is_empty() {
             break;
@@ -328,7 +330,10 @@ fn generate(s: &mut Session, p: &Value) -> Result<Value> {
                 continue;
             }
         };
-        let (Some(src), Some(name)) = (s.source(item).filter(|src| src.info().has_audio()), s.project.item(item).map(|i| i.name.clone())) else {
+        // `audioStreams` {item: stream}: which audio stream of a multi-stream recording to listen to
+        let stream = p.get("audioStreams").and_then(|m| m.get(item.0.to_string())).and_then(Value::as_u64).map_or(0, |n| n as usize);
+        let (Some(src), Some(name)) = (s.source(item).filter(|src| src.info().audio_streams.len() > stream), s.project.item(item).map(|i| i.name.clone()))
+        else {
             skipped.push(item);
             continue;
         };
@@ -337,7 +342,7 @@ fn generate(s: &mut Session, p: &Value) -> Result<Value> {
             skipped.push(item);
             continue;
         }
-        work.push(WorkItem { item, name, src, samples: samples as usize });
+        work.push(WorkItem { item, name, src, stream, samples: samples as usize });
     }
     if work.is_empty() {
         return Err(EngineError::Other("none of the clips has audio to transcribe".into()));
@@ -908,7 +913,7 @@ pub fn commands() -> Vec<CommandSpec> {
             "transcript.generate",
             "Transcribe…",
             &["Sequence", "Transcript"],
-            r#"{"items":[id]?,"model":"parakeet-tdt-0.6b-v3"?,"language":"en|auto"?,"diarize":bool?,"maxSpeakers":n?,"download":bool=false,"wait":bool=true}"#,
+            r#"{"items":[id]?,"audioStreams":{"<item>":n}?,"model":"parakeet-tdt-0.6b-v3"?,"language":"en|auto"?,"diarize":bool?,"maxSpeakers":n?,"download":bool=false,"wait":bool=true}"#,
             can_transcribe,
             generate,
             true,

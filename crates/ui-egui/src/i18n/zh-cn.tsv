@@ -3551,3 +3551,17 @@
 	Whisper large-v3 turbo (99 languages)	Whisper large-v3 turbo（99 种语言）
 	Whisper large-v3 (99 languages, slow)	Whisper large-v3（99 种语言，较慢）
 	Unsaved changes from an earlier session: File ▸ Recover Unsaved Changes…	上一次会话有未保存的更改：文件 ▸ 恢复未保存的更改…
+	Back to searching text	返回文本搜索
+	Filler words ({n})	填充词 ({n})
+	Pauses ({n})	停顿 ({n})
+	Find them all in the transcript	在转录中全部查找
+	Pause length	停顿长度
+	Shorter pauses count too	也计入较短的停顿
+	Only longer pauses	仅较长的停顿
+	Delete all pauses ({n})	删除所有停顿 ({n})
+	Delete all filler words ({n})	删除所有填充词 ({n})
+	Delete all ({n})	全部删除 ({n})
+	Removes every result at once (one undo step)	一次删除所有结果（一步撤销）
+	Removes the current result	删除当前结果
+	Close the gaps (ripple)	闭合间隙（波纹）
+	Leave the gaps empty	保留空白间隙

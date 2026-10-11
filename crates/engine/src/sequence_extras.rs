@@ -237,12 +237,16 @@ fn transcribe(s: &mut Session, p: &Value) -> Result<Value> {
         Some(_) => Some(crate::commands::track_p(s, p, "track", "sequence.transcribe")?.ok_or_else(|| bad("sequence.transcribe", "unknown `track`"))?),
     };
     let mut items = Vec::new();
+    // the audio stream each item is heard through on the chosen track (the top one for Mix): a
+    // recording with one stream per source (OBS: mix, microphone, game) puts each on its own track
+    let mut streams = serde_json::Map::new();
     for t in q.audio_tracks.iter().filter(|t| track.is_none_or(|x| x == t.id)) {
         let tagged =
             |i: &&filmcraft_project::TrackItem| !dialogue || i.essential.as_ref().is_some_and(|e| e.kind == filmcraft_project::essential::AudioType::Dialogue);
         for it in t.items.iter().filter(|i| i.enabled).filter(tagged) {
             if !items.contains(&it.item.0) {
                 items.push(it.item.0);
+                streams.insert(it.item.0.to_string(), json!(it.audio_stream));
             }
         }
     }
@@ -250,7 +254,7 @@ fn transcribe(s: &mut Session, p: &Value) -> Result<Value> {
         let why = if dialogue { "no audio clips are tagged as Dialogue (Essential Sound)" } else { "there are no audio clips to transcribe" };
         return Err(EngineError::Other(why.into()));
     }
-    let mut params = json!({"items": items});
+    let mut params = json!({"items": items, "audioStreams": streams});
     for k in ["language", "diarize", "maxSpeakers", "model", "download", "wait"] {
         if let Some(v) = p.get(k) {
             params[k] = v.clone();

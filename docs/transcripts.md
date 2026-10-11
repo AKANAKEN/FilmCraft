@@ -12,15 +12,20 @@ transcript built from source-clip transcripts**. Behaviour and labels come from 
 pages, release notes and Adobe staff answers on community.adobe.com (2023–2026); nothing was taken
 from the application. Icons are FilmCraft's own (`crates/ui-egui/src/icons.rs`).
 
-**Toolbar**, left to right: the search field ("Search"; with a filter on it reads "Filler words" or
-"Pauses"), the filter button (a funnel; a dot marks a filter other than Text), "{ }" =
-*Automatically set In/Out points* (on), Extract and Lift for the text selection, and "•••".
+**Toolbar**, left to right: the search field ("Search"; with a filter on, a pill naming the filter
+— "Filler words" or "Pauses" — whose click goes back to searching text), the filter button (a
+funnel; a dot marks a filter other than Text), "{ }" = *Automatically set In/Out points* (on),
+Extract and Lift for the text selection, and "•••".
+
+**Quick filters** (FilmCraft): under the toolbar, "Filler words (2)" and "Pauses (12)" turn that
+filter on in one click (again: back to text) and say how many there are before anything is
+searched. Premiere has only the filter menu.
 
 | Where | Premiere | FilmCraft |
 |---|---|---|
 | Filter menu | "Text" ✓, "Filler words", "Pauses", "Speakers", "Search settings…" | the same without "Speakers" (no speaker labels yet) |
-| Results row (searching or filtering) | "Replace", "Delete", "1/33 results" ("no results"), ∧ ∨ | "Delete", the counter, ∧ ∨ (no Replace: transcripts aren't corrected in place yet) |
-| Delete row | radios "Extract" (default) / "Lift"; buttons "Delete all", "Delete" | the same; each button is one undo step |
+| Results row (searching or filtering) | "Replace", "Delete", "1/33 results" ("no results"), ∧ ∨ | the counter with ∧ ∨ next to it; with the Pauses filter "Pause length − 0.75 s +" (steps 0.1–3 s; the Minimum pause length setting). No Replace: transcripts aren't corrected in place yet |
+| Delete row | opened by the results row's Delete: radios "Extract" (default) / "Lift"; buttons "Delete all", "Delete" | always shown while searching, no Delete button to open it: "Delete all pauses (12)" (or "filler words", or matches) first, then "Delete", "Extract" / "Lift"; each button is one undo step |
 | Matches | all orange, the current one salmon | the same |
 | "•••" menu | ACTIONS: "Create captions…", "Transcribe sequence", "Generate static transcript…", "Export ›", "Import ›"; PREFERENCES: "Transcript view options…", "Enable auto-scrolling" ✓, "Spell check ›" | "Create captions", "Transcribe sequence…"; "Transcript view options…", "Enable auto-scrolling" ✓ |
 | Transcript view options | "Filler words", "Markers", "Low-confidence words", "Untranscribed sources", "Speakers", "Pauses", "Minimum pause length" (slider + "seconds"); Search settings "Find whole words only", "Match capitalization"; "Cancel" / "Save" | "Filler words" ✓, "Pauses" ✓, "Minimum pause length" 0.1–3.0 s, default **0.75 s**; both search settings (off) |
@@ -52,8 +57,9 @@ text ("00:00:02:22 - 00:00:05:08"); the speaker column is hidden while speakers 
 - A click on a word moves the playhead to it (and clears a text selection and the In/Out it set).
   Dragging over words or Shift+click selects text; with "{ }" on that marks In/Out on the timeline.
   A double-click selects one word.
-- Pauses of at least the minimum pause length show inline as a dimmed "[...]"; hovering shows the
-  length ("1.2 seconds"); a click selects the pause.
+- Pauses of at least the minimum pause length show inline as a dimmed "[...]", pauses of 1 s or
+  more with their length ("[... 2.4 s]") so long ones stand out; hovering shows the length
+  ("1.2 seconds"); a click selects the pause.
 - Filler words are marked (tinted, dimmed) when "Filler words" is on.
 - Delete or Backspace with text or a pause selected **extracts** it (ripple delete, gaps close);
   Alt+Backspace **lifts** it (leaves a gap). Ctrl/Cmd+F goes to the search field; ← → ↑ ↓,
@@ -165,8 +171,11 @@ all three without Python and treats them as hostile input). How it works:
 - **Decoder**: token-and-duration transducer, greedy: an LSTM prediction network and a joint
   network that predicts the next token and how many 80 ms frames it covers.
 - **Word times** come from the model itself: a word starts at its first token's frame and ends at
-  its last token's frame plus that token's duration, then the bounds are tightened past silence
-  like Whisper's. No language is given to the model; v3 handles the 25 languages in one model and
+  its last spoken token's frame plus that token's duration (a full stop or comma the model emits
+  late, inside the pause after the word, does not stretch it), then the bounds are tightened past
+  silence like Whisper's. Short clicks in a pause (mouse, keyboard) do not hold a word's edge out
+  in the pause (`filmcraft_speech::vad`). Transcripts made before this find fewer pauses:
+  transcribe again (••• ▸ Transcribe sequence…). No language is given to the model; v3 handles the 25 languages in one model and
   the transcript's language is guessed from frequent words (or is the one requested).
 - **Long audio** (more than 60 s) is cut in pauses into pieces of at most 60 s, each encoded on its
   own, so memory stays flat for clips of hours and no word is split or repeated at a join (see the

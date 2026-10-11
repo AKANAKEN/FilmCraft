@@ -23,8 +23,9 @@
 //!    missing, NeMo's own inference included); the decoder also restarts its prediction network
 //!    after 2 s without a token ([`decoder::RESET_AFTER_FRAMES`]).
 //! 3. **Words.** SentencePiece tokens starting with `▁` begin a word; punctuation joins its word.
-//!    A word starts at its first token's frame and ends at its last token's frame plus that
-//!    token's predicted duration (80 ms frames). Its confidence is the geometric mean of its
+//!    A word starts at its first token's frame and ends at its last spoken token's frame plus that
+//!    token's predicted duration (80 ms frames); punctuation, often emitted well into the pause
+//!    after the word, does not stretch it. Its confidence is the geometric mean of its
 //!    token probabilities. English filler words (um, uh) are mostly kept (75 % of those in AMI
 //!    meeting speech); German äh/ähm are in v3's vocabulary but were not seen in testing.
 //! 4. Word bounds are tightened past silent frames ([`crate::vad`]), and optional speaker labelling
@@ -507,48 +508,55 @@ impl Parakeet {
     /// Words of `tokens` before any tightening, each with its midpoint in samples; `at` maps a
     /// sample position in the encoded piece to the clip's.
     pub fn words(&self, tokens: &[Token], at: &dyn Fn(usize) -> usize) -> Vec<(Word, usize)> {
-        let spf = self.samples_per_frame();
-        let mut groups: Vec<Vec<&Token>> = Vec::new();
-        for t in tokens {
-            let Some(p) = self.pieces.get(t.id as usize) else { continue };
-            if !p.is_text() {
-                continue;
-            }
-            if p.text.starts_with(spm::SPACE) || groups.is_empty() {
-                groups.push(vec![t]);
-            } else if let Some(g) = groups.last_mut() {
-                g.push(t);
-            }
-        }
-        let mut out: Vec<(Word, usize)> = Vec::new();
-        let mut prefix = String::new();
-        for g in groups {
-            let ids: Vec<u32> = g.iter().map(|t| t.id).collect();
-            let text = spm::decode(&self.pieces, &ids).trim().to_string();
-            if text.is_empty() {
-                continue;
-            }
-            let (Some(first), Some(last)) = (g.first(), g.last()) else { continue };
-            // punctuation on its own: opening marks join the next word, the rest the previous one
-            if !text.chars().any(char::is_alphanumeric) {
-                if text.chars().all(|c| "¿¡«„“‚‘([{\"'".contains(c)) {
-                    prefix.push_str(&text);
-                } else if let Some((w, _)) = out.last_mut() {
-                    w.text.push_str(&text);
-                    w.end = w.end.max(sample_tick(at((last.frame + last.duration) * spf) as i64));
-                }
-                continue;
-            }
-            let a = at(first.frame * spf);
-            let b = at((last.frame + last.duration) * spf).max(a + spf / 2);
-            let conf = (g.iter().map(|t| f64::from(t.prob.max(1e-6)).ln()).sum::<f64>() / g.len() as f64).exp() as f32;
-            let mut w = Word::new(format!("{prefix}{text}"), sample_tick(a as i64), sample_tick(b as i64));
-            w.confidence = conf;
-            prefix.clear();
-            out.push((w, (a + b) / 2));
-        }
-        out
+        group_words(&self.pieces, self.samples_per_frame(), tokens, at)
     }
+}
+
+/// [`Parakeet::words`] with the vocabulary and the samples per encoder frame given.
+fn group_words(pieces: &[spm::Piece], spf: usize, tokens: &[Token], at: &dyn Fn(usize) -> usize) -> Vec<(Word, usize)> {
+    let mut groups: Vec<Vec<&Token>> = Vec::new();
+    for t in tokens {
+        let Some(p) = pieces.get(t.id as usize) else { continue };
+        if !p.is_text() {
+            continue;
+        }
+        if p.text.starts_with(spm::SPACE) || groups.is_empty() {
+            groups.push(vec![t]);
+        } else if let Some(g) = groups.last_mut() {
+            g.push(t);
+        }
+    }
+    let mut out: Vec<(Word, usize)> = Vec::new();
+    let mut prefix = String::new();
+    for g in groups {
+        let ids: Vec<u32> = g.iter().map(|t| t.id).collect();
+        let text = spm::decode(pieces, &ids).trim().to_string();
+        if text.is_empty() {
+            continue;
+        }
+        let (Some(first), Some(last)) = (g.first(), g.last()) else { continue };
+        // punctuation on its own: opening marks join the next word, the rest the previous one
+        // (its text only: the model often emits a full stop or comma well into the pause after
+        // the word, and a word stretched to it would swallow the pause)
+        if !text.chars().any(char::is_alphanumeric) {
+            if text.chars().all(|c| "¿¡«„“‚‘([{\"'".contains(c)) {
+                prefix.push_str(&text);
+            } else if let Some((w, _)) = out.last_mut() {
+                w.text.push_str(&text);
+            }
+            continue;
+        }
+        // likewise a word ends with its last spoken piece, not with punctuation glued to it
+        let spoken = g.iter().rev().find(|t| pieces.get(t.id as usize).is_some_and(|p| p.text.chars().any(char::is_alphanumeric))).unwrap_or(last);
+        let a = at(first.frame * spf);
+        let b = at((spoken.frame + spoken.duration) * spf).max(a + spf / 2);
+        let conf = (g.iter().map(|t| f64::from(t.prob.max(1e-6)).ln()).sum::<f64>() / g.len() as f64).exp() as f32;
+        let mut w = Word::new(format!("{prefix}{text}"), sample_tick(a as i64), sample_tick(b as i64));
+        w.confidence = conf;
+        prefix.clear();
+        out.push((w, (a + b) / 2));
+    }
+    out
 }
 
 /// Shorten runs of dead air (10 ms frames below `db` dBFS) longer than 300 ms to 300 ms. Returns the
@@ -744,6 +752,22 @@ impl Transcriber for Parakeet {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A full stop the model emits late, inside the pause after the word, does not stretch the word
+    /// over the pause (it swallowed pauses: "an. [...] Let's go" kept only the end of its pause).
+    #[test]
+    fn punctuation_emitted_in_the_pause_does_not_stretch_the_word() {
+        let piece = |t: &str| spm::Piece { text: t.into(), kind: spm::Kind::Normal };
+        let pieces = vec![piece("\u{2581}schauen"), piece("\u{2581}an"), piece("."), piece("\u{2581}Let"), piece("'s"), piece("\u{2581},")];
+        let tok = |id: u32, frame: usize| Token { id, frame, duration: 1, prob: 0.9 };
+        // "schauen" at frame 0, "an" at 2, its "." at 12 (in the pause), "Let's" at 20–21, a lone "," at 30
+        let toks = [tok(0, 0), tok(1, 2), tok(2, 12), tok(3, 20), tok(4, 21), tok(5, 30)];
+        let words = group_words(&pieces, 1280, &toks, &|n| n);
+        let texts: Vec<&str> = words.iter().map(|(w, _)| w.text.as_str()).collect();
+        assert_eq!(texts, ["schauen", "an.", "Let's,"]);
+        assert_eq!(words[1].0.end, sample_tick(3 * 1280), "ends with its sound, not with the full stop at frame 12");
+        assert_eq!(words[2].0.end, sample_tick(22 * 1280), "a lone comma joins the text only");
+    }
 
     #[test]
     fn config_reads_parakeet_yaml_and_refuses_other_architectures() {

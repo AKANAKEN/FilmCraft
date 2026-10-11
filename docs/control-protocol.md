@@ -88,12 +88,13 @@ Text panel ▸ Transcript ([transcripts.md](transcripts.md)): `transcript.genera
 and stop it with `transcript.cancel`; `wait: true` (the default) returns when it is done.
 `transcript.search {filter: text|fillers|pauses, query?}`, `transcript.deleteAll {filter, query?, lift?}`,
 `transcript.select|extract|lift {from, to}` or `{pauseAfter}`. `ui.set {"transcript": {filter, current,
-deleteOpen, lift, pause, caret, viewOptions}, "transcriptSearch": "…"}` merges into the tab's view
+lift, pause, caret, viewOptions}, "transcriptSearch": "…"}` merges into the tab's view
 state. UI ids: `text.transcript.generate`, `text.transcript.progress`, `text.transcript.cancel`,
-`text.transcript.search`, `text.transcript.filter[.text|.fillers|.pauses|.searchSettings]`,
+`text.transcript.search` (with a filter on, the pill naming it), `text.transcript.filter[.text|.fillers|.pauses|.searchSettings]`,
 `text.transcript.autoInOut`, `text.transcript.extract|lift`, `text.transcript.more[.createCaptions|.transcribe|.viewOptions|.autoScroll]`,
-`text.transcript.delete`, `text.transcript.count`, `text.transcript.prev|next`,
-`text.transcript.deleteMode.extract|lift`, `text.transcript.deleteAll|deleteOne`,
+`text.transcript.quick.fillers|pauses` ("Pauses (12)"), `text.transcript.count`, `text.transcript.prev|next`,
+`text.transcript.minPause[.less|.more]` (Pauses filter), `text.transcript.deleteAll|deleteOne`,
+`text.transcript.deleteMode.extract|lift`,
 `text.transcript.word.<i>`, `text.transcript.pause.<i>`, `text.transcript.segment.<n>`; the Transcribe
 dialog `transcribe.language|model|analysis.dialogue|analysis.track|track|ok|cancel` (and
 `transcribe.download.size|license` while it asks to download a model); Transcript View Options

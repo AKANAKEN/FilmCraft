@@ -409,9 +409,9 @@ fn filler_and_pause_filters_delete_all_in_one_step() {
     d.click("text.transcript.next");
     assert_eq!(d.label("text.transcript.count"), "2/2 results");
     assert_eq!(d.app().ui.transcript_sel, Some((5, 5)), "the match is selected");
-    // Delete ▸ Extract ▸ Delete all: both fillers, one undo step
-    d.click("text.transcript.delete");
+    // Delete all (Extract): both fillers, one undo step; the Delete row shows without a click
     assert_eq!(d.ids("text.transcript.deleteMode.").len(), 2);
+    assert_eq!(d.label("text.transcript.deleteAll"), "Delete all filler words (2)");
     let undo = d.app().session.history.undo.len();
     d.click("text.transcript.deleteAll");
     assert_eq!(d.words(), ["Hello", "there", "friend.", "So", "we", "start."]);
@@ -423,7 +423,6 @@ fn filler_and_pause_filters_delete_all_in_one_step() {
     d.click("text.transcript.filter.pauses");
     assert_eq!(d.label("text.transcript.count"), "1/1 results");
     let before = d.app().session.active_sequence().unwrap().duration();
-    d.click("text.transcript.delete");
     d.click("text.transcript.deleteMode.lift");
     d.click("text.transcript.deleteOne");
     assert_eq!(d.app().session.active_sequence().unwrap().duration(), before);
@@ -433,6 +432,45 @@ fn filler_and_pause_filters_delete_all_in_one_step() {
     d.ok("ui.set", json!({"transcriptSearch": "st"}));
     d.frames(3);
     assert_eq!(d.label("text.transcript.count"), "1/1 results", "\"start.\"");
+}
+
+/// The quick filters under the toolbar find every pause (or filler word) in one click and say how
+/// many there are; the pause length is set right in the results row, and every pause goes in one
+/// click and one undo step.
+#[test]
+fn quick_filters_find_and_delete_every_pause_in_one_click() {
+    let mut d = Driver::transcript_tab();
+    d.set_transcript();
+    assert_eq!(d.label("text.transcript.quick.fillers"), "Filler words (2)");
+    assert_eq!(d.label("text.transcript.quick.pauses"), "Pauses (1)");
+    d.click("text.transcript.quick.pauses");
+    assert_eq!(d.app().ui.transcript.filter, filmcraft_engine::transcript::Filter::Pauses);
+    assert_eq!(d.label("text.transcript.count"), "1/1 results");
+    assert_eq!(d.label("text.transcript.minPause"), "0.75 s");
+    // + counts only longer pauses: the 1.1 s pause after "friend." is one up to 1 s, not at 1.5 s
+    d.click("text.transcript.minPause.more");
+    assert_eq!(d.app().session.prefs.transcript.min_pause_length, 1.0);
+    assert_eq!(d.label("text.transcript.quick.pauses"), "Pauses (1)");
+    d.click("text.transcript.minPause.more");
+    assert_eq!(d.label("text.transcript.quick.pauses"), "Pauses (0)");
+    assert_eq!(d.label("text.transcript.count"), "no results");
+    assert!(d.ids("text.transcript.pause.").is_empty());
+    // − counts shorter ones again
+    d.click("text.transcript.minPause.less");
+    assert_eq!(d.app().session.prefs.transcript.min_pause_length, 1.0);
+    assert_eq!(d.ids("text.transcript.pause."), ["text.transcript.pause.3"]);
+    assert_eq!(d.label("text.transcript.deleteAll"), "Delete all pauses (1)");
+    let undo = d.app().session.history.undo.len();
+    let before = d.app().session.active_sequence().unwrap().duration();
+    d.click("text.transcript.deleteAll");
+    assert_eq!(d.app().session.history.undo.len(), undo + 1, "one undo step");
+    assert!(d.app().session.active_sequence().unwrap().duration() < before);
+    assert_eq!(d.label("text.transcript.count"), "no results");
+    assert_eq!(d.words().len(), WORDS.len(), "no word was cut");
+    // the pill naming the filter goes back to searching text
+    d.click("text.transcript.search");
+    assert_eq!(d.app().ui.transcript.filter, filmcraft_engine::transcript::Filter::Text);
+    assert!(d.ids("text.transcript.deleteAll").is_empty(), "no Delete row without a search");
 }
 
 #[test]
@@ -514,7 +552,6 @@ fn transcript_panel_screenshots() {
     d.click("text.transcript.filter");
     d.snapshot("filter-menu", None);
     d.click("text.transcript.filter.fillers");
-    d.click("text.transcript.delete");
     d.snapshot("filler-filter-delete-row", None);
     d.click("text.transcript.filter");
     d.click("text.transcript.filter.pauses");
