@@ -22,7 +22,7 @@ use crate::icons::{self, Icon};
 use crate::state::{ThumbnailMode, TimelineView, Tool};
 use crate::theme::Tokens;
 
-use super::timeline_hit::{EdgeKind, Grab, edge_geometry, grab_at, marker_at, marker_rect};
+use super::timeline_hit::{EdgeKind, Grab, edge_geometry, grab_at, marker_at, marker_id_at, marker_rect};
 pub use super::timeline_hit::{Hit, ROLL_PX, hit, selection_trim_kind};
 
 const TOP_H: f32 = 58.0; // timecode + toolbar (left) / ruler (right)
@@ -1710,11 +1710,37 @@ fn shift_track(seq: &Sequence, tid: TrackId, delta: i32) -> Option<TrackId> {
     Some(tid)
 }
 
-/// The clip context menu: groups (separated by rules) of (label, command id). Entries marked `…`
-/// open their dialog through `menus::invoke`, like the same item in the Clip menu.
+/// The Label submenu shared by the Timeline context menus: one item per label, automation ids
+/// `<prefix>.<label>`, and `pick` runs the command that applies one. A clip's label goes through
+/// `edit.label`; a marker's colour through `markers.edit` (#1143) — different commands, different
+/// targets.
+fn label_menu(app: &mut FilmcraftApp, ui: &mut egui::Ui, prefix: &str, mut pick: impl FnMut(&mut FilmcraftApp, filmcraft_project::Label)) {
+    for l in filmcraft_project::Label::ALL {
+        let name = crate::i18n::t(l.name());
+        let r = ui.button(name);
+        app.auto.add_response(&format!("{prefix}.{}", l.name()), &r, name);
+        if r.clicked() {
+            pick(app, l);
+            ui.close();
+        }
+    }
+}
+
 /// The menu of a right-clicked Timeline marker (automation ids `timeline.markerMenu.<command>`);
-/// the marker is under the playhead, where Clear Selected Marker looks for it (#695).
-fn marker_menu(app: &mut FilmcraftApp, ctx: &egui::Context, ui: &mut egui::Ui) {
+/// the marker is under the playhead, where Clear Selected Marker looks for it (#695). `marker` is
+/// the marker the pointer landed on, so Label can colour it: `markers.edit` sets a marker's colour,
+/// while the clip command `edit.label` the submenu used to run knows nothing about markers (#1143).
+fn marker_menu(app: &mut FilmcraftApp, ctx: &egui::Context, ui: &mut egui::Ui, marker: filmcraft_project::MarkerId) {
+    let label = tl!("Label");
+    let menu = ui.menu_button(label, |ui| {
+        label_menu(app, ui, "timeline.markerMenu.edit.label", |app, l| {
+            if let Err(e) = app.session.execute("markers.edit", json!({"marker": marker.0, "color": l.name()})) {
+                app.ui.status = e.to_string();
+            }
+        })
+    });
+    app.auto.add_response("timeline.markerMenu.edit.label", &menu.response, label);
+    ui.separator();
     for (label, cmd) in [("Clear Selected Marker", "markers.clearCurrent"), ("Clear Markers", "markers.clearAll")] {
         let label = crate::i18n::t(label);
         let r = ui.button(label);
@@ -1728,6 +1754,8 @@ fn marker_menu(app: &mut FilmcraftApp, ctx: &egui::Context, ui: &mut egui::Ui) {
     }
 }
 
+/// The clip context menu: groups (separated by rules) of (label, command id). Entries marked `…`
+/// open their dialog through `menus::invoke`, like the same item in the Clip menu.
 pub(crate) const CLIP_MENU: &[&[(&str, &str)]] = &[
     &[
         ("Cut", "edit.cut"),
@@ -2414,11 +2442,10 @@ fn interact(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence, layout: &
     if resp.secondary_clicked()
         && let Some(p) = resp.interact_pointer_pos()
     {
-        let marker = marker_at(seq, layout, p);
-        if let Some(m) = marker {
+        if let Some(m) = marker_at(seq, layout, p) {
             app.session.set_playhead(m.max(Tick::ZERO));
         }
-        ctx.data_mut(|d| d.insert_temp(marker_menu_id, marker.is_some()));
+        ctx.data_mut(|d| d.insert_temp(marker_menu_id, marker_id_at(seq, layout, p)));
     }
     if resp.secondary_clicked()
         && let Some(p) = resp.interact_pointer_pos()
@@ -2447,8 +2474,8 @@ fn interact(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence, layout: &
     }
     resp.context_menu(|ui| {
         ui.set_min_width(220.0);
-        if ctx.data(|d| d.get_temp::<bool>(marker_menu_id)).unwrap_or(false) {
-            marker_menu(app, &ctx, ui);
+        if let Some(marker) = ctx.data(|d| d.get_temp::<Option<filmcraft_project::MarkerId>>(marker_menu_id)).flatten() {
+            marker_menu(app, &ctx, ui, marker);
             return;
         }
         if let Some(target) = ctx.data(|d| d.get_temp::<Option<EditPointTarget>>(edit_point_menu_id)).flatten() {
@@ -2470,14 +2497,23 @@ fn interact(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence, layout: &
             }
             for &(label, cmd) in *group {
                 if cmd == "edit.label" {
-                    ui.menu_button(crate::i18n::t(label), |ui| {
-                        for l in filmcraft_project::Label::ALL {
-                            if ui.button(crate::i18n::t(l.name())).clicked() {
-                                let _ = app.session.execute("edit.label", json!({"label": l.name()}));
-                                ui.close();
-                            }
-                        }
+                    let title = crate::i18n::t(label);
+                    // #1143: with nothing selected this ran over an empty set — and it looked like
+                    // the way to colour a right-clicked marker, whose own menu has no Label of its own
+                    let mut button = None;
+                    ui.add_enabled_ui(!sel.is_empty(), |ui| {
+                        button = Some(
+                            ui.menu_button(title, |ui| {
+                                label_menu(app, ui, &format!("timeline.clipMenu.{cmd}"), |app, l| {
+                                    let _ = app.session.execute("edit.label", json!({"label": l.name()}));
+                                })
+                            })
+                            .response,
+                        );
                     });
+                    if let Some(r) = button {
+                        app.auto.add_response(&format!("timeline.clipMenu.{cmd}"), &r, title);
+                    }
                     continue;
                 }
                 if cmd == "clip.multicam" {

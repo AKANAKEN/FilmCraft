@@ -7,7 +7,7 @@ use std::cmp::Ordering;
 
 use egui::{Modifiers, Pos2, Rect, pos2, vec2};
 use filmcraft_edit::Edge;
-use filmcraft_project::{ClipId, Sequence, Track, TrackId, TransitionId};
+use filmcraft_project::{ClipId, MarkerId, Sequence, Track, TrackId, TransitionId};
 use filmcraft_time::Tick;
 
 use super::timeline::Layout;
@@ -79,6 +79,14 @@ pub fn marker_rect(layout: &Layout, start: Tick) -> Rect {
 /// Selected Marker removes it (#695).
 pub fn marker_at(seq: &Sequence, layout: &Layout, pos: Pos2) -> Option<Tick> {
     seq.markers.iter().rev().map(|m| m.start).find(|t| marker_rect(layout, *t).contains(pos))
+}
+
+/// The marker whose pentagon is under `pos` on the ruler: [`marker_at`]'s tick resolved to the
+/// marker it belongs to (the topmost, i.e. last drawn, when several share the tick), so a right-click
+/// can name the marker it landed on (#1143).
+pub fn marker_id_at(seq: &Sequence, layout: &Layout, pos: Pos2) -> Option<MarkerId> {
+    let start = marker_at(seq, layout, pos)?;
+    seq.markers.iter().rev().find(|m| m.start == start).map(|m| m.id)
 }
 
 pub fn hit(seq: &Sequence, layout: &Layout, pos: Pos2) -> Hit {
@@ -435,6 +443,20 @@ mod tests {
         assert_eq!(marker_at(&seq, &l, pos2(310.0, 10.0)), None);
         assert_eq!(marker_at(&seq, &l, pos2(301.7, 30.0)), None);
         assert_eq!(marker_at(&seq, &l, pos2(f32::NAN, 10.0)), None);
+        // #1143: the context menu edits the marker under the pointer, not a tick
+        assert_eq!(marker_id_at(&seq, &l, pos2(304.7, 10.0)), Some(filmcraft_project::MarkerId(9)));
+        assert_eq!(marker_id_at(&seq, &l, pos2(310.0, 10.0)), None);
+        // two markers on the same tick: the topmost, i.e. the last drawn, is the one right-clicked
+        seq.markers.push(filmcraft_project::Marker {
+            id: filmcraft_project::MarkerId(10),
+            start: off,
+            duration: Tick::ZERO,
+            name: String::new(),
+            comment: String::new(),
+            kind: filmcraft_project::MarkerKind::Comment,
+            color: Label::Blue,
+        });
+        assert_eq!(marker_id_at(&seq, &l, pos2(304.7, 10.0)), Some(filmcraft_project::MarkerId(10)));
     }
 
     use egui::Modifiers;
