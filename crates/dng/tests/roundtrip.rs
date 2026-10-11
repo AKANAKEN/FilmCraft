@@ -424,3 +424,24 @@ fn process_options_serde_round_trip() {
     // missing fields take their defaults
     assert_eq!(serde_json::from_str::<ProcessOptions>("{}").unwrap(), ProcessOptions::default());
 }
+
+#[test]
+fn positive_tint_makes_a_grey_more_magenta() {
+    // a grey under D65 seen by a camera whose white-balanced values are Rec. 709
+    let (w, h) = (16, 12);
+    let px = vec![2000u16; w * h];
+    let mut main = rec709_camera_tags([1.0, 1.0, 1.0]);
+    main.retain(|t| t.0 != tags::FORWARD_MATRIX_1);
+    let o = Options { width: w, height: h, bits: 12, main_tags: main, raw_tags: vec![(tags::WHITE_LEVEL, Value::Short(vec![4095]))], ..Default::default() };
+    let f = write(&px, &o);
+    let (t, tint) = Dng::parse(&f).unwrap().as_shot_temperature_tint().unwrap().unwrap();
+    assert!((t - 6504.0).abs() < 60.0 && (8.0..12.0).contains(&tint), "as shot D65: {t} K tint {tint}");
+    let dev = |tint: f64| {
+        let img = decode_with(&f, &ProcessOptions { white_balance: WhiteBalance::Custom { temperature: t, tint }, ..Default::default() }).unwrap();
+        let p = &img.rgba[(6 * w + 6) * 4..][..3];
+        p[1] / (0.5 * (p[0] + p[2]))
+    };
+    let (minus, zero, plus) = (dev(tint - 50.0), dev(tint), dev(tint + 50.0));
+    assert!((zero - 1.0).abs() < 0.01, "as-shot grey stays grey: {zero}");
+    assert!(plus < zero && zero < minus, "green over red/blue: {minus} {zero} {plus}");
+}

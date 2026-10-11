@@ -12,8 +12,8 @@ pub enum WhiteBalance {
     #[default]
     AsShot,
     /// A white of `temperature` kelvin (1 000–15 000, on the Planckian locus) and `tint`
-    /// (positive towards magenta, negative towards green; ±150 is the useful range, see
-    /// [`crate::color::TINT_PER_DUV`]). Needs the file's ColorMatrix; a DNG without one has no
+    /// (positive makes the picture more magenta, negative greener, as in common raw converters;
+    /// ±150 is the useful range, D65 is about +10, see [`crate::color::TINT_PER_DUV`]). Needs the file's ColorMatrix; a DNG without one has no
     /// colour calibration to place the white in and keeps its as-shot balance.
     Custom { temperature: f64, tint: f64 },
 }

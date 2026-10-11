@@ -43,7 +43,8 @@ let img = filmcraft_dng::decode_with(&bytes, &o)?;
 `ProcessOptions::default()` develops exactly like `decode`. `Highlights::Recover` is accepted but
 not implemented yet (it develops like `Clip`). `Dng::as_shot_temperature_tint` gives the as-shot
 white as kelvin and tint, the starting point of a white-balance control; temperature and tint
-are a point on the Planckian locus (Krystek 1985) and a CIE 1960 Δuv (tint 150 = Δuv −0.05).
+are a point on the Planckian locus (Krystek 1985) and a CIE 1960 Δuv (tint 150 = Δuv +0.05, a
+greener white, so a more magenta picture; D65 is about tint +10).
 
 `writer` (feature `writer`, tests only) writes synthetic DNGs: uncompressed at any depth or
 lossless JPEG with any predictor, strips or tiles, either byte order, an optional preview IFD with
