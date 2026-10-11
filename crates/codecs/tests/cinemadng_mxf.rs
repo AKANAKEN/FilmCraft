@@ -125,6 +125,9 @@ fn broken_dng_frames_are_errors_not_panics() {
     let src = MxfSource::open("bad.mxf", f.into()).unwrap();
     assert!(src.info().video.as_ref().unwrap().codec.contains("unsupported"));
     assert!(src.video_frame(FrameRequest::full(filmcraft_time::Tick::ZERO)).is_err());
+    // nothing to develop: no raw settings
+    assert!(src.raw_info().is_none());
+    assert!(src.with_raw_settings(&filmcraft_media::raw::RawSettings::default()).is_none());
 }
 
 #[test]
@@ -156,4 +159,24 @@ fn truncated_and_mutated_files_never_panic() {
         }
         try_all(b);
     }
+}
+
+#[test]
+fn raw_settings_reach_every_mxf_picture() {
+    let src = MxfSource::open("A001_C001.mxf", cinemadng_mxf(3, false).into()).unwrap();
+    let raw = src.raw_info().unwrap();
+    assert_eq!(raw.settings, filmcraft_media::raw::RawSettings::default());
+    let bright = src.with_raw_settings(&filmcraft_media::raw::RawSettings { exposure: 1.0, ..Default::default() }).unwrap();
+    assert_eq!(bright.info(), src.info());
+    assert_eq!(bright.raw_info().unwrap().settings.exposure, 1.0);
+    for i in 0..3 {
+        let t = FrameRate::FPS_24.tick_of(i as i64);
+        let (a, b) = (red(&src.video_frame(FrameRequest::full(t)).unwrap()), red(&bright.video_frame(FrameRequest::full(t)).unwrap()));
+        assert!((b - 2.0 * a).abs() < 1e-3 && (a - level(i) as f32).abs() < 1e-3, "frame {i}: {a} {b}");
+        // a reduced-resolution request: never smaller than asked for, same values
+        let q = bright.video_frame(FrameRequest { time: t, scale: 0.25 }).unwrap();
+        assert!(q.width >= 4 && q.height >= 3 && q.width < 16, "{}x{}", q.width, q.height);
+    }
+    // the sound is still there
+    assert!(bright.audio(0, 100, 48_000).is_ok());
 }
