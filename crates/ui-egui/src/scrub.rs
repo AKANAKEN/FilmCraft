@@ -41,6 +41,10 @@ impl ScrubAudio {
     pub fn is_open(&self) -> bool {
         self.open
     }
+
+    pub(crate) fn on_stop(&mut self) {
+        self.open = false;
+    }
 }
 
 impl FilmcraftApp {
@@ -226,6 +230,23 @@ mod tests {
         assert!(app.scrub_tick(0.05, false), "lingers briefly after release");
         assert!(!app.scrub_tick(0.05 + LINGER_S, false), "then closes");
         assert!(fill.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn scrubbing_reopens_after_an_explicit_stop() {
+        let (mut app, fill) = app(true);
+        let rate = app.session.sequence_rate();
+        app.scrub_tick(0.0, true);
+        app.session.set_playhead(rate.tick_of(60));
+        assert!(app.scrub_tick(0.02, true));
+        assert!(loudness(&fill) > 0.0);
+
+        app.stop();
+        assert!(fill.lock().unwrap().is_none(), "stop closes the device");
+        assert!(!app.scrub.is_open(), "the scrub state follows the stopped device");
+        app.session.set_playhead(rate.tick_of(72));
+        assert!(app.scrub_tick(0.04, true));
+        assert!(loudness(&fill) > 0.0, "the next move reopens the device");
     }
 
     #[test]

@@ -966,6 +966,7 @@ impl FilmcraftApp {
     }
 
     pub fn stop(&mut self) {
+        self.scrub.on_stop();
         self.playback.playing = false;
         self.playback.stop_at = None;
         self.playback.preroll = None;
