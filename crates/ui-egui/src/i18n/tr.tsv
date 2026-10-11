@@ -1,0 +1,387 @@
+# Turkish (tr) catalog. Same format as `es.tsv`: context <TAB> source <TAB> translation.
+#
+# Clean-room: every entry was written from the plain meaning of the English label using ordinary
+# Turkish video-editing vocabulary. No proprietary localisation resource, string table or product UI
+# was consulted or copied; add entries the same way. Product, format and feature names (FilmCraft,
+# ArtCraft, Lumetri, Essential Graphics, Essential Sound, AAF, EDL, FCPXML, OMF, OpenTimelineIO…)
+# keep their spelling. This catalog covers every menu; anything else is shown in English.
+#
+# Terms: track = kanal, bin = kutu, marker = işaretçi, playhead = oynatma imleci, In/Out = giriş/çıkış,
+# transition = geçiş, frame hold = sabit kare, panel = panel, workspace = çalışma alanı, sequence =
+# sekans, timeline = zaman çizelgesi, clip = klip, render = işleme, export = dışa aktar, proxy =
+# vekil dosya, caption = altyazı, transcript = yazı dökümü, guide = kılavuz çizgisi, snap = tutundur,
+# ripple = dalgalı, metadata = üst veri. View = Görünüm, Appearance = Görünüş (ayrı sözcükler).
+# Commands use the infinitive ("Projeyi Aç…", "Kanal Ekle…") and address the reader with the
+# imperative ("Kaydet"). A trailing "…" is kept from the English source.
+
+	AAF…	AAF…
+	About FilmCraft	FilmCraft Hakkında
+	Add Audio Submix Track	Ses Alt Miks Kanalı Ekle
+	Add Caption at Playhead	Oynatma İmlecine Altyazı Ekle
+	Add Chapter Marker…	Bölüm İşaretçisi Ekle…
+	Add Edit	Kesim Ekle
+	Add Edit to All Tracks	Tüm Kanallara Kesim Ekle
+	Add Flash Cue Marker…	Flash Cue İşaretçisi Ekle…
+	Add Frame Hold	Sabit Kare Ekle
+	Add Guide…	Kılavuz Çizgisi Ekle…
+	Add Marker	İşaretçi Ekle
+	Add New Caption Track…	Yeni Altyazı Kanalı Ekle…
+	Add Range Marker	Aralık İşaretçisi Ekle
+	Add Range Marker to In and Out	Giriş ve Çıkışa Aralık İşaretçisi Ekle
+	Add Tracks…	Kanal Ekle…
+	Adjustment Layer…	Ayar Katmanı…
+	Align to Selection	Seçime Hizala
+	Align to Video Frame	Video Karesine Hizala
+	Align to Video Frame as Group	Grup Olarak Video Karesine Hizala
+	All Panels	Tüm Paneller
+	Alpha	Alfa
+	Appearance	Görünüş
+	Appearance…	Görünüş…
+	Apply Audio Transition	Ses Geçişini Uygula
+	Apply Default Transitions to Selection	Seçime Varsayılan Geçişleri Uygula
+	Apply Video Transition	Video Geçişini Uygula
+	Arrange	Yerleşimi Düzenle
+	ArtCraft Website	ArtCraft İnternet Sitesi
+	Assembly	Montaj
+	Attach Proxies…	Vekil Dosyaları Bağla…
+	Audio	Ses
+	Audio Channels…	Ses Kanalları…
+	Audio Clip Mixer	Ses Klipi Mikseri
+	Audio Gain…	Ses Kazancı…
+	Audio Hardware…	Ses Donanımı…
+	Audio In	Ses Girişi
+	Audio Meters	Ses Ölçerleri
+	Audio Options	Ses Seçenekleri
+	Audio Out	Ses Çıkışı
+	Audio Track Mixer	Ses Kanalı Mikseri
+	Audio Waveform	Ses Dalga Biçimi
+	Audio…	Ses…
+	Auto Save…	Otomatik Kaydetme…
+	Automate to Sequence…	Sekansa Otomatik Yerleştir…
+	Avid Log Exchange…	Avid Log Exchange…
+	Bars and Tone…	Çubuklar ve Ton…
+	Bin	Kutu
+	Bin From Selection	Seçimden Kutu Oluştur
+	Black Video…	Siyah Video…
+	Blue	Mavi
+	Bottom	Alt
+	Breakout to Mono	Monoya Ayır
+	Bring Forward	Bir Öne Getir
+	Bring to Front	En Öne Getir
+	Brown	Kahverengi
+	Captions	Altyazılar
+	Captions and Graphics	Altyazılar ve Grafikler
+	Captions…	Altyazılar…
+	Caribbean	Karayip
+	Center Horizontally	Yatayda Ortala
+	Center Vertically	Dikeyde Ortala
+	Cerulean	Serulean
+	Clear	Temizle
+	Clear Guides	Kılavuz Çizgilerini Temizle
+	Clear In	Girişi Temizle
+	Clear In and Out	Giriş ve Çıkışı Temizle
+	Clear Markers	İşaretçileri Temizle
+	Clear Out	Çıkışı Temizle
+	Clear Selected Marker	Seçili İşaretçiyi Temizle
+	Clip	Klip
+	Close	Kapat
+	Close All Other Projects	Diğer Tüm Projeleri Kapat
+	Close All Projects	Tüm Projeleri Kapat
+	Close Gap	Aralığı Kapat
+	Close Project	Projeyi Kapat
+	Color	Renk
+	Color Management…	Renk Yönetimi…
+	Color Matte…	Renk Dolgusu…
+	Color…	Renk…
+	Comparison View	Karşılaştırma Görünümü
+	Composite Video	Bileşik Video
+	Consolidate Duplicates	Yinelenenleri Birleştir
+	Copy	Kopyala
+	Copy Paste Includes Sequence Markers	Kopyala/Yapıştır Sekans İşaretçilerini İçersin
+	Create Captions from Transcript…	Dökümden Altyazı Oluştur…
+	Create Multi-Camera Source Sequence…	Çok Kameralı Kaynak Sekansı Oluştur…
+	Create Proxies…	Vekil Dosyalar Oluştur…
+	Cut	Kes
+	Dark	Koyu
+	Darkest	En Koyu
+	Delete Render Files	İşleme Dosyalarını Sil
+	Delete Render Files In to Out	Girişten Çıkışa İşleme Dosyalarını Sil
+	Delete Tracks…	Kanalları Sil…
+	Delete Transcript	Dökümü Sil
+	Demo Footage	Demo Görüntüleri
+	Demo Project	Demo Projesi
+	Deselect All	Seçimi Kaldır
+	Detach Proxies	Vekil Dosyaları Ayır
+	Display Mode	Görüntüleme Biçimi
+	Distribute	Dağıt
+	Distribute Horizontally	Yatay Dağıt
+	Distribute Space Horizontally	Aralığı Yatay Dağıt
+	Distribute Space Vertically	Aralığı Dikey Dağıt
+	Distribute Vertically	Dikey Dağıt
+	Duplicate	Kopya Çıkar
+	Dynamic Audio Waveforms	Dinamik Ses Dalga Biçimleri
+	EDL…	EDL…
+	Edit	Düzen
+	Edit Offline…	Çevrimdışı Düzenle…
+	Edit Original	Orijinali Düzenle
+	Edit Subclip…	Alt Klip Düzenle…
+	Edit Workspaces…	Çalışma Alanlarını Düzenle…
+	Editing	Kurgu
+	Effect Controls	Efekt Kontrolleri
+	Effects	Efektler
+	Ellipse	Elips
+	Enable	Etkinleştir
+	Enable Remix	Remix'i Etkinleştir
+	Essential Graphics	Essential Graphics
+	Essential Sound	Essential Sound
+	Events	Olaylar
+	Export	Dışa Aktar
+	Export As Motion Graphics Template…	Hareketli Grafik Şablonu Olarak Dışa Aktar…
+	Export Markers as CSV…	İşaretçileri CSV Olarak Dışa Aktar…
+	Extract	Çıkar
+	Extract Audio	Sesi Çıkar
+	FCPXML…	FCPXML…
+	Field Options…	Alan Seçenekleri…
+	File	Dosya
+	File…	Dosya…
+	Fill frame	Kareyi Doldur
+	FilmCraft Help…	FilmCraft Yardımı…
+	FilmCraft on GitHub	GitHub'da FilmCraft
+	FilmCraft on getartcraft.com	getartcraft.com'da FilmCraft
+	Final Cut Pro XML…	Final Cut Pro XML…
+	Find Next	Sonrakini Bul
+	Find…	Bul…
+	Fit	Sığdır
+	Fit to frame	Kareye Sığdır
+	Flatten	Yassılaştır
+	Forest	Orman
+	Frame Blending	Kare Kaynaştırma
+	Frame Hold Options…	Sabit Kare Seçenekleri…
+	Frame Sampling	Kare Örnekleme
+	From Bin	Kutudan
+	From Source Monitor	Kaynak Monitöründen
+	From Source Monitor, Match Frame	Kaynak Monitöründen, Kareyi Eşle
+	From file…	Dosyadan…
+	Full	Tam
+	General…	Genel…
+	Generate Audio Waveform	Ses Dalga Biçimi Oluştur
+	Get Media File Properties for	Medya Dosyası Özelliklerini Getir
+	Go to Gap	Aralığa Git
+	Go to In	Girişe Git
+	Go to Next Caption Segment	Sonraki Altyazı Bölümüne Git
+	Go to Next Marker	Sonraki İşaretçiye Git
+	Go to Out	Çıkışa Git
+	Go to Previous Caption Segment	Önceki Altyazı Bölümüne Git
+	Go to Previous Marker	Önceki İşaretçiye Git
+	Go to Split	Bölünmeye Git
+	Graphics and Titles	Grafikler ve Başlıklar
+	Graphics…	Grafikler…
+	Green	Yeşil
+	Group	Grupla
+	Guide Templates	Kılavuz Şablonları
+	Help	Yardım
+	Hide All Caption Tracks	Tüm Altyazı Kanallarını Gizle
+	High Quality Playback	Yüksek Kaliteli Oynatma
+	History	Geçmiş
+	Import From	Şuradan İçe Aktar
+	Import Image Sequence…	Görüntü Dizisi İçe Aktar…
+	Import from Media Browser	Medya Tarayıcıdan İçe Aktar
+	Import…	İçe Aktar…
+	Info	Bilgi
+	Ingest Settings…	Alım Ayarları…
+	Insert	Araya Yerleştir
+	Insert Frame Hold Segment	Araya Sabit Kare Bölümü Yerleştir
+	Install Motion Graphics Template…	Hareketli Grafik Şablonu Kur…
+	Interpret Footage…	Görüntüleri Yorumla…
+	Iris	İris
+	Join the ArtCraft Discord…	ArtCraft Discord'a Katıl…
+	Keyboard Shortcuts…	Klavye Kısayolları…
+	Label	Etiket
+	Labels…	Etiketler…
+	Language	Dil
+	Lavender	Lavanta
+	Learning	Öğrenme
+	Left	Sol
+	Libraries	Kitaplıklar
+	Lift	Kaldır
+	Light	Açık
+	Link	Bağla
+	Link Media…	Medyayı Bağla…
+	Linked Selection	Bağlı Seçim
+	Lock Guides	Kılavuzları Kilitle
+	Lumetri Color	Lumetri Color
+	Lumetri Scopes	Lumetri Scopes
+	Magenta	Macenta
+	Magnification	Yakınlaştırma
+	Make Offline…	Çevrimdışı Yap…
+	Make Subclip…	Alt Klip Oluştur…
+	Make Subsequence	Alt Sekans Oluştur
+	Manage Guides…	Kılavuzları Yönet…
+	Mango	Mango
+	Mark Clip	Klibi İşaretle
+	Mark In	Girişi İşaretle
+	Mark Out	Çıkışı İşaretle
+	Mark Selection	Seçimi İşaretle
+	Mark Split	Bölünmeyi İşaretle
+	Markers	İşaretçiler
+	Match Frame	Kareyi Eşle
+	Media Analysis & Transcription…	Medya Analizi ve Döküm…
+	Media Browser	Medya Tarayıcısı
+	Media Cache…	Medya Önbelleği…
+	Media…	Medya…
+	Memory…	Bellek…
+	Merge Clips…	Klipleri Birleştir…
+	Metadata	Üst Veri
+	Modify	Değiştir
+	Motion Graphics Template…	Hareketli Grafik Şablonu…
+	Multi-Camera	Çoklu Kamera
+	Multi-Camera View	Çoklu Kamera Görünümü
+	Nest…	İç İçe Yerleştir…
+	New	Yeni
+	New Layer	Yeni Katman
+	New Project Panel	Yeni Proje Paneli
+	Next Appearance Mode	Sonraki Görünüş Biçimi
+	Next in Sequence	Sekansta Sonraki
+	Next in Track	Kanalda Sonraki
+	Normalize Mix Track…	Miks Kanalını Normalleştir…
+	OMF…	OMF…
+	Offline File…	Çevrimdışı Dosya…
+	Open Project…	Proje Aç…
+	OpenTimelineIO…	OpenTimelineIO…
+	Optical Flow	Optik Akış
+	Overwrite	Üzerine Yaz
+	Paste	Yapıştır
+	Paste Attributes…	Özellikleri Yapıştır…
+	Paste Insert	Araya Yapıştır
+	Paused Resolution	Duraklamada Çözünürlük
+	Playback Resolution	Oynatma Çözünürlüğü
+	Playback…	Oynatma…
+	Plugins…	Eklentiler…
+	Polygon	Çokgen
+	Preferences	Tercihler
+	Previous in Sequence	Sekansta Önceki
+	Previous in Track	Kanalda Önceki
+	Program	Program
+	Progress	İlerleme
+	Project	Proje
+	Project Manager…	Proje Yöneticisi…
+	Project Settings	Proje Ayarları
+	Project…	Proje…
+	Properties	Özellikler
+	Proxy	Vekil Dosya
+	Purple	Mor
+	Reconnect Full Resolution Media…	Tam Çözünürlüklü Medyayı Yeniden Bağla…
+	Recover Unsaved Changes…	Kaydedilmemiş Değişiklikleri Kurtar…
+	Rectangle	Dikdörtgen
+	Red	Kırmızı
+	Redo	Yinele
+	Reference Monitor	Referans Monitörü
+	Remix	Remix
+	Remix Properties…	Remix Özellikleri…
+	Remove Attributes…	Özellikleri Kaldır…
+	Remove Filler Words	Dolgu Sözlerini Kaldır
+	Remove Pauses	Duraklamaları Kaldır
+	Remove Unused	Kullanılmayanları Kaldır
+	Rename…	Yeniden Adlandır…
+	Render Audio	Sesi İşle
+	Render Effects In to Out	Girişten Çıkışa Efektleri İşle
+	Render In to Out	Girişten Çıkışa İşle
+	Render Selection	Seçimi İşle
+	Replace Fonts in Projects…	Projelerdeki Yazı Tiplerini Değiştir…
+	Replace With Clip	Kliple Değiştir
+	Report an Issue…	Sorun Bildir…
+	Reset All Parameters	Tüm Parametreleri Sıfırla
+	Reset Duration	Süreyi Sıfırla
+	Reset to Saved Layout	Kaydedilmiş Düzene Sıfırla
+	Restore Captions from Source Clip	Altyazıları Kaynak Klipten Geri Yükle
+	Reveal Log Files…	Günlük Dosyalarını Göster…
+	Reverse Match Frame	Ters Kare Eşle
+	Revert	Kaydedilmiş Haline Dön
+	Revert Remix	Remix'i Geri Al
+	Review	İnceleme
+	Right	Sağ
+	Ripple Delete	Dalgalı Sil
+	Ripple Sequence Markers	Sekans İşaretçilerini Dalga ile Kaydır
+	Rose	Gül
+	Safe Margins	Güvenli Kenarlar
+	Save	Kaydet
+	Save All	Tümünü Kaydet
+	Save As…	Farklı Kaydet…
+	Save Changes to this Workspace	Bu Çalışma Alanındaki Değişiklikleri Kaydet
+	Save Guides as Template…	Kılavuzları Şablon Olarak Kaydet…
+	Save a Copy…	Bir Kopya Kaydet…
+	Save as New Workspace…	Yeni Çalışma Alanı Olarak Kaydet…
+	Save as Template…	Şablon Olarak Kaydet…
+	Scale to Frame Size	Kare Boyutuna Ölçekle
+	Scene Edit Detection…	Sahne Kesim Algılama…
+	Scratch Disks…	Çalışma Diskleri…
+	Search Bin	Kutuda Ara
+	Select	Seç
+	Select All	Tümünü Seç
+	Select All Matching	Eşleşenlerin Tümünü Seç
+	Select Label Group	Etiket Grubunu Seç
+	Select Next Graphic	Sonraki Grafiği Seç
+	Select Next Layer	Sonraki Katmanı Seç
+	Select Previous Graphic	Önceki Grafiği Seç
+	Select Previous Layer	Önceki Katmanı Seç
+	Selection Follows Playhead	Seçim Oynatma İmlecini İzler
+	Selection as FilmCraft Project…	Seçimi FilmCraft Projesi Olarak Dışa Aktar…
+	Selection…	Seçim…
+	Send Backward	Bir Arkaya Gönder
+	Send to Back	En Arkaya Gönder
+	Sequence	Sekans
+	Sequence From Clip	Klipten Sekans
+	Sequence Settings…	Sekans Ayarları…
+	Sequence…	Sekans…
+	Settings	Ayarlar
+	Show Active Caption Tracks Only	Yalnızca Etkin Altyazı Kanallarını Göster
+	Show All Caption Tracks	Tüm Altyazı Kanallarını Göster
+	Show All Marker Colors	Tüm İşaretçi Renklerini Göster
+	Show Guides	Kılavuzları Göster
+	Show Rulers	Cetvelleri Göster
+	Show Through Edits	Kesimlerin Altını Göster
+	Simplify Sequence…	Sekansı Sadeleştir…
+	Snap in Program Monitor	Program Monitöründe Tutundur
+	Snap in Timeline	Zaman Çizelgesinde Tutundur
+	Source	Kaynak
+	Source Settings…	Kaynak Ayarları…
+	Speed/Duration…	Hız/Süre…
+	Synchronize…	Eşzamanla…
+	System Compatibility Report…	Sistem Uyumluluğu Raporu…
+	Tan	Buğday
+	Teal	Camgöbeği
+	Text	Metin
+	Time Interpolation	Zaman Ara Değerleme
+	Timecode	Zaman Kodu
+	Timecode…	Zaman Kodu…
+	Timeline	Zaman Çizelgesi
+	Timeline…	Zaman Çizelgesi…
+	Toggle Proxies	Vekil Dosyalara Geç
+	Tools	Araçlar
+	Top	Üst
+	Transcribe Sequence…	Sekansı Yazıya Dök…
+	Transcribe…	Yazıya Dök…
+	Transcript	Yazı Dökümü
+	Transparent Video…	Saydam Video…
+	Trim Edit	Kesim Noktasını Kırp
+	Trim…	Kırp…
+	Undo	Geri Al
+	Ungroup	Grubu Çöz
+	Universal Counting Leader…	Evrensel Sayaç Filmi…
+	Update Metadata…	Üst Veriyi Güncelle…
+	Upgrade Caption to Graphic	Altyazıyı Grafiğe Dönüştür
+	Upgrade to Source Graphic	Kaynak Grafiğe Dönüştür
+	Vertical Text	Dikey Metin
+	Video In	Video Girişi
+	Video Options	Video Seçenekleri
+	Video Out	Video Çıkışı
+	Video and Audio Waveform Split	Video ve Ses Dalga Biçimi Ayrımı
+	View	Görünüm
+	Violet	Menekşe
+	Window	Pencere
+	Workspaces	Çalışma Alanları
+	Yellow	Sarı
+	Zoom In	Yakınlaştır
+	Zoom Out	Uzaklaştır
+	Zoom to Sequence	Sekansa Yakınlaştır
+	Project Notes	Proje Notları
