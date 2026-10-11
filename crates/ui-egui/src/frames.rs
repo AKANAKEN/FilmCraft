@@ -98,6 +98,8 @@ struct Job {
 struct Shared {
     queue: Mutex<VecDeque<Job>>,
     cv: Condvar,
+    /// Set under queue + in_flight locks; covers waiting and popped-but-unregistered jobs.
+    retired: AtomicBool,
     done: Mutex<Cache>,
     plans: Mutex<PlanCache>,
     /// Running jobs: key, cancel flag, prefetch.
@@ -403,6 +405,22 @@ pub struct FrameServer {
     repaint: Arc<Mutex<Option<Box<dyn Fn() + Send + Sync>>>>,
 }
 
+impl Drop for FrameServer {
+    fn drop(&mut self) {
+        let mut queue = self.shared.queue.lock().unwrap_or_else(|e| e.into_inner());
+        let in_flight = self.shared.in_flight.lock().unwrap_or_else(|e| e.into_inner());
+        self.shared.retired.store(true, Ordering::Relaxed);
+        queue.clear();
+        for (_, cancel, _) in in_flight.iter() {
+            cancel.store(true, Ordering::Relaxed);
+        }
+        drop(in_flight);
+        drop(queue);
+        // Active jobs exit cooperatively; joining here would block the UI on a decoder.
+        self.shared.cv.notify_all();
+    }
+}
+
 /// Frames queued ahead of the playhead while playing (and how far ahead a queued job may be
 /// before it is dropped as stale).
 pub fn prefetch_depth(speed: f64) -> i64 {
@@ -457,6 +475,7 @@ impl FrameServer {
         let shared = Arc::new(Shared {
             queue: Mutex::new(VecDeque::new()),
             cv: Condvar::new(),
+            retired: AtomicBool::new(false),
             done: Mutex::new(Cache { map: HashMap::new(), bytes: 0, budget: 768 << 20, clock: 0 }),
             plans: Mutex::new(PlanCache::default()),
             in_flight: Mutex::new(Vec::new()),
@@ -839,6 +858,9 @@ fn worker(
         let job = {
             let mut q = sh.queue.lock().unwrap_or_else(|e| e.into_inner());
             loop {
+                if sh.retired.load(Ordering::Relaxed) {
+                    return;
+                }
                 if !q.is_empty() {
                     // highest priority (lowest number) first; FIFO among equals
                     let best = q.iter().enumerate().min_by_key(|(i, j)| (j.prio, *i)).map(|(i, _)| i).unwrap_or(0);
@@ -875,7 +897,13 @@ pub fn inject_job_panics(n: u32) {
 static INJECT_PANICS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 fn run_job(sh: &Shared, job: &Job, pool: &Arc<MediaPool>, services: &Arc<dyn Services>, previews: &PreviewStore) -> bool {
-    sh.in_flight.lock().unwrap_or_else(|e| e.into_inner()).push((job.key, job.cancel.clone(), job.prefetch));
+    {
+        let mut in_flight = sh.in_flight.lock().unwrap_or_else(|e| e.into_inner());
+        if sh.retired.load(Ordering::Relaxed) {
+            return true;
+        }
+        in_flight.push((job.key, job.cancel.clone(), job.prefetch));
+    }
     if INJECT_PANICS.load(Ordering::Relaxed) > 0 && INJECT_PANICS.fetch_sub(1, Ordering::Relaxed) > 0 {
         crate::crash::injected_fault("injected frame-job fault");
     }
@@ -1055,6 +1083,138 @@ fn render_job(job: &Job, pool: &Arc<MediaPool>, services: &Arc<dyn Services>, pr
 mod tests {
     use super::{PlaybackMeter, Target, background_work, playback_plan};
     use filmcraft_project::ItemId;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn dropping_frame_server_releases_idle_workers_and_their_media() {
+        use super::FrameServer;
+        use filmcraft_engine::{FsServices, MediaPool, previews::PreviewStore};
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+
+        let pool = Arc::new(MediaPool::default());
+        let previews = Arc::new(PreviewStore::default());
+        let pool_owner = Arc::downgrade(&pool);
+        let preview_owner = Arc::downgrade(&previews);
+        // Two idle workers require a broadcast, not a single wakeup.
+        let server = FrameServer::new(pool, Arc::new(FsServices), previews, 2);
+        let shared_owner = Arc::downgrade(&server.shared);
+        assert!(shared_owner.upgrade().is_some(), "ownership probe must see the live server");
+        drop(server);
+        // Deadline bounds scheduler delay; successful release, not elapsed time, is the gate.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline && (shared_owner.strong_count() > 0 || pool_owner.strong_count() > 0 || preview_owner.strong_count() > 0) {
+            std::thread::yield_now();
+        }
+        assert!(shared_owner.upgrade().is_none(), "retired workers retained frame caches");
+        assert!(pool_owner.upgrade().is_none(), "retired workers retained media sources");
+        assert!(preview_owner.upgrade().is_none(), "retired workers retained previews");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn retirement_cancels_active_work_discards_queue_and_rejects_popped_jobs() {
+        use super::{FrameKey, FrameServer, run_job};
+        use filmcraft_engine::{FsServices, MediaPool, demo::add_generator, previews::PreviewStore};
+        use filmcraft_media::{Generator, MediaSource, generators::GeneratorSource};
+        use filmcraft_project::{Label, Project};
+        use filmcraft_time::{FrameRate, Tick};
+        use std::sync::{Arc, Mutex, atomic::AtomicUsize, atomic::Ordering, mpsc};
+        use std::time::{Duration, Instant};
+
+        struct BlockedSource {
+            inner: filmcraft_media::SharedSource,
+            entered: mpsc::Sender<()>,
+            release: Mutex<mpsc::Receiver<()>>,
+            cancelled: mpsc::Sender<bool>,
+            calls: Arc<AtomicUsize>,
+        }
+
+        impl MediaSource for BlockedSource {
+            fn info(&self) -> &filmcraft_media::MediaInfo {
+                self.inner.info()
+            }
+
+            fn video_frame(&self, req: filmcraft_media::FrameRequest) -> filmcraft_media::Result<Arc<filmcraft_frame::VideoFrame>> {
+                if self.calls.fetch_add(1, Ordering::Relaxed) == 0 {
+                    self.entered.send(()).unwrap();
+                    self.release.lock().unwrap().recv().unwrap();
+                    self.cancelled.send(filmcraft_media::cancel::cancelled()).unwrap();
+                }
+                // Return a valid picture even after cancellation: retired results must not be cached.
+                self.inner.video_frame(req)
+            }
+
+            fn audio(&self, start: i64, frames: usize, rate: u32) -> filmcraft_media::Result<filmcraft_frame::AudioBuffer> {
+                self.inner.audio(start, frames, rate)
+            }
+        }
+
+        // Three distinct frames: active, popped before registration, still queued.
+        let rate = FrameRate::FPS_24;
+        let pool = Arc::new(MediaPool::default());
+        let previews = Arc::new(PreviewStore::default());
+        let services: Arc<dyn filmcraft_engine::Services> = Arc::new(FsServices);
+        let mut project = Project::new("Worker retirement");
+        let source = GeneratorSource::new(Generator::BlackVideo, 1, 1, rate, rate.tick_of(3));
+        let item = add_generator(&mut project, &pool, source, "Blocked source", Label::Iris, None);
+        let project = Arc::new(project);
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (cancelled_tx, cancelled_rx) = mpsc::channel();
+        let calls = Arc::new(AtomicUsize::new(0));
+        pool.insert(
+            item,
+            Arc::new(BlockedSource {
+                inner: pool.cached(item).unwrap(),
+                entered: entered_tx,
+                release: Mutex::new(release_rx),
+                cancelled: cancelled_tx,
+                calls: calls.clone(),
+            }),
+        );
+        let pool_owner = Arc::downgrade(&pool);
+        let server = FrameServer::new(pool.clone(), services.clone(), previews.clone(), 1);
+        let shared = server.shared.clone();
+        let shared_owner = Arc::downgrade(&shared);
+        let key = FrameKey { target: Target::Item(item), frame: 0, size: 1000, revision: 0, draft: false };
+        // Deadlines bound scheduler delay; channel events and ownership release are the gates.
+        let timeout = Duration::from_secs(5);
+        server.request(key, Tick::ZERO, 1.0, &project, 1);
+        entered_rx.recv_timeout(timeout).expect("source must enter before retirement");
+        server.request(FrameKey { frame: 1, ..key }, rate.tick_of(1), 1.0, &project, 1);
+        let popped = shared.queue.lock().unwrap().pop_front().expect("simulate a worker between queue removal and registration");
+        server.request(FrameKey { frame: 2, ..key }, rate.tick_of(2), 1.0, &project, 1);
+        let (retired_tx, retired_rx) = mpsc::channel();
+        let retire = std::thread::spawn(move || {
+            drop(server);
+            retired_tx.send(()).unwrap();
+        });
+        let nonblocking = retired_rx.recv_timeout(timeout).is_ok();
+        // Always unblock the source before asserting, including if Drop incorrectly joins it.
+        release_tx.send(()).unwrap();
+        retire.join().unwrap();
+        assert!(nonblocking, "server retirement waited for an active source");
+        assert!(cancelled_rx.recv_timeout(timeout).unwrap(), "active request missed cancellation");
+        assert!(run_job(&shared, &popped, &pool, &services, &previews));
+        let deadline = Instant::now() + timeout;
+        while shared.stats.lock().unwrap().jobs == 0 && Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        assert_eq!(shared.stats.lock().unwrap().jobs, 1, "only the active job may finish");
+        assert_eq!(shared.stats.lock().unwrap().cancelled, 1);
+        assert_eq!(calls.load(Ordering::Relaxed), 1, "retired queued or popped jobs reached the source");
+        assert!(shared.queue.lock().unwrap().is_empty());
+        assert!(shared.done.lock().unwrap().map.is_empty(), "cancelled result was cached");
+        assert!(shared.plans.lock().unwrap().map.is_empty());
+        drop((shared, pool, services, previews, popped));
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline && (shared_owner.strong_count() > 0 || pool_owner.strong_count() > 0) {
+            std::thread::yield_now();
+        }
+        assert!(shared_owner.upgrade().is_none(), "active worker retained frame caches");
+        assert!(pool_owner.upgrade().is_none(), "active worker retained media sources");
+    }
 
     #[test]
     fn pending_error_success_and_cancellation_have_distinct_outcomes() {
