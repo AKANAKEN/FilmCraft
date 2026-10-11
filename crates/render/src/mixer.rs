@@ -82,6 +82,8 @@ pub struct LiveMix {
     /// Peak levels of the recording input (voice-over), per input channel.
     input_meter: Mutex<Vec<f32>>,
     project: Mutex<Option<Arc<Project>>>,
+    /// This reader's time-stretch streams (clips with Maintain Audio Pitch).
+    stretch: crate::audio::StretchPool,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -164,6 +166,10 @@ impl LiveMix {
     }
     pub fn project(&self) -> Option<Arc<Project>> {
         lock(&self.project).clone()
+    }
+    /// The streams of this reader's time-stretched clips ([`crate::audio::StretchPool`]).
+    pub fn stretch(&self) -> &crate::audio::StretchPool {
+        &self.stretch
     }
 }
 
@@ -840,11 +846,12 @@ fn run_strip(plan: &Plan, si: usize, st: &mut StripState, mut buf: Bus, x0: i64,
 /// Mix's width (2 channels, or 6 in L, R, C, LFE, Ls, Rs order for a 5.1 Mix). `live` adds the UI's
 /// held controls and receives the meters.
 pub fn mix_graph(project: &Project, seq: &Sequence, start: i64, frames: usize, sources: &dyn SourceProvider, live: Option<&LiveMix>) -> AudioBuffer {
-    mix_graph_at(project, seq, start, frames, sources, live, 0)
+    mix_graph_at(project, seq, start, frames, sources, live, live.map(LiveMix::stretch), 0)
 }
 
 /// [`mix_graph`] for a sequence `depth` nests down from the one being mixed (see
-/// [`crate::MAX_NEST_DEPTH`]).
+/// [`crate::MAX_NEST_DEPTH`]); `stretch` is the reader's pool of time-stretch streams, passed
+/// down a nest without its `live` (held controls belong to the outer mixer).
 pub(crate) fn mix_graph_at(
     project: &Project,
     seq: &Sequence,
@@ -852,6 +859,7 @@ pub(crate) fn mix_graph_at(
     frames: usize,
     sources: &dyn SourceProvider,
     live: Option<&LiveMix>,
+    stretch: Option<&crate::audio::StretchPool>,
     depth: u32,
 ) -> AudioBuffer {
     let sr = seq.settings.sample_rate.max(1);
@@ -894,7 +902,7 @@ pub(crate) fn mix_graph_at(
                 return None;
             }
             let input = if has_clips {
-                let mut v = track_input_at(project, &s.track, x0, total, sr, sources, &ovs, depth).channels;
+                let mut v = track_input_at(project, &s.track, x0, total, sr, sources, &ovs, stretch, depth).channels;
                 v.resize(s.width, vec![0.0; total]);
                 v
             } else {
