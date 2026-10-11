@@ -1,0 +1,390 @@
+# Vietnamese (vi) catalog. Same format as `es.tsv`: context <TAB> source <TAB> translation.
+#
+# Clean-room: every entry was written from the plain meaning of the English label using ordinary
+# Vietnamese video-editing vocabulary. No proprietary localisation resource, string table or product
+# UI was consulted or copied; add entries the same way. Product, format and feature names (FilmCraft,
+# ArtCraft, Lumetri, Essential Graphics, Essential Sound, AAF, EDL, FCPXML, OMF, OpenTimelineIO,
+# timecode, clip, proxy, Remix…) keep their spelling. This catalog covers every menu; anything else
+# is shown in English.
+#
+# Terms: track = kênh, bin = kho, marker = điểm đánh dấu, playhead = đầu phát, In/Out = điểm vào /
+# điểm ra, transition = chuyển tiếp, frame hold = đứng hình, panel = bảng điều khiển, workspace =
+# không gian làm việc, sequence = chuỗi, timeline = dòng thời gian, render = kết xuất, export = xuất,
+# caption = phụ đề, transcript = bản chép lời, guide = đường tham chiếu, snap = dính, ripple = dồn,
+# metadata = siêu dữ liệu, footage = tư liệu, media = phương tiện. View = Xem, Appearance = Giao diện.
+# Menus use the bare verb ("Lưu", "Thêm kênh"); a trailing "…" is kept from the English source.
+#
+# Native review: not recorded — entries were produced from the English meaning and need a native
+# Vietnamese editor to confirm terminology (kênh/chuỗi/kho are the conservative choices).
+
+	AAF…	AAF…
+	About FilmCraft	Giới thiệu FilmCraft
+	Add Audio Submix Track	Thêm kênh mix phụ âm thanh
+	Add Caption at Playhead	Thêm phụ đề tại đầu phát
+	Add Chapter Marker…	Thêm điểm đánh dấu chương…
+	Add Edit	Thêm điểm cắt
+	Add Edit to All Tracks	Thêm điểm cắt cho mọi kênh
+	Add Flash Cue Marker…	Thêm điểm đánh dấu Flash Cue…
+	Add Frame Hold	Thêm đứng hình
+	Add Guide…	Thêm đường tham chiếu…
+	Add Marker	Thêm điểm đánh dấu
+	Add New Caption Track…	Thêm kênh phụ đề mới…
+	Add Range Marker	Thêm điểm đánh dấu phạm vi
+	Add Range Marker to In and Out	Thêm điểm đánh dấu phạm vi cho điểm vào và ra
+	Add Tracks…	Thêm kênh…
+	Adjustment Layer…	Lớp điều chỉnh…
+	Align to Selection	Canh theo vùng chọn
+	Align to Video Frame	Canh theo khung hình video
+	Align to Video Frame as Group	Canh theo khung hình video dạng nhóm
+	All Panels	Mọi bảng điều khiển
+	Alpha	Alpha
+	Appearance	Giao diện
+	Appearance…	Giao diện…
+	Apply Audio Transition	Áp dụng chuyển tiếp âm thanh
+	Apply Default Transitions to Selection	Áp dụng chuyển tiếp mặc định cho vùng chọn
+	Apply Video Transition	Áp dụng chuyển tiếp video
+	Arrange	Sắp xếp
+	ArtCraft Website	Trang web ArtCraft
+	Assembly	Dựng thô
+	Attach Proxies…	Gắn proxy…
+	Audio	Âm thanh
+	Audio Channels…	Kênh âm thanh…
+	Audio Clip Mixer	Bộ trộn clip âm thanh
+	Audio Gain…	Độ lợi âm thanh…
+	Audio Hardware…	Phần cứng âm thanh…
+	Audio In	Đầu vào âm thanh
+	Audio Meters	Đo mức âm thanh
+	Audio Options	Tùy chọn âm thanh
+	Audio Out	Đầu ra âm thanh
+	Audio Track Mixer	Bộ trộn kênh âm thanh
+	Audio Waveform	Dạng sóng âm thanh
+	Audio…	Âm thanh…
+	Auto Save…	Tự động lưu…
+	Automate to Sequence…	Tự động đưa vào chuỗi…
+	Avid Log Exchange…	Avid Log Exchange…
+	Bars and Tone…	Thanh màu và tín hiệu âm…
+	Bin	Kho
+	Bin From Selection	Kho từ vùng chọn
+	Black Video…	Video đen…
+	Blue	Xanh lam
+	Bottom	Dưới
+	Breakout to Mono	Tách thành mono
+	Bring Forward	Đưa lên trước
+	Bring to Front	Đưa lên đầu
+	Brown	Nâu
+	Captions	Phụ đề
+	Captions and Graphics	Phụ đề và đồ họa
+	Captions…	Phụ đề…
+	Caribbean	Xanh Ca-ri-bê
+	Center Horizontally	Canh giữa ngang
+	Center Vertically	Canh giữa dọc
+	Cerulean	Xanh nước biển
+	Clear	Xóa
+	Clear Guides	Xóa đường tham chiếu
+	Clear In	Xóa điểm vào
+	Clear In and Out	Xóa điểm vào và ra
+	Clear Markers	Xóa điểm đánh dấu
+	Clear Out	Xóa điểm ra
+	Clear Selected Marker	Xóa điểm đánh dấu đang chọn
+	Clip	Clip
+	Close	Đóng
+	Close All Other Projects	Đóng mọi dự án khác
+	Close All Projects	Đóng mọi dự án
+	Close Gap	Đóng khoảng trống
+	Close Project	Đóng dự án
+	Color	Màu
+	Color Management…	Quản lý màu…
+	Color Matte…	Màu trơn…
+	Color…	Màu…
+	Comparison View	Xem so sánh
+	Composite Video	Video tổng hợp
+	Consolidate Duplicates	Hợp nhất trùng lặp
+	Copy	Sao chép
+	Copy Paste Includes Sequence Markers	Sao chép/Dán gồm điểm đánh dấu chuỗi
+	Create Captions from Transcript…	Tạo phụ đề từ bản chép lời…
+	Create Multi-Camera Source Sequence…	Tạo chuỗi nguồn đa máy quay…
+	Create Proxies…	Tạo proxy…
+	Cut	Cắt
+	Dark	Tối
+	Darkest	Tối nhất
+	Delete Render Files	Xóa tệp kết xuất
+	Delete Render Files In to Out	Xóa tệp kết xuất từ điểm vào đến điểm ra
+	Delete Tracks…	Xóa kênh…
+	Delete Transcript	Xóa bản chép lời
+	Demo Footage	Tư liệu mẫu
+	Demo Project	Dự án mẫu
+	Deselect All	Bỏ chọn tất cả
+	Detach Proxies	Gỡ proxy
+	Display Mode	Chế độ hiển thị
+	Distribute	Phân bố
+	Distribute Horizontally	Phân bố ngang
+	Distribute Space Horizontally	Phân bố khoảng cách ngang
+	Distribute Space Vertically	Phân bố khoảng cách dọc
+	Distribute Vertically	Phân bố dọc
+	Duplicate	Nhân đôi
+	Dynamic Audio Waveforms	Dạng sóng âm thanh động
+	EDL…	EDL…
+	Edit	Chỉnh sửa
+	Edit Offline…	Sửa ngoại tuyến…
+	Edit Original	Sửa bản gốc
+	Edit Subclip…	Sửa clip con…
+	Edit Workspaces…	Sửa không gian làm việc…
+	Editing	Dựng
+	Effect Controls	Điều khiển hiệu ứng
+	Effects	Hiệu ứng
+	Ellipse	Hình elip
+	Enable	Bật
+	Enable Remix	Bật Remix
+	Essential Graphics	Essential Graphics
+	Essential Sound	Essential Sound
+	Events	Sự kiện
+	Export	Xuất
+	Export As Motion Graphics Template…	Xuất thành mẫu đồ họa động…
+	Export Markers as CSV…	Xuất điểm đánh dấu dưới CSV…
+	Extract	Trích
+	Extract Audio	Trích âm thanh
+	FCPXML…	FCPXML…
+	Field Options…	Tùy chọn trường…
+	File	Tệp
+	File…	Tệp…
+	Fill frame	Lấp đầy khung hình
+	FilmCraft Help…	Trợ giúp FilmCraft…
+	FilmCraft on GitHub	FilmCraft trên GitHub
+	FilmCraft on getartcraft.com	FilmCraft trên getartcraft.com
+	Final Cut Pro XML…	Final Cut Pro XML…
+	Find Next	Tìm tiếp
+	Find…	Tìm…
+	Fit	Vừa
+	Fit to frame	Vừa khung hình
+	Flatten	San phẳng
+	Forest	Xanh rừng
+	Frame Blending	Trộn khung hình
+	Frame Hold Options…	Tùy chọn đứng hình…
+	Frame Sampling	Lấy mẫu khung hình
+	From Bin	Từ kho
+	From Source Monitor	Từ màn hình nguồn
+	From Source Monitor, Match Frame	Từ màn hình nguồn, khớp khung hình
+	From file…	Từ tệp…
+	Full	Đầy đủ
+	General…	Chung…
+	Generate Audio Waveform	Tạo dạng sóng âm thanh
+	Get Media File Properties for	Lấy thuộc tính tệp phương tiện cho
+	Go to Gap	Đến khoảng trống
+	Go to In	Đến điểm vào
+	Go to Next Caption Segment	Đến đoạn phụ đề tiếp theo
+	Go to Next Marker	Đến điểm đánh dấu tiếp theo
+	Go to Out	Đến điểm ra
+	Go to Previous Caption Segment	Đến đoạn phụ đề trước đó
+	Go to Previous Marker	Đến điểm đánh dấu trước đó
+	Go to Split	Đến chỗ tách
+	Graphics and Titles	Đồ họa và tiêu đề
+	Graphics…	Đồ họa…
+	Green	Xanh lục
+	Group	Nhóm
+	Guide Templates	Mẫu đường tham chiếu
+	Help	Trợ giúp
+	Hide All Caption Tracks	Ẩn mọi kênh phụ đề
+	High Quality Playback	Phát lại chất lượng cao
+	History	Lịch sử
+	Import From	Nhập từ
+	Import Image Sequence…	Nhập chuỗi hình ảnh…
+	Import from Media Browser	Nhập từ trình duyệt phương tiện
+	Import…	Nhập…
+	Info	Thông tin
+	Ingest Settings…	Cài đặt tiếp nhận…
+	Insert	Chèn
+	Insert Frame Hold Segment	Chèn đoạn đứng hình
+	Install Motion Graphics Template…	Cài mẫu đồ họa động…
+	Interpret Footage…	Diễn giải tư liệu…
+	Iris	Xanh diên vĩ
+	Join the ArtCraft Discord…	Tham gia Discord ArtCraft…
+	Keyboard Shortcuts…	Phím tắt…
+	Label	Nhãn
+	Labels…	Nhãn…
+	Language	Ngôn ngữ
+	Lavender	Tím oải hương
+	Learning	Tài liệu học
+	Left	Trái
+	Libraries	Thư viện
+	Lift	Nhấc
+	Light	Sáng
+	Link	Liên kết
+	Link Media…	Liên kết phương tiện…
+	Linked Selection	Vùng chọn liên kết
+	Lock Guides	Khóa đường tham chiếu
+	Lumetri Color	Lumetri Color
+	Lumetri Scopes	Lumetri Scopes
+	Magenta	Đỏ tía
+	Magnification	Độ phóng
+	Make Offline…	Đặt ngoại tuyến…
+	Make Subclip…	Tạo clip con…
+	Make Subsequence	Tạo chuỗi con
+	Manage Guides…	Quản lý đường tham chiếu…
+	Mango	Vàng xoài
+	Mark Clip	Đánh dấu clip
+	Mark In	Đánh dấu điểm vào
+	Mark Out	Đánh dấu điểm ra
+	Mark Selection	Đánh dấu vùng chọn
+	Mark Split	Đánh dấu chỗ tách
+	Markers	Điểm đánh dấu
+	Match Frame	Khớp khung hình
+	Media Analysis & Transcription…	Phân tích và chép lời phương tiện…
+	Media Browser	Trình duyệt phương tiện
+	Media Cache…	Bộ nhớ đệm phương tiện…
+	Media…	Phương tiện…
+	Memory…	Bộ nhớ…
+	Merge Clips…	Hợp nhất clip…
+	Metadata	Siêu dữ liệu
+	Modify	Sửa đổi
+	Motion Graphics Template…	Mẫu đồ họa động…
+	Multi-Camera	Đa máy quay
+	Multi-Camera View	Xem đa máy quay
+	Nest…	Lồng…
+	New	Mới
+	New Layer	Lớp mới
+	New Project Panel	Bảng dự án mới
+	Next Appearance Mode	Chế độ giao diện tiếp theo
+	Next in Sequence	Tiếp theo trong chuỗi
+	Next in Track	Tiếp theo trong kênh
+	Normalize Mix Track…	Chuẩn hóa kênh mix…
+	OMF…	OMF…
+	Offline File…	Tệp ngoại tuyến…
+	Open Project…	Mở dự án…
+	OpenTimelineIO…	OpenTimelineIO…
+	Optical Flow	Dòng quang học
+	Overwrite	Ghi đè
+	Paste	Dán
+	Paste Attributes…	Dán thuộc tính…
+	Paste Insert	Dán chèn
+	Paused Resolution	Độ phân giải khi tạm dừng
+	Playback Resolution	Độ phân giải phát lại
+	Playback…	Phát lại…
+	Plugins…	Tiện ích bổ sung…
+	Polygon	Đa giác
+	Preferences	Tùy chọn
+	Previous in Sequence	Trước đó trong chuỗi
+	Previous in Track	Trước đó trong kênh
+	Program	Chương trình
+	Progress	Tiến trình
+	Project	Dự án
+	Project Manager…	Trình quản lý dự án…
+	Project Settings	Cài đặt dự án
+	Project…	Dự án…
+	Properties	Thuộc tính
+	Proxy	Proxy
+	Purple	Tím
+	Reconnect Full Resolution Media…	Kết nối lại phương tiện đủ phân giải…
+	Recover Unsaved Changes…	Khôi phục thay đổi chưa lưu…
+	Rectangle	Hình chữ nhật
+	Red	Đỏ
+	Redo	Làm lại
+	Reference Monitor	Màn hình tham chiếu
+	Remix	Remix
+	Remix Properties…	Thuộc tính Remix…
+	Remove Attributes…	Xóa thuộc tính…
+	Remove Filler Words	Xóa từ đệm
+	Remove Pauses	Xóa khoảng lặng
+	Remove Unused	Xóa phần không dùng
+	Rename…	Đổi tên…
+	Render Audio	Kết xuất âm thanh
+	Render Effects In to Out	Kết xuất hiệu ứng từ điểm vào đến điểm ra
+	Render In to Out	Kết xuất từ điểm vào đến điểm ra
+	Render Selection	Kết xuất vùng chọn
+	Replace Fonts in Projects…	Thay phông chữ trong dự án…
+	Replace With Clip	Thay bằng clip
+	Report an Issue…	Báo cáo sự cố…
+	Reset All Parameters	Đặt lại mọi tham số
+	Reset Duration	Đặt lại thời lượng
+	Reset to Saved Layout	Về bố cục đã lưu
+	Restore Captions from Source Clip	Khôi phục phụ đề từ clip nguồn
+	Reveal Log Files…	Hiện tệp nhật ký…
+	Reverse Match Frame	Khớp khung hình ngược
+	Revert	Phục hồi
+	Revert Remix	Hoàn tác Remix
+	Review	Xem lại
+	Right	Phải
+	Ripple Delete	Xóa dồn
+	Ripple Sequence Markers	Dồn điểm đánh dấu chuỗi
+	Rose	Hồng
+	Safe Margins	Vùng an toàn
+	Save	Lưu
+	Save All	Lưu tất cả
+	Save As…	Lưu thành…
+	Save Changes to this Workspace	Lưu thay đổi cho không gian làm việc này
+	Save Guides as Template…	Lưu đường tham chiếu làm mẫu…
+	Save a Copy…	Lưu một bản sao…
+	Save as New Workspace…	Lưu thành không gian làm việc mới…
+	Save as Template…	Lưu thành mẫu…
+	Scale to Frame Size	Co theo cỡ khung hình
+	Scene Edit Detection…	Phát hiện cắt cảnh…
+	Scratch Disks…	Ổ đĩa làm việc…
+	Search Bin	Tìm trong kho
+	Select	Chọn
+	Select All	Chọn tất cả
+	Select All Matching	Chọn mọi phần khớp
+	Select Label Group	Chọn nhóm nhãn
+	Select Next Graphic	Chọn đồ họa tiếp theo
+	Select Next Layer	Chọn lớp tiếp theo
+	Select Previous Graphic	Chọn đồ họa trước đó
+	Select Previous Layer	Chọn lớp trước đó
+	Selection Follows Playhead	Vùng chọn theo đầu phát
+	Selection as FilmCraft Project…	Vùng chọn thành dự án FilmCraft…
+	Selection…	Vùng chọn…
+	Send Backward	Đưa xuống sau
+	Send to Back	Đưa xuống cuối
+	Sequence	Chuỗi
+	Sequence From Clip	Chuỗi từ clip
+	Sequence Settings…	Cài đặt chuỗi…
+	Sequence…	Chuỗi…
+	Settings	Cài đặt
+	Show Active Caption Tracks Only	Chỉ hiện kênh phụ đề đang bật
+	Show All Caption Tracks	Hiện mọi kênh phụ đề
+	Show All Marker Colors	Hiện mọi màu điểm đánh dấu
+	Show Guides	Hiện đường tham chiếu
+	Show Rulers	Hiện thước
+	Show Through Edits	Hiện qua các điểm cắt
+	Simplify Sequence…	Rút gọn chuỗi…
+	Snap in Program Monitor	Dính trong màn hình chương trình
+	Snap in Timeline	Dính trong dòng thời gian
+	Source	Nguồn
+	Source Settings…	Cài đặt nguồn…
+	Speed/Duration…	Tốc độ/Thời lượng…
+	Synchronize…	Đồng bộ hóa…
+	System Compatibility Report…	Báo cáo tương thích hệ thống…
+	Tan	Da rám nắng
+	Teal	Mòng két
+	Text	Văn bản
+	Time Interpolation	Nội suy thời gian
+	Timecode	Timecode
+	Timecode…	Timecode…
+	Timeline	Dòng thời gian
+	Timeline…	Dòng thời gian…
+	Toggle Proxies	Chuyển đổi proxy
+	Tools	Công cụ
+	Top	Trên
+	Transcribe Sequence…	Chép lời chuỗi…
+	Transcribe…	Chép lời…
+	Transcript	Bản chép lời
+	Transparent Video…	Video trong suốt…
+	Trim Edit	Cắt điểm nối
+	Trim…	Cắt tỉa…
+	Undo	Hoàn tác
+	Ungroup	Bỏ nhóm
+	Universal Counting Leader…	Dải đếm chuẩn…
+	Update Metadata…	Cập nhật siêu dữ liệu…
+	Upgrade Caption to Graphic	Nâng phụ đề thành đồ họa
+	Upgrade to Source Graphic	Nâng thành đồ họa nguồn
+	Vertical Text	Văn bản dọc
+	Video In	Đầu vào video
+	Video Options	Tùy chọn video
+	Video Out	Đầu ra video
+	Video and Audio Waveform Split	Tách dạng sóng video và âm thanh
+	View	Xem
+	Violet	Tím biếc
+	Window	Cửa sổ
+	Workspaces	Không gian làm việc
+	Yellow	Vàng
+	Zoom In	Phóng to
+	Zoom Out	Thu nhỏ
+	Zoom to Sequence	Phóng theo chuỗi
+	Project Notes	Ghi chú dự án
