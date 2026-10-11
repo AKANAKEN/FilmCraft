@@ -101,8 +101,10 @@ pub fn cct((x, y): (f64, f64)) -> f64 {
     if t.is_finite() { t.clamp(1_000.0, 50_000.0) } else { 50_000.0 }
 }
 
-/// Tint units per Δuv: a tint of +150 moves the white 0.05 below the Planckian locus (towards
-/// magenta) in CIE 1960 uv, −150 as far above it (towards green).
+/// Tint units per Δuv, with the sign of the usual raw-converter control ("more tint, more
+/// magenta picture"): a tint of +150 is a white 0.05 above the Planckian locus in CIE 1960 uv
+/// (a greener light, which the white balance compensates towards magenta), −150 as far below it.
+/// D65 reads about +10.
 pub const TINT_PER_DUV: f64 = 3000.0;
 
 /// CIE 1960 uv of a Planckian radiator at `t` kelvin, 1 000–15 000 K (M. Krystek, "An algorithm
@@ -140,8 +142,8 @@ fn xy_to_uv((x, y): (f64, f64)) -> Option<(f64, f64)> {
 }
 
 /// The white chromaticity of a colour temperature (kelvin, 1 000–15 000 on the Planckian locus)
-/// and tint ([`TINT_PER_DUV`] units; positive is magenta, negative green, ±150 is the useful
-/// range).
+/// and tint ([`TINT_PER_DUV`] units; positive makes the developed picture more magenta, negative
+/// greener, ±150 is the useful range).
 pub fn temperature_tint_to_xy(temperature: f64, tint: f64) -> Option<(f64, f64)> {
     if !temperature.is_finite() || !tint.is_finite() {
         return None;
@@ -149,7 +151,7 @@ pub fn temperature_tint_to_xy(temperature: f64, tint: f64) -> Option<(f64, f64)>
     let t = temperature.clamp(1_000.0, 15_000.0);
     let (u, v) = planck_uv(t);
     let (nu, nv) = planck_normal(t);
-    let duv = -tint.clamp(-1_000.0, 1_000.0) / TINT_PER_DUV;
+    let duv = tint.clamp(-1_000.0, 1_000.0) / TINT_PER_DUV;
     uv_to_xy((u + nu * duv, v + nv * duv))
 }
 
@@ -186,7 +188,7 @@ pub fn xy_to_temperature_tint(xy: (f64, f64)) -> Option<(f64, f64)> {
     let (pu, pv) = planck_uv(t);
     let (nu, nv) = planck_normal(t);
     let duv = (u - pu) * nu + (v - pv) * nv;
-    Some((t, -duv * TINT_PER_DUV))
+    Some((t, duv * TINT_PER_DUV))
 }
 
 /// Colour temperature of an EXIF LightSource code used as a DNG CalibrationIlluminant.
@@ -475,10 +477,13 @@ mod tests {
                 assert!((tint2 - tint).abs() < 1e-3, "{t} {tint}: {tint2}");
             }
         }
-        // positive tint is magenta: below the locus, less green
+        // positive tint is a greener white (above the locus), so the picture turns magenta
         let m = temperature_tint_to_xy(5000.0, 50.0).unwrap();
         let g = temperature_tint_to_xy(5000.0, -50.0).unwrap();
-        assert!(m.1 < g.1);
+        assert!(m.1 > g.1);
+        // D65 sits above the locus: about +10
+        let (_, d65_tint) = xy_to_temperature_tint(D65).unwrap();
+        assert!((8.0..12.0).contains(&d65_tint), "{d65_tint}");
         assert!(temperature_tint_to_xy(f64::NAN, 0.0).is_none());
         assert!(xy_to_temperature_tint((0.0, 0.0)).is_some_and(|(t, _)| t.is_finite()));
     }
