@@ -24,7 +24,7 @@ pub fn sniff(b: &[u8]) -> bool {
 }
 
 /// The colour of developed frames: scene-linear light, Rec. 709 primaries.
-const LINEAR_709: ColorInfo = ColorInfo { transfer: Transfer::Linear, ..ColorInfo::SRGB_FULL };
+pub const LINEAR_709: ColorInfo = ColorInfo { transfer: Transfer::Linear, ..ColorInfo::SRGB_FULL };
 
 /// A developed DNG frame.
 pub struct Decoded {
@@ -42,14 +42,29 @@ fn error(name: &str, e: filmcraft_dng::Error) -> MediaError {
     }
 }
 
+/// The pixel format shown in the media info, e.g. "Bayer 12-bit raw (lossless JPEG)".
+pub fn pixel_format(i: &filmcraft_dng::Info) -> String {
+    let kind = if i.cfa { "Bayer" } else { "linear" };
+    format!("{kind} {}-bit raw ({})", i.bits, i.compression)
+}
+
+/// Read a DNG's metadata without developing it: the developed size, pixel format and tags (for
+/// CinemaDNG in MXF, whose descriptor may not describe the picture).
+pub fn probe(name: &str, bytes: &[u8]) -> Result<(u32, u32, String, filmcraft_dng::Info)> {
+    let i = filmcraft_dng::probe(bytes).map_err(|e| error(name, e))?;
+    let (Ok(w), Ok(h)) = (u32::try_from(i.width), u32::try_from(i.height)) else { return Err(MediaError::Decode(format!("{name}: picture too large"))) };
+    if w == 0 || h == 0 {
+        return Err(MediaError::Decode(format!("{name}: empty picture")));
+    }
+    Ok((w, h, pixel_format(&i), i))
+}
+
 /// Develop a DNG file.
 pub fn decode(name: &str, bytes: &[u8]) -> Result<Decoded> {
     let img = filmcraft_dng::decode(bytes).map_err(|e| error(name, e))?;
     let (w, h) = (u32::try_from(img.width), u32::try_from(img.height));
     let (Ok(w), Ok(h)) = (w, h) else { return Err(MediaError::Decode(format!("{name}: picture too large"))) };
-    let i = &img.info;
-    let kind = if i.cfa { "Bayer" } else { "linear" };
-    let pixel_format = format!("{kind} {}-bit raw ({})", i.bits, i.compression);
+    let pixel_format = pixel_format(&img.info);
     let mut frame = VideoFrame::rgba_f32(w, h, img.rgba);
     frame.color = LINEAR_709;
     Ok(Decoded { frame, pixel_format, info: img.info })
