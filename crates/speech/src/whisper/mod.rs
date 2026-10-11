@@ -395,7 +395,7 @@ impl Whisper {
         }
         let db = crate::vad::frame_db(audio);
         let th = crate::vad::threshold(&db);
-        let speech = crate::vad::speech_frames(&db, th);
+        let speech = crate::vad::speech_frames_with_edges(&db, th, crate::vad::edge_threshold(&db));
         let silent: Vec<bool> = db.iter().map(|&v| v < th).collect();
         let content = content_frames.min(frames);
         // independent regions decoded side by side (one, without silence skipping, for the

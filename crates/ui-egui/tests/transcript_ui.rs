@@ -381,8 +381,10 @@ fn clicking_selecting_pauses_and_delete_work_like_premiere() {
     d.ok("ui.key", json!({"key": "Backspace"}));
     d.frames(3);
     let after = d.app().session.active_sequence().unwrap().duration();
-    assert!(after < before - filmcraft_time::Tick::from_seconds_f64(1.0), "the pause is gone: {before:?} → {after:?}");
-    assert!(d.ids("text.transcript.pause.").is_empty());
+    // the 1.1 s pause less 0.15 s kept next to each word (Keep next to words), frame-snapped inward
+    let removed = (before - after).seconds();
+    assert!((0.7..=0.8).contains(&removed), "the pause is gone but for the silence next to the words: {removed} s");
+    assert!(d.ids("text.transcript.pause.").is_empty(), "what is left is shorter than a pause");
     assert_eq!(d.words().len(), WORDS.len(), "no word was cut");
     d.exec("edit.undo", json!({}));
 
@@ -480,16 +482,20 @@ fn view_options_and_the_more_menu() {
     d.click("text.transcript.more");
     assert_eq!(d.ids("text.transcript.more.").len(), 4);
     d.click("text.transcript.more.viewOptions");
-    for id in ["fillerWords", "pauses", "minPauseLength", "wholeWords", "matchCase", "save", "cancel"] {
+    for id in ["fillerWords", "pauses", "minPauseLength", "pauseHandle", "wholeWords", "matchCase", "save", "cancel"] {
         assert_eq!(d.ids(&format!("transcriptViewOptions.{id}")).len(), 1, "{id}");
     }
-    // a shorter minimum pause length shows more pauses; Save keeps it in the preferences
+    // a shorter minimum pause length shows more pauses; Save keeps it in the preferences, and the
+    // silence a deleted pause keeps next to the words (Keep next to words) too
     let mut draft = d.app().ui.transcript.view_options.clone().unwrap();
     assert_eq!(draft.min_pause_length, 0.75, "Premiere's default");
+    assert_eq!(draft.pause_handle, 0.15);
     draft.min_pause_length = 0.15;
+    draft.pause_handle = 0.05;
     d.ok("ui.set", json!({"transcript": {"viewOptions": serde_json::to_value(&draft).unwrap()}}));
     d.click("transcriptViewOptions.save");
     assert_eq!(d.app().session.prefs.transcript.min_pause_length, 0.15);
+    assert_eq!(d.app().session.prefs.transcript.pause_handle, 0.05);
     assert!(d.app().ui.transcript.view_options.is_none());
     assert_eq!(d.ids("text.transcript.pause.").len(), 2, "{:?}", d.ids("text.transcript.pause."));
     // { } off: a selection marks no In/Out

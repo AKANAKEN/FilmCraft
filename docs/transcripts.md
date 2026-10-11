@@ -28,7 +28,7 @@ searched. Premiere has only the filter menu.
 | Delete row | opened by the results row's Delete: radios "Extract" (default) / "Lift"; buttons "Delete all", "Delete" | always shown while searching, no Delete button to open it: "Delete all pauses (12)" (or "filler words", or matches) first, then "Delete", "Extract" / "Lift"; each button is one undo step |
 | Matches | all orange, the current one salmon | the same |
 | "•••" menu | ACTIONS: "Create captions…", "Transcribe sequence", "Generate static transcript…", "Export ›", "Import ›"; PREFERENCES: "Transcript view options…", "Enable auto-scrolling" ✓, "Spell check ›" | "Create captions", "Transcribe sequence…"; "Transcript view options…", "Enable auto-scrolling" ✓ |
-| Transcript view options | "Filler words", "Markers", "Low-confidence words", "Untranscribed sources", "Speakers", "Pauses", "Minimum pause length" (slider + "seconds"); Search settings "Find whole words only", "Match capitalization"; "Cancel" / "Save" | "Filler words" ✓, "Pauses" ✓, "Minimum pause length" 0.1–3.0 s, default **0.75 s**; both search settings (off) |
+| Transcript view options | "Filler words", "Markers", "Low-confidence words", "Untranscribed sources", "Speakers", "Pauses", "Minimum pause length" (slider + "seconds"); Search settings "Find whole words only", "Match capitalization"; "Cancel" / "Save" | "Filler words" ✓, "Pauses" ✓, "Minimum pause length" 0.1–3.0 s, default **0.75 s**; FilmCraft's "Keep next to words" 0–1 s, default **0.15 s** (see below); both search settings (off) |
 
 **Transcribing.** The empty tab says "Transcribe source clips" / "Transcribe your source clips to
 view your sequence transcript." with a **Transcribe** button. When some audio clips have no
@@ -61,6 +61,11 @@ text ("00:00:02:22 - 00:00:05:08"); the speaker column is hidden while speakers 
   more with their length ("[... 2.4 s]") so long ones stand out; hovering shows the length
   ("1.2 seconds"); a click selects the pause.
 - Filler words are marked (tinted, dimmed) when "Filler words" is on.
+- **Deleting a pause keeps a little of it next to the words** (FilmCraft): 0.15 s after the word
+  before it and 0.15 s before the word after it (Transcript view options ▸ Keep next to words).
+  Speech recognition puts a word's edge a few tens of milliseconds off, more on a soft first sound;
+  cutting right up to it took the start off words. A 1.2 s pause becomes about 0.3 s; one too short
+  to leave that much is not deleted.
 - Delete or Backspace with text or a pause selected **extracts** it (ripple delete, gaps close);
   Alt+Backspace **lifts** it (leaves a gap). Ctrl/Cmd+F goes to the search field; ← → ↑ ↓,
   Home / End (with Shift to extend) move the playhead word by word as in Premiere.
@@ -99,12 +104,12 @@ to Out point only", the source-clip transcript in the Source monitor, and "Follo
 | `transcript.delete` | Remove transcripts. |
 | `transcript.inspect` | The sequence transcript: words (index, text, sequence times, speaker, clip, `filler`), paragraphs, `pauses` (`after`, `start`, `end`, `seconds`; at least `minPauseSeconds`, default Transcript view options ▸ Minimum pause length), speakers, the word (`current`) or pause (`currentPause`) at the playhead. |
 | `transcript.search` | Matches of a search: `filter` `text` (a phrase in `query`; punctuation ignored; the last word may be a prefix unless `wholeWords`; case ignored unless `matchCase`; both default to Search settings), `fillers` (word ranges) or `pauses` (`pauseAfter`). Returns `count` and `matches`. |
-| `transcript.deleteAll` | Remove every match of a search (same params) in one undo step: Extract (ripple, default) or `lift: true`. Pauses go whole. |
-| `transcript.select` | Mark In/Out around words `from..=to` (frame-snapped outward) or the pause `pauseAfter` (frame-snapped inward) and move the playhead there. |
+| `transcript.deleteAll` | Remove every match of a search (same params) in one undo step: Extract (ripple, default) or `lift: true`. A pause goes less `keepSeconds` of its silence next to each word (default Transcript view options ▸ Keep next to words, 0.15 s); `keepSeconds: 0` removes the whole silence. |
+| `transcript.select` | Mark In/Out around words `from..=to` (frame-snapped outward) or the pause `pauseAfter` (less `keepSeconds` next to the words, frame-snapped inward) and move the playhead there. |
 | `transcript.extract` / `transcript.lift` | Extract (ripple) or lift the words' (or the pause's) frames on the targeted tracks. |
 | `transcript.renameSpeaker` | Rename a speaker by name (every transcript) or by index in one `item`. |
 | `transcript.removeFillers` | Ripple-delete filler words (`fillers`, default the list of each transcript's language, see Premiere parity; phrases such as "you know" allowed). |
-| `transcript.removePauses` | Ripple-delete pauses longer than `minSeconds`, keeping `keepSeconds` of air on both sides. |
+| `transcript.removePauses` | Ripple-delete pauses longer than `minSeconds`, keeping `keepSeconds` of air on both sides (default Keep next to words). |
 | `transcript.createCaptions` | Lay the words out as captions on a new caption track (`maxChars`, `lines`, `minSeconds`, `maxSeconds`, `gapFrames`). |
 | `transcript.models` / `transcript.downloadModel` | List the speech models (size, licence, licence URL, attribution line, installed) / download one. |
 
@@ -174,8 +179,11 @@ all three without Python and treats them as hostile input). How it works:
   its last spoken token's frame plus that token's duration (a full stop or comma the model emits
   late, inside the pause after the word, does not stretch it), then the bounds are tightened past
   silence like Whisper's. Short clicks in a pause (mouse, keyboard) do not hold a word's edge out
-  in the pause (`filmcraft_speech::vad`). Transcripts made before this find fewer pauses:
-  transcribe again (••• ▸ Transcribe sequence…). No language is given to the model; v3 handles the 25 languages in one model and
+  in the pause (`filmcraft_speech::vad`). A soft consonant at a word's edge (the s of "so", the f
+  of "für", an h, a fading end) is quieter than the threshold set for vowels: speech grows from the
+  frames above it into adjacent frames above a lower edge threshold, by up to 200 ms, so the word's
+  start is not moved past its first sound. Transcripts made before this find fewer pauses, or
+  start some words late: transcribe again (••• ▸ Transcribe sequence…). No language is given to the model; v3 handles the 25 languages in one model and
   the transcript's language is guessed from frequent words (or is the one requested).
 - **Long audio** (more than 60 s) is cut in pauses into pieces of at most 60 s, each encoded on its
   own, so memory stays flat for clips of hours and no word is split or repeated at a join (see the
@@ -225,7 +233,8 @@ the local speech samples (LibriSpeech read speech and dialogue clips) (about 9.5
 Apple-silicon laptop CPU).
 
 Transcript view options and the panel's toggles are preferences (`prefs.set`): `transcript.fillerWords`,
-`transcript.pauses`, `transcript.minPauseLength` (0.1–3.0 s, default 0.75), `transcript.wholeWords`,
+`transcript.pauses`, `transcript.minPauseLength` (0.1–3.0 s, default 0.75), `transcript.pauseHandle`
+(Keep next to words, 0–1 s, default 0.15), `transcript.wholeWords`,
 `transcript.matchCase`, `transcript.autoScroll`, `transcript.autoInOut`.
 
 ### Background jobs and the recogniser

@@ -341,6 +341,60 @@ fn waiting_for_a_cancelled_or_failing_job_reports_it() {
     assert!(s.execute("transcript.cancel", json!({})).is_err());
 }
 
+/// Words in sequence time from `transcript.inspect`: (text, start, end).
+fn timed_words(s: &mut Session) -> Vec<(String, Tick, Tick)> {
+    let r = s.execute("transcript.inspect", json!({})).unwrap();
+    r["words"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|w| (w["text"].as_str().unwrap().to_string(), Tick(w["start"].as_i64().unwrap()), Tick(w["end"].as_i64().unwrap())))
+        .collect()
+}
+
+/// Deleting pauses never cuts into words: each pause keeps 0.15 s (Transcript view options ▸ Keep
+/// next to words) of its silence after the word before it and before the word after it, so a word
+/// whose transcript edge is a little late (a soft "s" at its start) keeps its start. Every word
+/// keeps its length; the 1.2 s pause becomes about 0.3 s.
+#[test]
+fn deleting_pauses_keeps_silence_next_to_the_words() {
+    let (mut s, item, _) = session();
+    s.execute("transcript.generate", json!({"items": [item.0]})).unwrap();
+    assert_eq!(s.prefs.transcript.pause_handle, 0.15);
+    let before = timed_words(&mut s);
+    let r = s.execute("transcript.deleteAll", json!({"filter": "pauses"})).unwrap();
+    assert_eq!(r["removed"], 1, "{r}");
+    let after = timed_words(&mut s);
+    assert_eq!(after.len(), before.len());
+    for ((t0, a0, b0), (t1, a1, b1)) in before.iter().zip(&after) {
+        assert_eq!((t0, *b0 - *a0), (t1, *b1 - *a1), "{t1} keeps its whole length");
+    }
+    let keep = Tick::from_seconds_f64(0.15);
+    let gap = after[3].1 - after[2].2;
+    assert!(gap >= keep + keep && gap < Tick::from_seconds_f64(0.4), "the pause after \"world.\" is {} s", gap.seconds());
+    // one pause the same way, and its In/Out shows what goes
+    s.execute("edit.undo", json!({})).unwrap();
+    let r = s.execute("transcript.select", json!({"pauseAfter": 2})).unwrap();
+    let (a, b) = (Tick(r["start"].as_i64().unwrap()), Tick(r["end"].as_i64().unwrap()));
+    assert!(a >= before[2].2 + keep && b <= before[3].1 - keep, "In/Out leave the silence next to the words");
+    s.execute("transcript.extract", json!({"pauseAfter": 2})).unwrap();
+    let after = timed_words(&mut s);
+    assert!(after[3].1 - after[2].2 >= keep + keep);
+    // a pause too short to delete once that is kept: an error, nothing changes
+    s.execute("edit.undo", json!({})).unwrap();
+    let e = s.execute("transcript.extract", json!({"pauseAfter": 0})).unwrap_err().to_string();
+    assert!(e.contains("too short"), "{e}");
+    // the setting: per call, or Transcript view options ▸ Keep next to words
+    s.execute("prefs.set", json!({"key": "transcript.pauseHandle", "value": 0.3})).unwrap();
+    let r = s.execute("transcript.select", json!({"pauseAfter": 2})).unwrap();
+    assert!(Tick(r["start"].as_i64().unwrap()) >= before[2].2 + Tick::from_seconds_f64(0.3));
+    for v in [json!(-1), json!(1e9)] {
+        s.execute("prefs.set", json!({"key": "transcript.pauseHandle", "value": v})).unwrap();
+        assert!((0.0..=1.0).contains(&s.prefs.transcript.pause_handle), "clamped");
+    }
+    assert!(s.execute("transcript.deleteAll", json!({"filter": "pauses", "keepSeconds": f64::NAN})).is_ok());
+}
+
 #[test]
 fn pauses_fillers_search_filters_and_delete_all() {
     let (mut s, item, start) = session();
@@ -378,7 +432,7 @@ fn pauses_fillers_search_filters_and_delete_all() {
     assert!(s.execute("transcript.search", json!({"filter": "text"})).is_err(), "text needs a query");
     assert!(s.execute("transcript.search", json!({"filter": "speakers"})).is_err());
 
-    // one pause: select marks it, extract removes the whole silence
+    // one pause: select marks it, extract removes its silence (less what is kept next to the words)
     let rate = s.sequence_rate();
     let r = s.execute("transcript.select", json!({"pauseAfter": 2})).unwrap();
     let (a, b) = (Tick(r["start"].as_i64().unwrap()), Tick(r["end"].as_i64().unwrap()));
@@ -398,7 +452,8 @@ fn pauses_fillers_search_filters_and_delete_all() {
     let r = s.execute("transcript.deleteAll", json!({"filter": "fillers"})).unwrap();
     assert_eq!(r["removed"], 1, "{r}");
     assert_eq!(s.history.undo.last().unwrap().0, "Delete All Filler Words");
-    let r = s.execute("transcript.deleteAll", json!({"filter": "pauses", "minPauseSeconds": 0.05})).unwrap();
+    // `keepSeconds: 0`: the whole silence, short pauses too
+    let r = s.execute("transcript.deleteAll", json!({"filter": "pauses", "minPauseSeconds": 0.05, "keepSeconds": 0})).unwrap();
     assert!(r["removed"].as_u64().unwrap() >= 2, "{r}");
     assert_eq!(s.history.undo.len(), undo + 2);
     assert_eq!(words(&mut s), ["Hello", "world.", "Second", "speaker", "here."]);

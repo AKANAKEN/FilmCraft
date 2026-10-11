@@ -524,6 +524,20 @@ pub const DEFAULT_PAUSE_SECONDS: f64 = 0.75;
 pub const MIN_PAUSE_SECONDS: f64 = 0.1;
 pub const MAX_PAUSE_SECONDS: f64 = 3.0;
 
+/// Transcript view options ▸ Keep next to words: the silence a deleted pause leaves next to each
+/// word, default and maximum, in seconds. Word edges from speech recognition can be a few tens of
+/// milliseconds late (more on a soft "s", "f" or "h"); cutting a pause right up to them took the
+/// start off words.
+pub const DEFAULT_PAUSE_HANDLE: f64 = 0.15;
+pub const MAX_PAUSE_HANDLE: f64 = 1.0;
+
+/// The silence a deleted pause leaves next to each word: `keepSeconds`, else Transcript view
+/// options ▸ Keep next to words (`transcript.pauseHandle`).
+pub fn pause_handle(s: &Session, p: &Value) -> Tick {
+    let secs = f64_p(p, "keepSeconds").unwrap_or(s.prefs.transcript.pause_handle);
+    Tick::from_seconds_f64(if secs.is_finite() { secs.clamp(0.0, MAX_PAUSE_HANDLE) } else { DEFAULT_PAUSE_HANDLE })
+}
+
 /// The shortest silence shown and found as a pause: `minPauseSeconds`, else Transcript view
 /// options ▸ Minimum pause length (`transcript.minPauseLength`).
 pub fn min_pause(s: &Session, p: &Value) -> Tick {
@@ -688,13 +702,14 @@ fn search(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// Timeline range of the words `from..=to` (frame-snapped outward), or of the pause after word
-/// `pauseAfter` (the whole silence, frame-snapped inward).
+/// `pauseAfter` (its silence less [`pause_handle`] next to both words, frame-snapped inward).
 fn range_p(s: &Session, p: &Value, cmd: &str) -> Result<TimeRange> {
     let words = sequence_words(s);
     if let Some(after) = u64_p(p, "pauseAfter") {
         let pause =
             usize::try_from(after).ok().and_then(|a| tx::pause_after(&words, a)).ok_or_else(|| bad(cmd, format!("there is no pause after word {after}")))?;
-        return tx::pause_range(&pause, Tick::ZERO, s.sequence_rate()).ok_or_else(|| bad(cmd, "the pause is shorter than a frame"));
+        return tx::pause_range(&pause, pause_handle(s, p), s.sequence_rate())
+            .ok_or_else(|| bad(cmd, "the pause is too short to delete once the silence kept next to the words is left"));
     }
     let from = u64_p(p, "from").ok_or_else(|| bad(cmd, "`from` (word index) or `pauseAfter` is required"))? as usize;
     let to = u64_p(p, "to").map(|n| n as usize).unwrap_or(from);
@@ -783,7 +798,7 @@ fn remove_ranges(s: &mut Session, label: &str, ranges: Vec<TimeRange>) -> Result
 fn remove_pauses(s: &mut Session, p: &Value) -> Result<Value> {
     let words = sequence_words(s);
     let min = Tick::from_seconds_f64(f64_p(p, "minSeconds").unwrap_or(1.0));
-    let keep = Tick::from_seconds_f64(f64_p(p, "keepSeconds").unwrap_or(0.15));
+    let keep = pause_handle(s, p);
     let ranges = tx::find_pauses(&words, min, keep, s.sequence_rate());
     remove_ranges(s, "Remove Pauses", ranges)
 }
@@ -796,11 +811,12 @@ fn remove_fillers(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// The timeline ranges that remove search matches: words frame-snapped outward (filler words to
-/// the nearest frames, never into their neighbours), pauses whole and frame-snapped inward.
-pub fn match_ranges(words: &[SeqWord], found: &[Match], filter: Filter, rate: filmcraft_time::FrameRate) -> Vec<TimeRange> {
+/// the nearest frames, never into their neighbours), pauses less `keep` of silence next to both
+/// words ([`pause_handle`]) and frame-snapped inward.
+pub fn match_ranges(words: &[SeqWord], found: &[Match], filter: Filter, keep: Tick, rate: filmcraft_time::FrameRate) -> Vec<TimeRange> {
     let spans: Vec<std::ops::Range<usize>> =
         found.iter().filter_map(|m| if let Match::Words { from, to } = m { Some(*from..to.saturating_add(1)) } else { None }).collect();
-    let pauses = found.iter().filter_map(|m| if let Match::Pause(q) = m { tx::pause_range(q, Tick::ZERO, rate) } else { None });
+    let pauses = found.iter().filter_map(|m| if let Match::Pause(q) = m { tx::pause_range(q, keep, rate) } else { None });
     match filter {
         Filter::Fillers => tx::filler_ranges(words, &spans, rate),
         Filter::Text => spans.iter().filter_map(|r| tx::word_range(words, r.start, r.end.saturating_sub(1), rate)).collect(),
@@ -821,7 +837,7 @@ fn delete_all(s: &mut Session, p: &Value) -> Result<Value> {
     let lift = bool_p(p, "lift").unwrap_or(false);
     let words = sequence_words(s);
     let found = matches(s, &words, filter, q, p);
-    let ranges = match_ranges(&words, &found, filter, s.sequence_rate());
+    let ranges = match_ranges(&words, &found, filter, pause_handle(s, p), s.sequence_rate());
     let label = match (filter, lift) {
         (Filter::Fillers, false) => "Delete All Filler Words",
         (Filter::Pauses, false) => "Delete All Pauses",
@@ -944,19 +960,19 @@ pub fn commands() -> Vec<CommandSpec> {
             "transcript.deleteAll",
             "Delete All Matches",
             &[],
-            r#"{"filter":"text|fillers|pauses"=text,"query":str?,"lift":bool=false,"wholeWords":bool?,"matchCase":bool?,"minPauseSeconds":f?,"fillers":[str]?}"#,
+            r#"{"filter":"text|fillers|pauses"=text,"query":str?,"lift":bool=false,"wholeWords":bool?,"matchCase":bool?,"minPauseSeconds":f?,"keepSeconds":f?,"fillers":[str]?}"#,
             has_transcript,
             delete_all,
             true,
         ),
         spec("transcript.models", "List Speech Models", &[], "{}", always, models, false),
         spec("transcript.downloadModel", "Download Speech Model", &[], r#"{"model":"parakeet-tdt-0.6b-v3"?}"#, can_download, download_model, true),
-        spec("transcript.select", "Mark Selected Text", &[], r#"{"from":word,"to":word?}|{"pauseAfter":word}"#, has_transcript, select, true),
+        spec("transcript.select", "Mark Selected Text", &[], r#"{"from":word,"to":word?}|{"pauseAfter":word,"keepSeconds":f?}"#, has_transcript, select, true),
         spec(
             "transcript.extract",
             "Extract Selected Text",
             &[],
-            r#"{"from":word,"to":word?}|{"pauseAfter":word}"#,
+            r#"{"from":word,"to":word?}|{"pauseAfter":word,"keepSeconds":f?}"#,
             has_transcript,
             |s, p| extract_or_lift(s, p, true),
             true,
@@ -965,7 +981,7 @@ pub fn commands() -> Vec<CommandSpec> {
             "transcript.lift",
             "Lift Selected Text",
             &[],
-            r#"{"from":word,"to":word?}|{"pauseAfter":word}"#,
+            r#"{"from":word,"to":word?}|{"pauseAfter":word,"keepSeconds":f?}"#,
             has_transcript,
             |s, p| extract_or_lift(s, p, false),
             true,

@@ -11,7 +11,7 @@
 //! filter `minPause` and `minPause.less|more`; delete row `deleteAll`, `deleteOne`,
 //! `deleteMode.extract|lift`; text `segment.<n>`, `word.<i>`, `pause.<i>` (the pause after word i).
 //! The Transcript View Options dialog:
-//! `transcriptViewOptions.fillerWords|pauses|minPauseLength|wholeWords|matchCase|save|cancel`.
+//! `transcriptViewOptions.fillerWords|pauses|minPauseLength|pauseHandle|wholeWords|matchCase|save|cancel`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -903,6 +903,15 @@ fn view_options_dialog(app: &mut FilmcraftApp, ctx: &egui::Context) {
                     ui.label(tl!("seconds"));
                 });
             });
+            // deleting a pause leaves this much silence next to each word (a soft start or end of a
+            // word stays whole)
+            ui.horizontal(|ui| {
+                ui.label(tl!("Keep next to words"));
+                use filmcraft_engine::transcript::MAX_PAUSE_HANDLE;
+                let r = ui.add(egui::DragValue::new(&mut d.pause_handle).range(0.0..=MAX_PAUSE_HANDLE).speed(0.01).max_decimals(2));
+                elems.push(("transcriptViewOptions.pauseHandle".into(), r.rect, "Keep next to words".into()));
+                ui.label(tl!("seconds"));
+            });
             ui.add_space(6.0);
             ui.label(egui::RichText::new(tl!("Search settings")).strong());
             let r = ui.checkbox(&mut d.whole_words, tl!("Find whole words only"));
@@ -934,6 +943,7 @@ fn view_options_dialog(app: &mut FilmcraftApp, ctx: &egui::Context) {
             app.ui.transcript.view_options = None;
             let v = json!({
                 "transcript.fillerWords": d.filler_words, "transcript.pauses": d.pauses, "transcript.minPauseLength": d.min_pause_length,
+                "transcript.pauseHandle": d.pause_handle,
                 "transcript.wholeWords": d.whole_words, "transcript.matchCase": d.match_case,
             });
             if let Err(e) = app.session.execute("prefs.set", json!({"values": v})) {

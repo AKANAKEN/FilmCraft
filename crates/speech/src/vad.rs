@@ -11,6 +11,13 @@
 //! short: sound shorter than 40 ms more than 150 ms away from longer sound is no speech
 //! ([`speech_frames`]), so it no longer holds the word's edge out in the pause. A final consonant
 //! released after its closure (the t of "ist") is closer to its vowel than that and stays.
+//!
+//! A soft consonant at a word's edge (the s of "so", the f of "für", an h, a fading end) is well
+//! below the threshold, which is set for vowels: on its own the threshold moved the word's start
+//! past it, and deleting the pause before the word cut its start off. So speech grows outward from
+//! the frames above the threshold into adjacent frames above a lower edge threshold
+//! ([`edge_threshold`]: 12 % of the way from the floor to the speech level, at least 4.5 dB above
+//! the floor), by at most 200 ms on each side ([`grow_speech`]).
 
 use filmcraft_project::Word;
 
@@ -22,6 +29,8 @@ const MIN_WORD_FRAMES: usize = 6;
 const MIN_SPEECH_RUN: usize = 4;
 /// ...and so is shorter sound this close to it.
 const NEAR_SPEECH: usize = 15;
+/// How far (10 ms frames) speech grows into a soft edge ([`grow_speech`]).
+const MAX_EDGE_FRAMES: usize = 20;
 
 /// Frame levels in dBFS (10 ms RMS).
 pub fn frame_db(audio: &[f32]) -> Vec<f32> {
@@ -34,20 +43,74 @@ pub fn frame_db(audio: &[f32]) -> Vec<f32> {
         .collect()
 }
 
-/// The speech/silence threshold in dBFS.
-pub fn threshold(db: &[f32]) -> f32 {
-    if db.is_empty() {
-        return -60.0;
-    }
+/// The noise floor (10th percentile) and the speech level (95th percentile) of frame levels, in
+/// dBFS; None without a frame above digital silence.
+fn levels(db: &[f32]) -> Option<(f32, f32)> {
     // digital silence (< −100 dBFS) would drag the floor far below the recording's own noise
     let mut s: Vec<f32> = db.iter().copied().filter(|v| *v > -100.0).collect();
     if s.is_empty() {
-        return -60.0;
+        return None;
     }
     s.sort_by(f32::total_cmp);
-    let q = |p: f32| s[((s.len() - 1) as f32 * p) as usize];
-    let (floor, speech) = (q(0.10), q(0.95));
-    (floor + 0.3 * (speech - floor)).max(floor + 6.0)
+    let q = |p: f32| s.get(((s.len() - 1) as f32 * p) as usize).copied().unwrap_or(-60.0);
+    Some((q(0.10), q(0.95)))
+}
+
+/// The speech/silence threshold in dBFS.
+pub fn threshold(db: &[f32]) -> f32 {
+    match levels(db) {
+        Some((floor, speech)) => (floor + 0.3 * (speech - floor)).max(floor + 6.0),
+        None => -60.0,
+    }
+}
+
+/// The level in dBFS a frame next to speech needs to belong to it: a soft consonant at a word's
+/// edge (see the module docs). Below [`threshold`].
+pub fn edge_threshold(db: &[f32]) -> f32 {
+    match levels(db) {
+        Some((floor, speech)) => (floor + 0.12 * (speech - floor)).max(floor + 4.5).min(threshold(db)),
+        None => -66.0,
+    }
+}
+
+/// Grow `speech` (per 10 ms frame) into the adjacent frames at or above `edge` (a soft consonant
+/// at a word's edge), by at most 200 ms on each side of each stretch of speech.
+pub fn grow_speech(db: &[f32], speech: &mut [bool], edge: f32) {
+    let n = speech.len().min(db.len());
+    let loud = |i: usize| db.get(i).is_some_and(|v| *v >= edge);
+    // forward: after each stretch of speech
+    let mut run = usize::MAX;
+    for i in 0..n {
+        if speech[i] {
+            run = 0;
+        } else if run < MAX_EDGE_FRAMES && loud(i) {
+            speech[i] = true;
+            run += 1;
+        } else {
+            run = usize::MAX;
+        }
+    }
+    // backward: before each one (a grown frame from the forward pass is no stretch of its own:
+    // only frames that were speech before start a run here)
+    let core: Vec<bool> = speech.to_vec();
+    let mut run = usize::MAX;
+    for i in (0..n).rev() {
+        if core[i] {
+            run = 0;
+        } else if run < MAX_EDGE_FRAMES && loud(i) {
+            speech[i] = true;
+            run += 1;
+        } else {
+            run = usize::MAX;
+        }
+    }
+}
+
+/// [`speech_frames`] grown into soft word edges ([`grow_speech`]).
+pub fn speech_frames_with_edges(db: &[f32], th: f32, edge: f32) -> Vec<bool> {
+    let mut speech = speech_frames(db, th);
+    grow_speech(db, &mut speech, edge);
+    speech
 }
 
 /// Per 10 ms frame of levels `db`: does it hold speech? Frames at or above `th` do when their run
@@ -87,12 +150,12 @@ pub fn speech_frames(db: &[f32], th: f32) -> Vec<bool> {
 /// Move word bounds inward past silent frames (see the module docs).
 pub fn tighten_words(audio: &[f32], words: &mut [Word]) {
     let db = frame_db(audio);
-    tighten_words_speech(&speech_frames(&db, threshold(&db)), words);
+    tighten_words_speech(&speech_frames_with_edges(&db, threshold(&db), edge_threshold(&db)), words);
 }
 
 /// [`tighten_words`] with the frame levels ([`frame_db`]) and threshold already computed.
 pub fn tighten_words_db(db: &[f32], th: f32, words: &mut [Word]) {
-    tighten_words_speech(&speech_frames(db, th), words);
+    tighten_words_speech(&speech_frames_with_edges(db, th, edge_threshold(db).min(th)), words);
 }
 
 /// [`tighten_words`] with the speech frames ([`speech_frames`]) already worked out.
@@ -177,6 +240,56 @@ mod tests {
         let mut w = vec![Word::new("ist", seconds_tick(0.5), seconds_tick(1.8))];
         tighten_words(&audio, &mut w);
         assert_eq!(w[0].end, seconds_tick(1.02));
+    }
+
+    /// 16 kHz samples: room noise (about −63 dBFS), with tones of `amp` over sample ranges.
+    fn audio_levels(len: usize, parts: &[(std::ops::Range<usize>, f32)]) -> Vec<f32> {
+        let mut audio: Vec<f32> = (0..len).map(|i| if i % 2 == 0 { 0.001 } else { 0.0 }).collect();
+        for (r, amp) in parts {
+            for i in r.clone() {
+                audio[i] = amp * (i as f32 * 0.2).sin();
+            }
+        }
+        audio
+    }
+
+    /// A soft consonant (30 dB below the vowel, as an s or f is) before and after the vowel stays in
+    /// the word: the start isn't moved past it, so deleting the pause before the word keeps it.
+    #[test]
+    fn soft_consonants_at_the_word_edges_stay_in_the_word() {
+        // room noise, "s" 0.38–0.5 at about −50 dBFS, vowel 0.5–0.9 at −13.5, "s" 0.9–1.0, room noise:
+        // the consonant is below the speech threshold (about −48) and above the edge one (−57)
+        let audio = audio_levels(32_000, &[(6_080..8_000, 0.0045), (8_000..14_400, 0.3), (14_400..16_000, 0.0045)]);
+        let db = frame_db(&audio);
+        assert!(edge_threshold(&db) < -50.5 && -50.5 < threshold(&db), "{} {}", edge_threshold(&db), threshold(&db));
+        let mut w = vec![Word::new("so", seconds_tick(0.2), seconds_tick(1.6))];
+        tighten_words(&audio, &mut w);
+        assert_eq!(w[0].start, seconds_tick(0.38), "the soft start is part of the word");
+        assert_eq!(w[0].end, seconds_tick(1.0), "and so is the soft end");
+        // without the edges the word would start at the vowel
+        let mut core = vec![Word::new("so", seconds_tick(0.2), seconds_tick(1.6))];
+        tighten_words_speech(&speech_frames(&db, threshold(&db)), &mut core);
+        assert_eq!(core[0].start, seconds_tick(0.5));
+    }
+
+    /// Soft sound next to speech counts for at most 200 ms on each side: steady noise above the edge
+    /// threshold (a hum, a breath) doesn't fill the pause.
+    #[test]
+    fn soft_edges_grow_at_most_200_ms() {
+        let mut db = vec![-90.0f32; 200];
+        for f in 50..100 {
+            db[f] = -20.0;
+        }
+        for f in (0..50).chain(100..200) {
+            db[f] = -60.0;
+        }
+        let sp = speech_frames_with_edges(&db, -40.0, -70.0);
+        assert_eq!(sp.iter().position(|v| *v), Some(30), "200 ms before the speech");
+        assert_eq!(sp.iter().rposition(|v| *v), Some(119), "200 ms after it");
+        // hostile input: empty, mismatched lengths
+        grow_speech(&[], &mut [true, false], -60.0);
+        grow_speech(&[-10.0, -10.0], &mut [], -60.0);
+        assert!(edge_threshold(&[]) < threshold(&[]));
     }
 
     #[test]

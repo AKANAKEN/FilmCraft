@@ -3507,6 +3507,7 @@
 	Licence: {license}	许可证：{license}
 	Loading speech model…	正在加载语音模型…
 	Match capitalization	区分大小写
+	Keep next to words	在词语旁保留
 	Minimum pause length	最短停顿时长
 	More options	更多选项
 	Next result	下一个结果
