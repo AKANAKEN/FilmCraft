@@ -351,13 +351,15 @@ and web backend defaults are unchanged.
 
 ### Linux
 
-| Format | x86_64 | aarch64 (ARM64) | Notes |
-|---|---|---|---|
-| AppImage | `filmcraft-<ver>-linux-x86_64.AppImage` | `filmcraft-<ver>-linux-aarch64.AppImage` | Runs anywhere; updates itself with [AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate) (`.zsync` files) |
-| Flatpak | `filmcraft-<ver>-linux-x86_64.flatpak` | `filmcraft-<ver>-linux-aarch64.flatpak` | Sandboxed; `flatpak install --user <file>` |
-| Debian/Ubuntu | `filmcraft-<ver>-linux-x86_64.deb` | `filmcraft-<ver>-linux-aarch64.deb` | |
-| Fedora/RHEL/openSUSE | `filmcraft-<ver>-linux-x86_64.rpm` | `filmcraft-<ver>-linux-aarch64.rpm` | |
-| Tarball | `filmcraft-<ver>-linux-x86_64.tar.gz` | `filmcraft-<ver>-linux-aarch64.tar.gz` | Unpack and run `./install.sh` |
+| Format | x86_64 | aarch64 (ARM64) | riscv64 (RISC-V) | Notes |
+|---|---|---|---|---|
+| AppImage | `filmcraft-<ver>-linux-x86_64.AppImage` | `filmcraft-<ver>-linux-aarch64.AppImage` | — | Runs anywhere; updates itself with [AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate) (`.zsync` files) |
+| Flatpak | `filmcraft-<ver>-linux-x86_64.flatpak` | `filmcraft-<ver>-linux-aarch64.flatpak` | — | Sandboxed; `flatpak install --user <file>` |
+| Debian/Ubuntu | `filmcraft-<ver>-linux-x86_64.deb` | `filmcraft-<ver>-linux-aarch64.deb` | `filmcraft-<ver>-linux-riscv64.deb` | |
+| Fedora/RHEL/openSUSE | `filmcraft-<ver>-linux-x86_64.rpm` | `filmcraft-<ver>-linux-aarch64.rpm` | `filmcraft-<ver>-linux-riscv64.rpm` | |
+| Tarball | `filmcraft-<ver>-linux-x86_64.tar.gz` | `filmcraft-<ver>-linux-aarch64.tar.gz` | `filmcraft-<ver>-linux-riscv64.tar.gz` | Unpack and run `./install.sh` |
+
+RISC-V (riscv64): `filmcraft-<ver>-linux-riscv64.{deb,rpm,tar.gz}`, built against Ubuntu 26.04 (needs glibc 2.39+).
 
 The tarball installer places FilmCraft, its command-line tool and desktop integration in
 `~/.local`, without administrator permissions. For all users, run
