@@ -98,7 +98,7 @@ fn czech_editing_glossary_is_consistent() {
         ("Ripple Delete", "Odstranit s posunem"),
         ("Razor Tool", "Nástroj Žiletka"),
         ("Selection Tool", "Nástroj Výběr"),
-        ("Ripple Edit Tool", "Nástroj Posunutí střihu"),
+        ("Ripple Edit Tool", "Nástroj Úprava s posunem"),
         ("Color Space", "Barevný prostor"),
         ("Audio Track Mixer", "Mixážní pult zvukových stop"),
     ] {
