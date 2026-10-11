@@ -17,7 +17,7 @@ when it is installed, never linked.
 | TIFF/EP, ISO 12234-2 | 2001 | CFARepeatPatternDim, CFAPattern |
 | TIFF Technical Note 1 (SubIFDs) | 1993 | the SubIFD tree |
 | ITU-T T.81 \| ISO/IEC 10918-1 | 09/1992 | lossless JPEG (process 14, SOF3): Annex B syntax, Annex C Huffman tables, F.2.2.3 decoding, Annex H prediction and point transform |
-| CinemaDNG Image Data Format Specification | 1.1.0.0 (2009) | frames as numbered DNG files, FrameRate, TimeCodes, ReelName tags |
+| CinemaDNG Image Data Format Specification | 1.0.0.0 (September 2009) | frames as numbered DNG files, FrameRate, TimeCodes, ReelName tags |
 | SMPTE ST 12-1 | 2014 | time code BCD packing (via the CinemaDNG TimeCodes tag) |
 | CIPA DC-008 (Exif) | 2.3 | LightSource codes → illuminant temperatures |
 | Malvar, He, Cutler, "High-quality linear interpolation for demosaicing of Bayer-patterned color images", IEEE ICASSP | 2004 | the Bayer demosaic filters |
@@ -110,8 +110,9 @@ the raw image in a SubIFD, and arbitrary extra tags.
 JPEG XL DNG, deflate / floating-point DNG (HDR merges), planar raw data, colour
 filters other than red / green / blue (CMY, RGBE), non-rectangular CFA layouts, DefaultScale and
 BestQualityScale (non-square pixels are shown square), DNG 1.6 IlluminantData for illuminant 255
-(calibration 1 is used), lossless JPEG restart intervals that split a line, and MXF-wrapped
-CinemaDNG.
+(calibration 1 is used) and lossless JPEG restart intervals that split a line. This crate reads
+DNG frames only; MXF-wrapped CinemaDNG is unwrapped by the MXF reader (`crates/mxf`, #1078),
+which hands the frames to it.
 
 Known deviation: the rescale step divides by WhiteLevel minus each pixel's own black level;
 DNG chapter 5 uses the plane's largest black level. The two agree unless the black levels
