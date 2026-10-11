@@ -40,7 +40,7 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use filmcraft_isobmff::SampleEntry;
 use filmcraft_project::{ItemId, Project};
 use filmcraft_render::SourceProvider;
-use filmcraft_time::{FrameRate, Tick, TimeRange};
+use filmcraft_time::{FrameRate, TICKS_PER_SECOND, Tick, TimeRange};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
