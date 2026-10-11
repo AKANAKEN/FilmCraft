@@ -132,7 +132,7 @@ routing and two-input stereo channel combiners; complete raw composition evidenc
 Unsupported compositions are reported by preview and reject the import batch, including unsupported
 mixed-rate adapters, unknown effects and trailing filler that would shorten native duration. The adapter does
 not inspect any third-party decoder implementation or decode Avid binary files. Coverage and
-sample acceptance are in the [implementation plan](../../docs/avid-import-plan.md#first-native-sequence-conversion).
+sample acceptance are in the [implementation plan](../../docs/avid-import-plan.md#sequence-conversion).
 
 The observed automatic motion adapter is now mapped to native Frame Sampling at real-time speed,
 checking its output/source rate ratio against the bound picture clock. The 29.97-to-30000/1001
@@ -146,7 +146,7 @@ The engine catalog commands also offer `mode: "metadata" | "media" | "sequences"
 `metadata`). `avid_catalog::plan_scoped` defers composition-omission warnings only when sequence
 conversion is requested. The engine validates all requested stages on one disposable native
 project copy; preview does not publish it, and import commits once. Unsupported binding or
-conversion aborts the whole operation. See the [combined workflow contract](../../docs/avid-import-plan.md#combined-import-preflight-and-transaction).
+conversion aborts the whole operation. See the [combined workflow contract](../../docs/avid-import-plan.md#commands).
 
 The engine's `missingMedia: "offline" | "error"` option defaults to `offline`: supported managed
 source descriptors can establish component structure when files are absent. The pure catalog

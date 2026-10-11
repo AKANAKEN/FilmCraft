@@ -1,6 +1,6 @@
 # Proposed issue and PR boundaries
 
-Local proposal only; no GitHub issues have been created or edited.
+Submission scopes: [#170](https://github.com/storytold/filmcraft/issues/170) covers the managed-media catalog; [#1049](https://github.com/storytold/filmcraft/issues/1049) covers optional modular project storage. The initial Avid importer implements the supported subset documented in [the import guide](avid-import-plan.md).
 
 ## Assessment of #170
 
@@ -27,7 +27,7 @@ Acceptance:
 - Save/reopen independently of the AVB; one undo action; source files unchanged.
 - Report sequences/subclips/groups/effects outside supported coverage, rather than silently flattening them.
 
-PR slices: catalog-transfer foundation; multi-component source/playback model; decoder integration and import UI. The foundation alone does not close this issue.
+The initial importer combines catalog transfer, the component source/playback model, native decoding and the import UI because they form one usable import path. It does not close the persistent catalog request. Broader media binding remains a follow-up.
 
 ### 2. Avid sequence/timeline conversion
 
@@ -43,7 +43,7 @@ Acceptance for an initial cuts-only subset:
 - Explicit diagnostics for unsupported transitions, nesting, retimes, effects and group/multicam structures.
 - Compare against a saved Avid-authored sequence plus AAF export; EDL can cross-check cuts but cannot establish full fidelity.
 
-The user accepts omitting effects and speed changes initially, with diagnostics rather than a claim of fidelity. Phase 8 supplies a cuts/gaps baseline now; automatic spatial wrappers still need source-reference traversal.
+The initial importer may omit unsupported effects and speed changes with diagnostics rather than claiming fidelity. The observed automatic mixed-rate and spatial wrappers are translated to FilmCraft equivalents; general retimes, effect fidelity and complex sequences remain follow-ups.
 
 Later slices: transitions and handles; markers; nested/subclip/group references; speed changes; effect translation with fidelity reports. Keep unsupported effects distinguishable from successfully translated effects.
 
@@ -80,4 +80,4 @@ Collaboration locks/merges are a subsequent feature, not an automatic consequenc
 
 Import and the media catalog can share an identity resolver. Modular storage can be designed independently and consume the same native project objects. Sequence conversion depends on verified timeline semantics, not on a media database or modular storage.
 
-Propose the narrowed scopes together when submitting; make each implementation PR independently reviewable with its own tests and limitations. Avoid a single PR containing reader research, source-model changes, indexing, UI, timelines and project storage.
+Propose the narrowed scopes together when submitting; make each implementation PR independently reviewable with its own tests and limitations. Keep persistent indexing and modular project storage out of the initial importer PR; reader research and private fixtures also remain outside the product change.

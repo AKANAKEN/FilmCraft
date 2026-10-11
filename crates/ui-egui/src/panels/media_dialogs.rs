@@ -175,14 +175,14 @@ fn component_result<'a>(d: &'a LinkMediaDraft, row: &MissingRow) -> Option<&'a V
 fn row_status(d: &LinkMediaDraft, row: &MissingRow) -> (&'static str, Color32) {
     let status = component_result(d, row).and_then(|r| r["status"].as_str());
     if d.component_job.is_none() && d.selected_key == row.key() && d.candidate.and_then(|i| d.candidates.get(i)).is_some_and(|c| c.1) {
-        return (if status == Some("ambiguous") { "Copy selected" } else { "Match found" }, Color32::LIGHT_GREEN);
+        return (if status == Some("ambiguous") { tl!("Copy selected") } else { tl!("Match found") }, Color32::LIGHT_GREEN);
     }
     match status {
-        Some("unique") => ("Match found", Color32::LIGHT_GREEN),
-        Some("ambiguous") => ("Choose a copy", Color32::LIGHT_YELLOW),
-        Some("unreadable") => ("Cannot link", Color32::LIGHT_RED),
-        Some("absent") => ("Not found", Color32::LIGHT_RED),
-        Some("unresolved") => ("Search incomplete", Color32::LIGHT_YELLOW),
+        Some("unique") => (tl!("Match found"), Color32::LIGHT_GREEN),
+        Some("ambiguous") => (tl!("Choose a copy"), Color32::LIGHT_YELLOW),
+        Some("unreadable") => (tl!("Cannot link"), Color32::LIGHT_RED),
+        Some("absent") => (tl!("Not found"), Color32::LIGHT_RED),
+        Some("unresolved") => (tl!("Search incomplete"), Color32::LIGHT_YELLOW),
         _ => (row.status, Color32::LIGHT_RED),
     }
 }
@@ -215,14 +215,14 @@ fn load_component_candidates(d: &mut LinkMediaDraft, row: &MissingRow) {
                 d.candidate = Some(0);
             }
             d.message = match found["status"].as_str() {
-                Some("ambiguous") => "Multiple files carry this media identity. Choose the copy to use.".into(),
-                Some("absent") => "No matching media identity found in this search.".into(),
-                Some("unreadable") => "Identity found, but the file cannot satisfy this component. Hover over the candidate for details.".into(),
+                Some("ambiguous") => tl!("Multiple files carry this media identity. Choose the copy to use.").into(),
+                Some("absent") => tl!("No matching media identity found in this search.").into(),
+                Some("unreadable") => tl!("Identity found, but the file cannot satisfy this component. Hover over the candidate for details.").into(),
                 _ => String::new(),
             };
         }
         if report["report"]["complete"] != true {
-            d.message.push_str(" Search incomplete: automatic linking is disabled. Choose a verified file explicitly or search a smaller folder.");
+            d.message.push_str(tl!(" Search incomplete: automatic linking is disabled. Choose a verified file explicitly or search a smaller folder."));
         }
     }
 }
@@ -294,7 +294,7 @@ fn link_media(app: &mut FilmcraftApp, ctx: &egui::Context) {
                 d.selected_key.clear();
             }
             Ok(v) => {
-                d.message = format!("Searching MXF identities… {} entries checked", v["entries"]);
+                d.message = tlf!("Searching MXF identities… {n} entries checked", n = v["entries"]);
                 ctx.request_repaint_after(std::time::Duration::from_millis(100));
             }
             Err(e) => {
@@ -367,9 +367,9 @@ fn link_media(app: &mut FilmcraftApp, ctx: &egui::Context) {
                 });
                 ui.separator();
                 if component_selected {
-                    ui.label("Match by Avid media identity. Picture and audio channels keep their original slots.");
-                    let r = ui.checkbox(&mut d.relink_others, "Also link other unique component matches");
-                    push(&mut elems, "linkMedia.relinkOthers", &r, "Also link other unique component matches");
+                    ui.label(tl!("Match by Avid media identity. Picture and audio channels keep their original slots."));
+                    let r = ui.checkbox(&mut d.relink_others, tl!("Also link other unique component matches"));
+                    push(&mut elems, "linkMedia.relinkOthers", &r, tl!("Also link other unique component matches"));
                 } else {
                     ui.horizontal_wrapped(|ui| {
                         ui.label(tl!("Match file properties:"));
@@ -412,8 +412,8 @@ fn link_media(app: &mut FilmcraftApp, ctx: &egui::Context) {
                         action = Some("search");
                     }
                     if d.component_job.is_some() {
-                        let r = ui.button("Stop search");
-                        push(&mut elems, "linkMedia.stopSearch", &r, "Stop search");
+                        let r = ui.button(tl!("Stop search"));
+                        push(&mut elems, "linkMedia.stopSearch", &r, tl!("Stop search"));
                         if r.clicked() {
                             action = Some("stopSearch");
                         }
@@ -429,7 +429,7 @@ fn link_media(app: &mut FilmcraftApp, ctx: &egui::Context) {
                         egui::ScrollArea::vertical().id_salt("link-media-candidates-scroll").max_height(108.0).auto_shrink([false, true]).show(ui, |ui| {
                             for (k, (path, ok, idm, problems)) in d.candidates.iter().enumerate() {
                                 let mark = match (ok, idm) {
-                                    (true, Some(true)) if component_selected => "✔ verified identity",
+                                    (true, Some(true)) if component_selected => tl!("✔ verified identity"),
                                     (true, Some(true)) => tl!("✔ same file"),
                                     (true, _) => tl!("✔ matches"),
                                     (false, Some(false)) => tl!("✖ different file"),
@@ -465,15 +465,15 @@ fn link_media(app: &mut FilmcraftApp, ctx: &egui::Context) {
                     && let Some(diagnostics) = report["report"]["diagnostics"].as_array()
                     && !diagnostics.is_empty()
                 {
-                    let response = ui.collapsing("Search diagnostics", |ui| {
+                    let response = ui.collapsing(tl!("Search diagnostics"), |ui| {
                         for message in diagnostics.iter().filter_map(Value::as_str) {
                             ui.label(message);
                         }
                         if let Some(n) = report["report"]["omittedDiagnostics"].as_u64().filter(|n| *n > 0) {
-                            ui.label(format!("{n} additional diagnostics omitted"));
+                            ui.label(tlf!("{n} additional diagnostics omitted", n));
                         }
                     });
-                    push(&mut elems, "linkMedia.diagnostics", &response.header_response, "Search diagnostics");
+                    push(&mut elems, "linkMedia.diagnostics", &response.header_response, tl!("Search diagnostics"));
                 }
                 if !d.message.is_empty() {
                     ui.colored_label(Color32::from_rgb(0xe0, 0x8a, 0x6a), &d.message);
@@ -562,7 +562,7 @@ fn link_media(app: &mut FilmcraftApp, ctx: &egui::Context) {
             match app.session.execute("media.searchComponents", json!({"folder":d.folder,"targets":targets})) {
                 Ok(v) => {
                     d.component_job = v["job"].as_u64();
-                    d.message = "Searching MXF identities…".into();
+                    d.message = tl!("Searching MXF identities…").into();
                 }
                 Err(e) => d.message = e.to_string(),
             }

@@ -46,48 +46,50 @@ pub fn show(app: &mut FilmcraftApp, ctx: &egui::Context) {
     let running = draft.job.is_some() && draft.report.is_none();
     let response = egui::Modal::new(egui::Id::new("avid-import")).show(ctx, |ui| {
         ui.set_width(620.0);
-        ui.heading("Import Avid Bin");
-        ui.label("Transfer the bin contents into a new FilmCraft bin.");
+        ui.heading(tl!("Import Avid Bin"));
+        ui.label(tl!("Transfer the bin contents into a new FilmCraft bin."));
         let mut changed = false;
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            let r =
-                ui.add_enabled(!running && !draft.completed, egui::TextEdit::singleline(&mut draft.path).desired_width(500.0).hint_text("Choose an .avb file"));
+            let r = ui.add_enabled(
+                !running && !draft.completed,
+                egui::TextEdit::singleline(&mut draft.path).desired_width(500.0).hint_text(tl!("Choose an .avb file")),
+            );
             app.auto.add("avidImport.path", r.rect, &draft.path);
             if r.changed() {
                 cancel(app, draft.job.take());
                 draft.report = None;
                 draft.error.clear();
             }
-            let r = ui.add_enabled(!running && !draft.completed, egui::Button::new("Browse…"));
-            app.auto.add("avidImport.browse", r.rect, "Browse");
+            let r = ui.add_enabled(!running && !draft.completed, egui::Button::new(tl!("Browse…")));
+            app.auto.add("avidImport.browse", r.rect, tl!("Browse"));
             browse = r.clicked();
         });
-        ui.label("Media folders (optional) · Includes subfolders");
+        ui.label(tl!("Media folders (optional) · Includes subfolders"));
         let mut remove_folder = None;
         egui::ScrollArea::vertical().id_salt("avid-import-folders").max_height(110.0).show(ui, |ui| {
             for (index, folder) in draft.media_folders.iter_mut().enumerate() {
                 ui.horizontal(|ui| {
                     let r = ui.add_enabled(
                         !running && !draft.completed,
-                        egui::TextEdit::singleline(folder).desired_width(450.0).hint_text("Choose a folder, or leave empty for offline import"),
+                        egui::TextEdit::singleline(folder).desired_width(450.0).hint_text(tl!("Choose a folder, or leave empty for offline import")),
                     );
                     app.auto.add(&format!("avidImport.mediaFolder.{index}"), r.rect, folder);
                     if index == 0 {
                         app.auto.add("avidImport.mediaFolder", r.rect, folder);
                     }
                     changed |= r.changed();
-                    let r = ui.add_enabled(!running && !draft.completed, egui::Button::new("Browse…"));
-                    app.auto.add(&format!("avidImport.browseMedia.{index}"), r.rect, "Browse");
+                    let r = ui.add_enabled(!running && !draft.completed, egui::Button::new(tl!("Browse…")));
+                    app.auto.add(&format!("avidImport.browseMedia.{index}"), r.rect, tl!("Browse"));
                     if index == 0 {
-                        app.auto.add("avidImport.browseMedia", r.rect, "Browse");
+                        app.auto.add("avidImport.browseMedia", r.rect, tl!("Browse"));
                     }
                     if r.clicked() {
                         browse_media = Some(index);
                     }
                     if index > 0 {
-                        let r = ui.add_enabled(!running && !draft.completed, egui::Button::new("Remove"));
-                        app.auto.add(&format!("avidImport.removeFolder.{index}"), r.rect, "Remove");
+                        let r = ui.add_enabled(!running && !draft.completed, egui::Button::new(tl!("Remove")));
+                        app.auto.add(&format!("avidImport.removeFolder.{index}"), r.rect, tl!("Remove"));
                         if r.clicked() {
                             remove_folder = Some(index);
                         }
@@ -99,8 +101,8 @@ pub fn show(app: &mut FilmcraftApp, ctx: &egui::Context) {
             draft.media_folders.remove(index);
             changed = true;
         }
-        let r = ui.add_enabled(!running && !draft.completed && draft.media_folders.len() < 32, egui::Button::new("+ Add folder"));
-        app.auto.add("avidImport.addFolder", r.rect, "+ Add folder");
+        let r = ui.add_enabled(!running && !draft.completed && draft.media_folders.len() < 32, egui::Button::new(tl!("+ Add folder")));
+        app.auto.add("avidImport.addFolder", r.rect, tl!("+ Add folder"));
         if r.clicked() {
             draft.media_folders.push(String::new());
             changed = true;
@@ -113,7 +115,7 @@ pub fn show(app: &mut FilmcraftApp, ctx: &egui::Context) {
         if running {
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.label("Reading bin… You can cancel without changing the project.");
+                ui.label(tl!("Reading bin… You can cancel without changing the project."));
             });
         }
         // Keep actions outside the report viewport, including when every detail section is open.
@@ -122,61 +124,71 @@ pub fn show(app: &mut FilmcraftApp, ctx: &egui::Context) {
             if let Some(report) = &draft.report {
                 ui.separator();
                 for (i, bin) in report["bins"].as_array().into_iter().flatten().enumerate() {
-                    let label = format!("{} — {} clips", bin["name"].as_str().unwrap_or(""), bin["clips"].as_u64().unwrap_or(0));
+                    let label = tlf!("{name} — {n} clips", name = bin["name"].as_str().unwrap_or(""), n = bin["clips"].as_u64().unwrap_or(0));
                     let r = ui.label(&label);
                     app.auto.add(&format!("avidImport.bin.{i}"), r.rect, &label);
                 }
                 if let Some(sequences) = report["sequences"].as_array() {
-                    ui.label(format!("{} {}", sequences.len(), if sequences.len() == 1 { "sequence" } else { "sequences" }));
+                    ui.label(if sequences.len() == 1 { tl!("1 sequence").to_owned() } else { tlf!("{n} sequences", n = sequences.len()) });
                 }
                 if report["mediaSearch"].is_object() {
                     let m = &report["mediaSearch"];
-                    ui.label(format!("{} media components ready to link; {} will remain offline", m["linkedComponents"], m["offlineComponents"]));
+                    ui.label(tlf!(
+                        "{ready} media components ready to link; {offline} will remain offline",
+                        ready = m["linkedComponents"],
+                        offline = m["offlineComponents"]
+                    ));
                     if m["search"]["complete"] != true {
-                        ui.colored_label(app.tokens.danger, "Search was incomplete. No automatic matches were applied.");
+                        ui.colored_label(app.tokens.danger, tl!("Search was incomplete. No automatic matches were applied."));
                     }
-                    let matches = ui.collapsing("Media matches", |ui| {
+                    let matches = ui.collapsing(tl!("Media matches"), |ui| {
                         for row in m["search"]["results"].as_array().into_iter().flatten().take(64) {
-                            ui.label(format!(
-                                "Item {} · {} · {}",
-                                row["item"],
-                                row["component"]["kind"].as_str().unwrap_or(""),
-                                row["status"].as_str().unwrap_or("")
+                            ui.label(tlf!(
+                                "Item {item} · {kind} · {status}",
+                                item = row["item"],
+                                kind = row["component"]["kind"].as_str().unwrap_or(""),
+                                status = row["status"].as_str().unwrap_or("")
                             ));
                         }
+                        if let Some(total) = m["search"]["results"].as_array().map(Vec::len).filter(|n| *n > 64) {
+                            ui.label(tlf!("Showing {shown} of {total} matches.", shown = 64, total));
+                        }
                     });
-                    app.auto.add("avidImport.matches", matches.header_response.rect, "Media matches");
+                    app.auto.add("avidImport.matches", matches.header_response.rect, tl!("Media matches"));
                     if let Some(diagnostics) = m["search"]["diagnostics"].as_array().filter(|d| !d.is_empty()) {
-                        let details = ui.collapsing(format!("Technical diagnostics ({})", diagnostics.len()), |ui| {
-                            ui.label("Reader details for troubleshooting; these messages do not by themselves mean an import failed.");
+                        let details = ui.collapsing(tlf!("Technical diagnostics ({n})", n = diagnostics.len()), |ui| {
+                            ui.label(tl!("Reader details for troubleshooting; these messages do not by themselves mean an import failed."));
                             for diagnostic in diagnostics.iter().filter_map(Value::as_str) {
                                 ui.label(diagnostic);
                             }
+                            if let Some(n) = m["search"]["omittedDiagnostics"].as_u64().filter(|n| *n > 0) {
+                                ui.label(tlf!("{n} additional diagnostics omitted", n));
+                            }
                         });
-                        app.auto.add("avidImport.diagnostics", details.header_response.rect, "Technical diagnostics");
+                        app.auto.add("avidImport.diagnostics", details.header_response.rect, tl!("Technical diagnostics"));
                     }
                 } else if report["mode"] != "metadata" {
-                    ui.label("Media remains offline until you link its components.");
+                    ui.label(tl!("Media remains offline until you link its components."));
                 }
                 if let Some(errors) = report["errors"].as_array().filter(|e| !e.is_empty()) {
-                    ui.colored_label(app.tokens.danger, format!("{} conversion problems — partial results will still be imported", errors.len()));
+                    ui.colored_label(app.tokens.danger, tlf!("{n} conversion problems — partial results will still be imported", n = errors.len()));
                     for error in errors.iter().filter_map(Value::as_str) {
                         ui.colored_label(app.tokens.danger, error);
                     }
                 }
                 if let Some(warnings) = report["warnings"].as_array().filter(|w| !w.is_empty()) {
-                    let notes = ui.collapsing(format!("Conversion notes ({})", warnings.len()), |ui| {
+                    let notes = ui.collapsing(tlf!("Conversion notes ({n})", n = warnings.len()), |ui| {
                         for warning in warnings.iter().filter_map(Value::as_str) {
                             ui.label(warning);
                         }
                     });
-                    app.auto.add("avidImport.notes", notes.header_response.rect, "Conversion notes");
+                    app.auto.add("avidImport.notes", notes.header_response.rect, tl!("Conversion notes"));
                 }
                 ui.label(
                     RichText::new(if draft.completed {
-                        "Imported. Review the conversion problems, then close this report."
+                        tl!("Imported. Review the conversion problems, then close this report.")
                     } else {
-                        "Click 'Import' to transfer this snapshot. The original Avid bin will not be changed."
+                        tl!("Click 'Import' to transfer this snapshot. The original Avid bin will not be changed.")
                     })
                     .color(Color32::from_rgb(0xe0, 0x8a, 0x6a)),
                 );
@@ -188,16 +200,16 @@ pub fn show(app: &mut FilmcraftApp, ctx: &egui::Context) {
         });
         ui.separator();
         ui.horizontal(|ui| {
-            let r = ui.button(if draft.completed { "Close" } else { "Cancel" });
-            app.auto.add("avidImport.cancel", r.rect, "Cancel");
+            let r = ui.button(if draft.completed { tl!("Close") } else { tl!("Cancel") });
+            app.auto.add("avidImport.cancel", r.rect, tl!("Cancel"));
             if r.clicked() {
                 open = false;
             }
-            let r = ui.add_enabled(!running && !draft.completed && !draft.path.trim().is_empty(), egui::Button::new("Read bin"));
-            app.auto.add("avidImport.read", r.rect, "Read bin");
+            let r = ui.add_enabled(!running && !draft.completed && !draft.path.trim().is_empty(), egui::Button::new(tl!("Read bin")));
+            app.auto.add("avidImport.read", r.rect, tl!("Read bin"));
             read = r.clicked();
-            let r = ui.add_enabled(draft.report.is_some() && draft.job.is_some(), egui::Button::new("Import").fill(app.tokens.accent));
-            app.auto.add("avidImport.import", r.rect, "Import");
+            let r = ui.add_enabled(draft.report.is_some() && draft.job.is_some(), egui::Button::new(tl!("Import")).fill(app.tokens.accent));
+            app.auto.add("avidImport.import", r.rect, tl!("Import"));
             apply = r.clicked();
         });
     });
@@ -234,12 +246,13 @@ pub fn show(app: &mut FilmcraftApp, ctx: &egui::Context) {
         match app.session.execute("file.importAvidBin", json!({"job":draft.job})) {
             Ok(v) => {
                 let count = v["bins"].as_array().into_iter().flatten().filter_map(|b| b["clips"].as_u64()).sum::<u64>();
-                app.ui.status = format!("Imported {count} Avid clips and {} sequences.", v["sequences"].as_array().map_or(0, Vec::len));
+                app.ui.status =
+                    tlf!("Imported {clips} Avid clips and {sequences} sequences.", clips = count, sequences = v["sequences"].as_array().map_or(0, Vec::len));
                 draft.job = None;
                 draft.completed = true;
                 let errors = v["errors"].as_array().filter(|e| !e.is_empty());
                 if let Some(errors) = errors {
-                    draft.error = format!("Import completed with {} conversion problems. Review the messages above.", errors.len());
+                    draft.error = tlf!("Import completed with {n} conversion problems. Review the messages above.", n = errors.len());
                     draft.report = Some(v);
                 } else {
                     open = false;

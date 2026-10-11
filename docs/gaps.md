@@ -211,18 +211,15 @@ platforms** G4, G9, G17; **performance** G16; **ecosystem** G11; **measurement**
 
 ## G15. Interchange never validated in Avid / Pro Tools; slow XML import
 
-- **Development foundation:** headless Avid schema-2 catalog preview/transfer into new bins,
-  preserving metadata and component evidence. An explicit development command binds verified
-  mono OP-Atom components for mono/stereo audio playback, including missing-channel slots, and
-  verified picture-plus-audio sources at matching master/media rates.
-  A separate development command converts the validated 24 fps cuts/filler/mono/stereo-combiner
-  sequence subset (Phases 9–12), including verified 29.97-to-24 frame sampling and spatial fit.
-  Other mixed-rate/effect branches reject the batch explicitly.
-  Catalog commands can preflight and combine transfer, binding and sequence conversion in one
-  transaction. Component relinking still needs integration with the existing Link Media dialog;
-  current combined media/sequence import is strict when required bindings are unavailable.
-  Direct AVB decoding, broader mixed-rate binding/sequence conversion and the import UI remain open; this does not
-  satisfy the AAF/OMF validation gap. See [Avid import plan](avid-import-plan.md).
+- **Avid import foundation:** the native File > Import Avid Bin workflow transfers clip metadata
+  and attempts sequences in one undoable edit. Managed OP-Atom components support the tested
+  mono/stereo and picture-plus-audio profiles, recursive searches across multiple roots and
+  identity-checked Link Media. Unsupported known intervals retain labeled placeholders;
+  conversion problems remain visible and saved with the project. The direct importer is best
+  effort; separate JSON catalog development commands retain strict conversion options.
+  Broader timing/descriptor coverage is still needed for large sound-effects bins. AMA binding,
+  complex timelines and multi-bin selection remain open. This does not satisfy the AAF/OMF
+  validation gap. See [Avid import coverage](avid-import-plan.md).
 
 - **Missing:** AAF and OMF exports have never been opened in Media Composer or Pro Tools; FCP7 XML
   / OTIO import of a Premiere sequence took 97 s / 66 s for three media files (#461); `file.import`
