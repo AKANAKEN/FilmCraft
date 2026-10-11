@@ -3570,3 +3570,9 @@
 	Export the labels to a preset file…	将标签导出为预设文件…
 	Show the presets folder	显示预设文件夹
 	Delete this preset	删除此预设
+	CQP (constant quantizer)	CQP（恒定画质量化）
+	Hardware or built-in	硬件或内置
+	Lookahead	预分析
+	Multipass	多遍处理
+	Quantizer (QP)	量化参数 (QP)
+	Spatial AQ	空间自适应量化 (AQ)

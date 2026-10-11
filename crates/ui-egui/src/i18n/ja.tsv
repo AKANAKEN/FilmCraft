@@ -3594,3 +3594,9 @@
 	Export the labels to a preset file…	ラベルをプリセットファイルに書き出し…
 	Show the presets folder	プリセットフォルダーを表示
 	Delete this preset	このプリセットを削除
+	CQP (constant quantizer)	CQP (固定量子化)
+	Hardware or built-in	ハードウェアまたは内蔵
+	Lookahead	先読み
+	Multipass	マルチパス
+	Quantizer (QP)	量子化パラメーター (QP)
+	Spatial AQ	空間適応量子化 (AQ)
