@@ -256,6 +256,26 @@ impl FilmcraftApp {
                 }
             }
         }
+        // Commit only after gestures end, never for every gutter-drag frame. Explicit saved
+        // workspaces remain reset checkpoints; the working layout survives ordinary launches.
+        let retry_id = egui::Id::new("workspace-save-retry");
+        let now = ui.input(|i| i.time);
+        let retry_at = ui.ctx().data(|d| d.get_temp::<f64>(retry_id)).unwrap_or(0.0);
+        if maximized.is_none()
+            && !ui.input(|i| i.pointer.any_down())
+            && now >= retry_at
+            && let Ok(value) = serde_json::to_value(&self.ui.dock)
+            && self.workspaces.current_layout.as_ref() != Some(&value)
+        {
+            let mut next = self.workspaces.clone();
+            next.current = self.ui.workspace.clone();
+            next.current_layout = Some(value);
+            if let Err(error) = self.set_workspaces(next) {
+                self.ui.status = error;
+                ui.ctx().data_mut(|d| d.insert_temp(retry_id, now + 2.0));
+                ui.ctx().request_repaint_after(std::time::Duration::from_secs(2));
+            }
+        }
         self.panel_drag(&ctx, &targets);
         panels::panel_menu_popup(self, ui);
         self.cancel_value_drag(ui.ctx());
