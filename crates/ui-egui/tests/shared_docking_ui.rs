@@ -45,6 +45,26 @@ fn shared_transactions_keep_selection_and_reject_invalid_moves_atomically() {
 }
 
 #[test]
+fn legacy_move_command_redocks_floating_panels_without_editing_the_project() {
+    let mut app = FilmcraftApp::new(Session::default());
+    app.ui.dock = layout().root;
+    let ctx = egui::Context::default();
+    let project = app.session.project.clone();
+    for (placement, expected) in [
+        ("after", vec![PanelKind::Source, PanelKind::Info, PanelKind::Program]),
+        ("before", vec![PanelKind::Info, PanelKind::Source, PanelKind::Program]),
+        ("tab", vec![PanelKind::Source, PanelKind::Program, PanelKind::Info]),
+    ] {
+        menus::invoke(&mut app, &ctx, "window.floatPanel", json!({"panel": "Info", "rect": [60, 60, 400, 300]})).unwrap();
+        menus::invoke(&mut app, &ctx, "window.panel.move", json!({"panel": "Info", "target": "Source", "placement": placement})).unwrap();
+        assert!(app.ui.floating.is_empty());
+        assert_eq!(tabs_containing(&app.ui.dock, PanelKind::Info), expected);
+        assert!(app.ui.dock.is_visible(PanelKind::Info));
+        assert!(std::sync::Arc::ptr_eq(&project, &app.session.project));
+    }
+}
+
+#[test]
 fn builtin_and_legacy_workspace_shapes_roundtrip_and_save_floating() {
     for name in dock::WORKSPACES {
         let root = dock::workspace(name);
