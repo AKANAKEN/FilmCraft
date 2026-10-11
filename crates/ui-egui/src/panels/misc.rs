@@ -13,8 +13,11 @@ pub fn history(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let redo: Vec<String> = app.session.history.redo.iter().rev().map(|h| h.0.clone()).collect();
     let mut target: Option<i64> = None;
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(&mut child, |ui| {
-        let row = |ui: &mut egui::Ui, label: &str, current: bool, dim: bool| -> bool {
+        // rows are `history.state.<n>`: 0 is Open, then one per edit (the current one last), then
+        // the undone edits
+        let mut row = |ui: &mut egui::Ui, n: usize, label: &str, current: bool, dim: bool| -> bool {
             let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::click());
+            app.auto.add(&format!("history.state.{n}"), r.intersect(ui.clip_rect()), label);
             if current {
                 ui.painter().rect_filled(r, 0.0, t.row_selected);
             } else if resp.hovered() {
@@ -23,30 +26,25 @@ pub fn history(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
             ui.painter().text(pos2(r.min.x + 8.0, r.center().y), Align2::LEFT_CENTER, label, Tokens::ui(12.0), if dim { t.text_faint } else { t.text });
             resp.clicked()
         };
-        if row(ui, tl!("Open"), undo.is_empty(), false) {
+        if row(ui, 0, tl!("Open"), undo.is_empty(), false) {
             target = Some(-(undo.len() as i64));
         }
         for (i, l) in undo.iter().enumerate() {
-            if row(ui, crate::i18n::t(l), i + 1 == undo.len(), false) {
+            if row(ui, i + 1, crate::i18n::t(l), i + 1 == undo.len(), false) {
                 target = Some(i as i64 + 1 - undo.len() as i64);
             }
         }
         for (i, l) in redo.iter().enumerate() {
-            if row(ui, crate::i18n::t(l), false, true) {
+            if row(ui, undo.len() + i + 1, crate::i18n::t(l), false, true) {
                 target = Some(i as i64 + 1);
             }
         }
     });
-    if let Some(n) = target {
-        if n < 0 {
-            for _ in 0..-n {
-                app.session.undo();
-            }
-        } else {
-            for _ in 0..n {
-                app.session.redo();
-            }
-        }
+    if let Some(n) = target
+        && n != 0
+        && let Err(e) = app.session.execute("history.step", serde_json::json!({"steps": n}))
+    {
+        app.ui.status = e.to_string();
     }
 }
 

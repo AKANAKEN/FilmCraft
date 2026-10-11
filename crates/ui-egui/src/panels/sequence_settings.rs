@@ -406,13 +406,15 @@ fn general(ui: &mut egui::Ui, d: &mut SequenceSettingsDraft, cur: &SequenceSetti
     section(ui, "Video Previews", |ui| {
         row(ui, label_w, "Preview File Format:", false, |ui| {
             fixed_combo(ui, elems, "previewFormat", "QuickTime", list_w, NOT_YET);
-            ui.add_enabled(false, egui::Button::new(tl!("Configure…"))).on_disabled_hover_text(t(NOT_YET));
+            let r = ui.add_enabled(false, egui::Button::new(tl!("Configure…"))).on_disabled_hover_text(t(NOT_YET));
+            elems.push(("sequenceSettings.previewConfigure".into(), r.rect, "Configure…".into()));
         });
         row(ui, label_w, "Codec:", false, |ui| fixed_combo(ui, elems, "previewCodec", &cur.preview_codec, list_w, NOT_YET));
         row(ui, label_w, "Width:", false, |ui| fixed_value(ui, elems, "previewWidth", &d.width.to_string()));
         row(ui, label_w, "Height:", false, |ui| {
             fixed_value(ui, elems, "previewHeight", &d.height.to_string());
-            ui.add_enabled(false, egui::Button::new(tl!("Reset"))).on_disabled_hover_text(t(NOT_YET));
+            let r = ui.add_enabled(false, egui::Button::new(tl!("Reset"))).on_disabled_hover_text(t(NOT_YET));
+            elems.push(("sequenceSettings.previewReset".into(), r.rect, "Reset".into()));
         });
         ui.horizontal(|ui| {
             let mut bit_depth = cur.max_bit_depth;

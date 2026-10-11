@@ -16,6 +16,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     p.rect_filled(rect, 0.0, t.header_bg);
     p.line_segment([rect.left_bottom(), rect.right_bottom()], Stroke::new(1.0, Color32::BLACK));
     let drag = ui.interact(rect, egui::Id::new("header-drag"), Sense::click_and_drag());
+    app.auto.add("header.bar", rect, "Title bar (drag to move the window, double-click to zoom it)");
     if drag.drag_started() {
         ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
     }

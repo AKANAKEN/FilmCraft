@@ -25,13 +25,13 @@ Methods (handlers in `crates/ui-egui/src/control.rs`):
 
 | Method | Params | |
 |---|---|---|
-| `engine.execute` / `ui.menu.invoke` | `{command, params}` | any engine or UI command id |
-| `engine.commands` / `ui.menu.list` | – | command registry / menu tree |
+| `engine.execute` / `ui.menu.invoke` | `{command, params}` | any engine or UI command id. `command.list` through it lists the engine's commands (`scope: "engine"`, with `disabledReason` when one can't run) and the app's own (`scope: "ui"`); `edit.batch {steps, label?}` runs its steps here, UI commands included, all or nothing, as one undo step |
+| `engine.commands` / `ui.menu.list` | – | engine command registry / menu tree |
 | `ui.inspect` | – | UI state (tool, workspace, dock, timeline view, playback, fps…) |
-| `ui.elements` | `{prefix?}` | every on-screen interactive element: id, label, rect |
+| `ui.elements` | `{prefix?, query?, role?, discovered?}` | every on-screen interactive element: id, label, rect, and (from egui's AccessKit tree, read while the app is driven) `role`, `enabled`, `checked`, `value`. `query`: words that must all be in the id or label; `discovered: true`: only widgets no panel registered (`auto.<panel>.<label>`, a bug `every_button_ui` catches). A dialog's close button is `window.<title>.close`, a movable dialog's title bar `window.<title>.titleBar`, a slider's number box `<slider id>.value` |
 | `ui.set` | `{tool, workspace, mode, theme, focused, playbackRes, timeline:{pps,scroll,fit}, program:{…}, source:{…}, clipDialog:{param: value}, menuDialog:{param: value}, panels:{scopes, timecode, reference, events, progress}, export:{…}, effectControls:{…}}` | `program` / `source` merge fields into the monitor view state (`res`, `paused_res`, `high_quality`, `display`, `zoom`, `pan`, `show_rulers`, `show_guides`, `lock_guides`, `snap`, `guides`, `compare_ref`, …; see [monitors.md](monitors.md)); `clipDialog` sets fields of the open Edit / Clip / File dialog (Paste Attributes, Make Subclip, Frame Hold Options, …); `menuDialog` those of the M3.11 dialogs (Find, Create Search Bin, Project Settings, Scene Edit Detection, Simplify Sequence, Automate to Sequence…; see `panels::menu_dialogs`); `panels` merges into the panel settings (`ui.inspect` → `ui.panels`; see `panels::panel_state`): Lumetri Scopes `{shown: ["vectorscopeYuv"|"vectorscopeHls"|"histogram"|"parade"|"waveform"], waveformType, paradeType, colorSpace, brightness, scale, clamp, targets}`, Timecode `{rows: [{source, mode, display}], showName}`, Reference Monitor `{ganged, time, display: "composite"|"scopes", scopes}`, Events `{level, selected}`, Progress `{showFinished}` `export` deep-merges into Export mode state (`preset` — applied first —, `settings` (ExportSettings JSON), `fileName`, `location`, `range`, `customStart`, `customEnd`, `openSections`, `manager` (Preset Manager: `query`, `favoritesOnly`, `selected`, `saveName`), `quickOpen`, `quickPath`, `quickPreset`); `program` / `source` merge fields into the monitor view state (`res`, `paused_res`, `high_quality`, `display`, `zoom`, `pan`, `show_rulers`, `show_guides`, `lock_guides`, `snap`, `guides`, `compare_ref`, …; see [monitors.md](monitors.md)); `clipDialog` sets fields of the open Edit / Clip / File dialog (Paste Attributes, Make Subclip, Frame Hold Options, …); `menuDialog` those of the M3.11 dialogs (Find, Create Search Bin, Project Settings, Scene Edit Detection, Simplify Sequence, Automate to Sequence…; see `panels::menu_dialogs`); `projectPanel` merges into the Project panel's view state (`bin` shown in place, `tabs` (bins in a tab or window: `{bin, floating, view, iconSize, nav}`), `activeTab`, `selectedBin`, `rename: {item|bin, text}`, `dialog` (`{"metadataDisplay": {columns, filter}}`, `{"savePresetAs": {name}}`, `{"managePresets": {selected, name}}`, `{"freeformOptions": {options}}`, `{"saveArrangement": {name, bin}}`)); `mediaBrowser` into the Media Browser's (`expanded`, `pathEdit`, `editColumns`, `treeWidth`); `effectControls` into the Effect Controls selection (`ui.inspect` → `ui.effect_controls`: `clip`, `effects: [{index, effect}]`, `keyframes: [{index, effect, param, mask, time}]` with media-time ticks), which `effectControls.clear` removes (Backspace / Delete in that panel). View settings, columns and presets are engine commands (`project.view.set`, `project.columns.set`, `project.viewPreset.*`, `mediaBrowser.settings`) |
 | `ui.panel.show` / `ui.panel.close` | `{panel}` | |
-| `ui.click` / `ui.move` | `{id}` or `{x,y}`, `button`, `count`, `modifiers` | synthetic pointer input |
+| `ui.click` / `ui.move` | `{id}` or `{x,y}`, `button`, `count`, `modifiers` | synthetic pointer input. An `id` whose panel is closed, behind another tab or in another mode brings the panel up first. Like `ui.drag`, `ui.scroll`, `ui.key` and `ui.type`, the reply comes once the frame has handled the input: `{"ran": [{id, params, error?}]}`, the commands it ran, and a `warning` when a click ran nothing on an element that looked disabled |
 | `ui.drag` | `{from, to, steps, modifiers}` | press–move–release |
 | `ui.scroll` | `{id|x,y, dx, dy, modifiers}` | wheel / trackpad |
 | `ui.key` / `ui.type` | `{key}` (`Cmd+K`, `Space`…; off macOS `Ctrl+K` is the same key) / `{text}` | keyboard |
@@ -171,10 +171,16 @@ Keyboard Shortcuts…, ⌥⌘K) uses ids `shortcuts.*` (`shortcuts.key.K`, `shor
 
 ## MCP
 `filmcraft-cli mcp` serves MCP on stdio: headless (in-process session; `--demo` / `--project p.fcproj`)
-or `--bridge 127.0.0.1:9876` to drive the running app. Tools: `command_list`, `command_run`,
-`command_batch`, `doc_inspect`, `render_preview`, `project_inspect`, `sequence_inspect`, `media_import`,
-`render_frame`, `ui_inspect`, `ui_elements`, `ui_click`, `ui_drag`, `ui_key`, `ui_type`, `ui_screenshot`,
-`ui_control`; resources `filmcraft://document` and `filmcraft://commands`. `.mcp.json` registers both.
+or `--bridge 127.0.0.1:9876` to drive the running app. Tools: `command_list`, `command_describe`,
+`command_run`, `command_batch` (`atomic`, `label`), `doc_inspect`, `render_preview`, `project_inspect`,
+`sequence_inspect`, `media_import`, `render_frame`, `ui_inspect`, `ui_elements`, `ui_find`, `ui_click`,
+`ui_drag`, `ui_key`, `ui_type`, `ui_screenshot`, `ui_control`; resources `filmcraft://document` and
+`filmcraft://commands`. `.mcp.json` registers both.
+
+Engine commands for agents: `edit.batch {steps: [{id, params?}], label?}` (all steps or none, one
+undo step), `history.step {steps}` (the History panel: negative undoes, positive redoes),
+`command.recent {limit?}` (the last commands run from outside: edits, frontend commands and
+failures, not queries).
 Annotations, argument checking, errors and export progress / cancellation:
 [agents.md § Conventions](agents.md#conventions).
 

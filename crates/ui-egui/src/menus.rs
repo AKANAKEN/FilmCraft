@@ -168,8 +168,86 @@ pub fn targets_source(app: &FilmcraftApp, params: &Value) -> bool {
     }
 }
 
-/// Execute a UI or engine command by id.
-pub fn invoke(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, mut params: Value) -> Result<Value, String> {
+/// Parameters of a frontend command, in the engine's `params` notation.
+fn ui_params(id: &str) -> &'static str {
+    const NOT_MONITOR: [&str; 6] = ["view.zoom", "view.theme.", "view.appearanceMode.", "view.dynamicAudioWaveforms", "view.programZoom", "view.sourceZoom"];
+    let monitor_view = id.starts_with("view.") && !NOT_MONITOR.iter().any(|p| id.starts_with(p));
+    if monitor_view || id.starts_with("playback.") { r#"{"monitor":"source"|"program"?}"# } else { "{}" }
+}
+
+/// `command.list` in the app: the engine's commands (`scope: "engine"`) plus the frontend's own
+/// (`scope: "ui"`: tools, playback, view, workspaces, panels, preferences, language), so an agent
+/// driving the app sees every id `engine.execute` accepts. The engine's list alone has none of them.
+fn command_list(app: &mut FilmcraftApp) -> Result<Value, String> {
+    let mut v = app.session.execute("command.list", json!({})).map_err(|e| e.to_string())?;
+    let mut ids: std::collections::HashSet<String> =
+        v.as_array().map(|a| a.iter().filter_map(|c| c["id"].as_str().map(str::to_string)).collect()).unwrap_or_default();
+    let menu = menu_items(app);
+    let mut extra = Vec::new();
+    let mut push = |app: &FilmcraftApp, id: &str, label: &str, path: &[String], default: Option<&str>| {
+        if !ids.insert(id.to_string()) {
+            return;
+        }
+        let m = menu.iter().find(|m| m.id == id);
+        let all: Vec<&str> = app.session.shortcuts.for_command(id).iter().map(|b| b.keys.as_str()).collect();
+        let mut c = json!({
+            "id": id,
+            "label": m.map_or(label, |m| m.label.as_str()),
+            "menu": path,
+            "shortcut": app.session.shortcuts.primary(id),
+            "shortcuts": all,
+            "defaultShortcut": default,
+            "params": ui_params(id),
+            "enabled": m.is_none_or(|m| m.enabled),
+            "scope": "ui",
+        });
+        if let (Some(ch), Some(o)) = (m.and_then(|m| m.checked), c.as_object_mut()) {
+            o.insert("checked".into(), json!(ch));
+        }
+        extra.push(c);
+    };
+    for c in UI_COMMANDS.iter().chain(crate::panels::keyboard::COMMANDS) {
+        let path: Vec<String> = c.menu.iter().map(|s| s.to_string()).collect();
+        push(app, c.id, c.label, &path, c.shortcut);
+    }
+    for p in PanelKind::ALL {
+        push(app, &panel_command_id(p), p.title(), &["Window".to_string()], p.window_shortcut());
+    }
+    // the user's own workspaces and anything else only the menus know
+    for m in &menu {
+        push(app, &m.id, &m.label, &m.path, None);
+    }
+    v.as_array_mut().ok_or("command.list did not return a list")?.extend(extra);
+    Ok(v)
+}
+
+/// Execute a UI or engine command by id. Engine commands note themselves in the session's recent
+/// commands; a frontend command (or an engine id the frontend answered itself, e.g. by opening its
+/// dialog) is noted here, so `ui.click` can report what a click ran.
+pub fn invoke(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {
+    let before = app.session.commands_run;
+    let query = filmcraft_engine::find_command(id).is_some_and(|c| !c.journal && c.id != "edit.batch");
+    let noted = (!query).then(|| params.clone());
+    let r = invoke_inner(app, ctx, id, params);
+    if let Some(p) = noted
+        && app.session.commands_run == before
+    {
+        app.session.note_command(id, &p, r.as_ref().err().cloned());
+    }
+    r
+}
+
+fn invoke_inner(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, mut params: Value) -> Result<Value, String> {
+    if id == "command.list" {
+        return command_list(app);
+    }
+    if id == "edit.batch" {
+        // the steps run here, so UI commands (`tool.razor`, `window.panel.*`) work in a batch too
+        let (steps, label) = filmcraft_engine::batch::parse(&params).map_err(|e| e.to_string())?;
+        let mut cx = (app, ctx);
+        return filmcraft_engine::batch::run_steps(&mut cx, |cx| &mut cx.0.session, steps, &label, |cx, id, p| invoke(cx.0, cx.1, id, p))
+            .map_err(|e| e.to_string());
+    }
     if filmcraft_engine::source_monitor::source_command(id) && targets_source(app, &params) && params.get("target").is_none() {
         let object = params.as_object_mut().ok_or("command parameters must be an object")?;
         object.insert("target".into(), json!("source"));

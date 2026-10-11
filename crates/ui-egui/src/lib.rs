@@ -244,6 +244,9 @@ pub struct FilmcraftApp {
     /// Requests waiting for the UI to show an element: (request, give-up time).
     deferred: Vec<(ControlRequest, f64)>,
     last_ui_time: f64,
+    /// Synthetic input went into this frame's input: requests waiting on it are answered after
+    /// `ui` has handled it, not before (the reply reports what the input ran).
+    fed_input: bool,
     pub(crate) synthetic: Vec<egui::Event>,
     /// BS.1770 loudness of the programme as it plays, and the next sample position to feed.
     pub(crate) loudness: Option<(filmcraft_audio_dsp::LoudnessMeter, i64)>,
@@ -263,7 +266,9 @@ pub struct FilmcraftApp {
     /// Consecutive frames the timeline zoom / scroll has been at rest. `ui.elements` answers from
     /// the frame before the last one, so its timeline rects are final from 2 on.
     pub(crate) timeline_still: u32,
-    input_waiters: Vec<Sender<Value>>,
+    /// Replies to `ui.click` / `ui.key` / … sent once their input has been processed, with the
+    /// session's command count when the request came (the reply lists the commands run since).
+    input_waiters: Vec<(Sender<Value>, u64, Option<String>)>,
     next_token: u64,
     styled: bool,
     /// A panic in the UI pass, shown in an error window until dismissed (see [`crash`]).
@@ -454,6 +459,7 @@ impl FilmcraftApp {
             control_rx: None,
             deferred: Vec::new(),
             last_ui_time: 0.0,
+            fed_input: false,
             synthetic: Vec::new(),
             loudness: None,
             status_seen: (String::new(), 0.0),
@@ -1291,6 +1297,20 @@ impl FilmcraftApp {
         ctx.request_repaint();
     }
 
+    /// Answer the requests whose synthetic input has been processed: `{ran: [{id, params, error?}]}`,
+    /// the commands the input ran (a click that ran nothing hit nothing, or a widget that only
+    /// changes what is shown), and a `warning` when it ran nothing on an element that looked disabled.
+    fn answer_input_waiters(&mut self) {
+        for (w, since, disabled) in std::mem::take(&mut self.input_waiters) {
+            let ran = self.session.commands_since(since);
+            let mut result = json!({"ran": serde_json::to_value(&ran).unwrap_or_default()});
+            if let (true, Some(warning), Some(o)) = (ran.is_empty(), disabled, result.as_object_mut()) {
+                o.insert("warning".into(), json!(warning));
+            }
+            let _ = w.send(json!({"ok": true, "result": result}));
+        }
+    }
+
     fn drain_control(&mut self, ctx: &egui::Context) {
         let Some(rx) = self.control_rx.take() else { return };
         let now = ctx.input(|i| i.time);
@@ -1317,7 +1337,16 @@ impl FilmcraftApp {
                         let _ = reply.send(json!({"ok": false, "error": msg}));
                     }
                 }
-                control::Outcome::AfterInput => self.input_waiters.push(reply),
+                control::Outcome::AfterInput => {
+                    // a click on an element that looked greyed out: said in the reply if it ran nothing
+                    let disabled = (req.method == "ui.click")
+                        .then(|| req.params.get("id").and_then(Value::as_str))
+                        .flatten()
+                        .and_then(|id| self.auto.find(id))
+                        .filter(|e| !e.enabled)
+                        .map(|e| format!("`{}` ({}) looked disabled; the click may have done nothing", e.id, e.label));
+                    self.input_waiters.push((reply, self.session.commands_run, disabled));
+                }
                 control::Outcome::Screenshot { path, crop } => {
                     let token = self.next_token;
                     self.next_token += 1;
@@ -1474,6 +1503,7 @@ impl FilmcraftApp {
         let hint = if !self.ui.status.is_empty() { self.ui.status.clone() } else { self.hint_text() };
         ui.painter().text(egui::pos2(sb.min.x + 10.0, sb.center().y), egui::Align2::LEFT_CENTER, hint, Tokens::ui(11.0), t.text_dim);
         let resp = ui.interact(sb, egui::Id::new("status-bar"), egui::Sense::click());
+        self.auto.add("statusBar", sb, "Status bar (click to clear the message)");
         if resp.clicked() {
             self.ui.status.clear();
         }
@@ -1696,6 +1726,7 @@ impl eframe::App for FilmcraftApp {
                     .map_or(self.synthetic.len(), |i| if pointer(&self.synthetic[i]) { i.max(1) } else { i + 1 })
             };
             raw_input.events.extend(self.synthetic.drain(..n));
+            self.fed_input = true;
         }
     }
 
@@ -1725,6 +1756,10 @@ impl eframe::App for FilmcraftApp {
             self.playback.hidden = true;
         }
         self.timeline_still = if self.ui.timeline.animating() { 0 } else { self.timeline_still.saturating_add(1) };
+        if self.control_rx.is_some() {
+            // driven by an agent: `ui.elements` reports every widget egui draws (automation.rs)
+            self.auto.start_capture(ctx);
+        }
         let had_synthetic = !self.synthetic.is_empty();
         self.drain_control(ctx);
         if !self.synthetic.is_empty() && !had_synthetic {
@@ -1734,10 +1769,10 @@ impl eframe::App for FilmcraftApp {
         }
         if !self.synthetic.is_empty() {
             ctx.request_repaint();
-        } else if !self.input_waiters.is_empty() {
-            for w in self.input_waiters.drain(..) {
-                let _ = w.send(json!({"ok": true, "result": null}));
-            }
+        } else if !self.input_waiters.is_empty() && (!self.fed_input || now - self.last_ui_time > 0.25) {
+            // this frame's `ui` handles the last input and answers; when `ui` isn't running
+            // (an occluded window) answer here rather than never
+            self.answer_input_waiters();
         }
         let settled = !std::mem::take(&mut self.monitor_inexact) && self.timeline_still > 0;
         self.issue_screenshots(ctx, settled);
@@ -1771,9 +1806,10 @@ impl eframe::App for FilmcraftApp {
             ctx.request_repaint();
         } else if !self.input_waiters.is_empty() {
             ctx.request_repaint();
-            for w in self.input_waiters.drain(..) {
-                let _ = w.send(json!({"ok": true, "result": null}));
-            }
+            self.answer_input_waiters();
+        }
+        if self.synthetic.is_empty() {
+            self.fed_input = false;
         }
         if self.frames.queue_len() > 0 {
             ctx.request_repaint_after(std::time::Duration::from_millis(16));

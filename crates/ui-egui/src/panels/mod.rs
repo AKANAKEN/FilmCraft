@@ -238,15 +238,23 @@ pub fn panel_menu_popup(app: &mut FilmcraftApp, ui: &mut egui::Ui) {
                     let _ = app.session.execute("sequence.closeOthers", serde_json::json!({}));
                     close = true;
                 }
-            } else if ui.button(tl!("Close Panel")).clicked() {
-                app.ui.dock.close(p);
-                close = true;
+            } else {
+                let r = ui.button(tl!("Close Panel"));
+                app.auto.add(&format!("panel.menu.{}.close", p.id()), r.rect, "Close Panel");
+                if r.clicked() {
+                    app.ui.dock.close(p);
+                    close = true;
+                }
             }
-            if ui.button(tl!("Maximize Frame")).clicked() {
+            let r = ui.button(tl!("Maximize Frame"));
+            app.auto.add(&format!("panel.menu.{}.maximize", p.id()), r.rect, "Maximize Frame");
+            if r.clicked() {
                 app.ui.dock = crate::dock::DockNode::Tabs { panels: vec![p], active: 0 };
                 close = true;
             }
-            if ui.button(tl!("Restore Workspace")).clicked() {
+            let r = ui.button(tl!("Restore Workspace"));
+            app.auto.add(&format!("panel.menu.{}.restoreWorkspace", p.id()), r.rect, "Restore Workspace");
+            if r.clicked() {
                 let w = app.ui.workspace.clone();
                 app.set_workspace(&w);
                 close = true;
@@ -259,8 +267,10 @@ pub fn panel_menu_popup(app: &mut FilmcraftApp, ui: &mut egui::Ui) {
                     let _ = app.session.execute("sequence.revealInProject", serde_json::json!({}));
                     close = true;
                 }
-                ui.checkbox(&mut app.ui.timeline.show_thumbnails, tl!("Video Thumbnails"));
-                ui.checkbox(&mut app.ui.timeline.show_waveforms, tl!("Audio Waveforms"));
+                let r = ui.checkbox(&mut app.ui.timeline.show_thumbnails, tl!("Video Thumbnails"));
+                app.auto.add("panel.menu.Timeline.videoThumbnails", r.rect, "Video Thumbnails");
+                let r = ui.checkbox(&mut app.ui.timeline.show_waveforms, tl!("Audio Waveforms"));
+                app.auto.add("panel.menu.Timeline.audioWaveforms", r.rect, "Audio Waveforms");
             }
             if p == PanelKind::Project {
                 ui.separator();

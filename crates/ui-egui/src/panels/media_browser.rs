@@ -541,6 +541,7 @@ fn list(app: &mut FilmcraftApp, ui: &mut egui::Ui, r: Rect, entries: &[Entry], c
         }
         let rest = ui.available_rect_before_wrap();
         let resp = ui.allocate_rect(Rect::from_min_size(rest.min, vec2(rest.width(), rest.height().max(30.0))), Sense::click());
+        app.auto.add("mediaBrowser.list.empty", resp.rect.intersect(ui.clip_rect()), "Empty space (click to deselect)");
         if resp.clicked() {
             exec(app, &ctx, "mediaBrowser.select", json!({"paths": []}));
         }

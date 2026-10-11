@@ -167,6 +167,8 @@ pub fn timecode_field(
 pub fn section_header(ui: &mut Ui, id: egui::Id, title: &str, open: bool, t: &Tokens, bold: bool) -> (Response, bool) {
     let w = ui.available_width();
     let (rect, resp) = ui.allocate_exact_size(vec2(w, 22.0), Sense::click());
+    let enabled = ui.is_enabled();
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, enabled, open, title));
     if resp.hovered() {
         ui.painter().rect_filled(rect, 0.0, t.hover);
     }
@@ -187,6 +189,9 @@ pub fn section_header(ui: &mut Ui, id: egui::Id, title: &str, open: bool, t: &To
 /// A small pill toggle button with text (e.g. "M", "S" on track headers).
 pub fn letter_toggle(ui: &mut Ui, rect: Rect, letter: &str, on: bool, on_color: Color32, t: &Tokens, id: egui::Id) -> Response {
     let resp = ui.interact(rect, id, Sense::click());
+    // agents read the on/off state from `ui.elements` (`checked`)
+    let enabled = ui.is_enabled();
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, on, letter));
     let bg = if on {
         on_color
     } else if resp.hovered() {
@@ -232,6 +237,8 @@ pub fn search_field(ui: &mut Ui, text: &mut String, hint: &str, width: f32, t: &
 pub fn dropdown_text(ui: &mut Ui, rect: Rect, text: &str, t: &Tokens, id: egui::Id) -> Response {
     // Premiere: 24 pt, #0e0e0e fill, 1 pt #303030 border, radius 4, chevron at the right.
     let resp = ui.interact(rect, id, Sense::click());
+    let enabled = ui.is_enabled();
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, enabled, text));
     ui.painter().rect_filled(rect, 4.0, t.field_bg);
     ui.painter().rect_stroke(
         rect,

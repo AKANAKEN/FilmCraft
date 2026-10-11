@@ -70,9 +70,31 @@ pub struct BatchStep {
 pub struct BatchParams {
     /// Commands to run in order.
     pub steps: Vec<BatchStep>,
-    /// Stop at the first failing step (default true).
+    /// Stop at the first failing step (default true). Ignored with `atomic`, which always stops.
     #[serde(default)]
     pub stop_on_error: Option<bool>,
+    /// All or nothing (recommended for edits): if a step fails, every earlier step is rolled back
+    /// and the project is exactly as before; if all succeed, the batch is ONE undo step. Default false.
+    #[serde(default)]
+    pub atomic: Option<bool>,
+    /// Name of the undo step of an atomic batch (History panel, Edit ▸ Undo), e.g. "Agent: rough cut".
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DescribeParams {
+    /// Command id, e.g. `timeline.razor`.
+    pub id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct FindParams {
+    /// Words that must all appear in the element's id or label (case-insensitive), e.g. `track lock V1`.
+    pub query: String,
+    /// Only this kind of control: button, checkbox, radio, comboBox, slider, number, textInput, link, tab, clickable.
+    #[serde(default)]
+    pub role: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -144,6 +166,15 @@ pub struct ElementsParams {
     /// Only element ids starting with this prefix (e.g. `timeline.clip.`).
     #[serde(default)]
     pub prefix: Option<String>,
+    /// Only elements whose id or label contains every word of this text (case-insensitive).
+    #[serde(default)]
+    pub query: Option<String>,
+    /// Only this kind of control (button, checkbox, comboBox, slider, textInput, …).
+    #[serde(default)]
+    pub role: Option<String>,
+    /// true: only widgets no panel registered (generated `auto.*` ids); false: only registered ones.
+    #[serde(default)]
+    pub discovered: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -315,10 +346,15 @@ impl FilmcraftMcp {
 
     #[tool(
         title = "Run several commands",
-        description = "Run several commands in order: {steps: [{id, params?}], stop_on_error?: true}. Returns {completed, failed, results: [{ok, result | error}]}; each edit is its own undo step.",
+        description = "Run several commands in order: {steps: [{id, params?}], atomic?, label?, stop_on_error?: true}. With atomic: true (recommended for edits) it is all or nothing: a failing step rolls every earlier one back and the project is exactly as before; success is ONE undo step named `label`, so the user can take the whole change back with one Undo. Returns {completed, results, undo}. Without atomic: {completed, failed, results: [{ok, result | error}]}, each edit its own undo step.",
         annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = false)
     )]
     async fn command_batch(&self, Parameters(p): Parameters<BatchParams>) -> Result<CallToolResult, McpError> {
+        if p.atomic == Some(true) {
+            // one engine transaction (`edit.batch`): all or nothing, one undo step
+            let steps: Vec<Value> = p.steps.into_iter().map(|st| json!({"id": st.id, "params": st.params.unwrap_or(json!({}))})).collect();
+            return wrap(self.run("edit.batch", json!({"steps": steps, "label": p.label})).await);
+        }
         let stop = p.stop_on_error.unwrap_or(true);
         let (mut completed, mut failed, mut results) = (0u32, 0u32, Vec::new());
         for st in p.steps {
@@ -338,6 +374,27 @@ impl FilmcraftMcp {
         }
         let v = json!({"completed": completed, "failed": failed, "results": results});
         Ok(if failed > 0 { CallToolResult::error(vec![Content::text(v.to_string())]) } else { ok_json(&v) })
+    }
+
+    #[tool(
+        title = "Describe a command",
+        description = "One command in full: label, menu path, shortcut, parameter doc, whether it can run now and, if not, why (`disabledReason`, e.g. \"no clips selected\"). Unknown ids get the closest matches.",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+    )]
+    async fn command_describe(&self, Parameters(p): Parameters<DescribeParams>) -> Result<CallToolResult, McpError> {
+        let list = match self.run("command.list", json!({})).await {
+            Ok(v) => v.as_array().cloned().unwrap_or_default(),
+            Err(e) => return Ok(fail(e)),
+        };
+        if let Some(c) = list.iter().find(|c| c["id"] == p.id.as_str()) {
+            return Ok(ok_json(c));
+        }
+        let near = close_matches(&list, &p.id);
+        Ok(fail(if near.is_empty() {
+            format!("no command `{}`; command_list lists them all", p.id)
+        } else {
+            format!("no command `{}`; did you mean: {}?", p.id, near.join(", "))
+        }))
     }
 
     #[tool(
@@ -454,16 +511,25 @@ impl FilmcraftMcp {
 
     #[tool(
         title = "Live app: on-screen elements",
-        description = "Live app: every on-screen interactive element with id, label and rect (points). Use ids with ui_click/ui_drag.",
+        description = "Live app: every on-screen interactive element (buttons, toggles, fields, menus, clips, track headers…) with id, label, rect (points), role, enabled, checked and value. Widgets no panel registered appear as `auto.<panel>.<label>` with discovered: true. Filter with prefix / query / role. Use ids with ui_click/ui_drag.",
         annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false)
     )]
     async fn ui_elements(&self, Parameters(p): Parameters<ElementsParams>) -> Result<CallToolResult, McpError> {
-        self.ui("ui.elements", json!({"prefix": p.prefix.unwrap_or_default()})).await
+        self.ui("ui.elements", json!({"prefix": p.prefix.unwrap_or_default(), "query": p.query, "role": p.role, "discovered": p.discovered})).await
+    }
+
+    #[tool(
+        title = "Live app: find elements",
+        description = "Live app: find on-screen controls by words in their id or label, e.g. {\"query\": \"lock V1\"} or {\"query\": \"ok\", \"role\": \"button\"}. Returns id, label, rect, role, enabled, checked, value: pass the id to ui_click.",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+    )]
+    async fn ui_find(&self, Parameters(p): Parameters<FindParams>) -> Result<CallToolResult, McpError> {
+        self.ui("ui.elements", json!({"query": p.query, "role": p.role})).await
     }
 
     #[tool(
         title = "Live app: click",
-        description = "Live app: click an element by id or at x,y (points). Supports right/middle button, double-click (count=2) and modifiers.",
+        description = "Live app: click an element by id or at x,y (points). Supports right/middle button, double-click (count=2) and modifiers. An id whose panel is closed or hidden brings the panel up first. Returns {ran: [{id, params, error?}]}: the commands the click ran (empty: it only changed the view, or hit nothing; `warning` when the element looked disabled). Prefer command_run with the same id/params next time.",
         annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = false)
     )]
     async fn ui_click(&self, Parameters(p): Parameters<ClickParams>) -> Result<CallToolResult, McpError> {
@@ -561,7 +627,33 @@ impl FilmcraftMcp {
     }
 }
 
-const INSTRUCTIONS: &str = "FilmCraft video editor (Premiere Pro-class). Every edit is an engine command: `command_list` to discover ids/params, `command_run` to execute (undoable; `command_batch` runs several). `doc_inspect` (or `project_inspect`/`sequence_inspect`) returns ids you can pass to commands; `render_preview` shows the result. In bridge mode the `ui_*` tools drive the live app: `ui_elements` lists clickable ids, `ui_click`/`ui_drag`/`ui_key` operate it, `ui_screenshot` shows it. Time is in ticks: 254016000000 per second (commands also accept `seconds`, `frame` or `timecode`).";
+const INSTRUCTIONS: &str = "FilmCraft video editor (Premiere Pro-class). Every menu item, panel button, shortcut and timeline gesture is a command. \
+Reliable loop: (1) `doc_inspect` (or `project_inspect`/`sequence_inspect`) for the ids of items, clips and tracks; \
+(2) `command_list {filter}` / `command_describe {id}` for a command's params and, if it can't run now, why; \
+(3) make the change with `command_batch {steps, atomic: true, label}`: all steps or none, and ONE undo step the user can take back; \
+(4) verify with `sequence_inspect` (exact ticks and frames) and `render_preview` (the picture); undo with `command_run {id: \"edit.undo\"}` if it is wrong. \
+Prefer commands over clicks: they work headless and are exact. In bridge mode (the live app) the `ui_*` tools reach every on-screen control: \
+`ui_find {query}` / `ui_elements` list them (role, enabled, checked, value), `ui_click {id}` presses one (opening its panel if needed) and reports the commands it ran, \
+`ui_drag`, `ui_key`, `ui_type`, `ui_screenshot`; `ui_control` calls any control-channel method (`ui.set` for view state). \
+`command_run {id: \"command.recent\"}` shows what was run lately, by an agent or by the user. \
+Time is in ticks: 254016000000 per second (commands also accept `seconds`, `frame` or `timecode`).";
+
+/// Ids that look like `id` (shared words or a common prefix), at most five.
+fn close_matches(list: &[Value], id: &str) -> Vec<String> {
+    let id = id.to_ascii_lowercase();
+    let words: Vec<&str> = id.split(['.', '_', '-', ' ']).filter(|w| w.len() > 2).collect();
+    let mut scored: Vec<(usize, String)> = list
+        .iter()
+        .filter_map(|c| {
+            let cid = c["id"].as_str()?;
+            let hay = format!("{} {}", cid, c["label"].as_str().unwrap_or("")).to_ascii_lowercase();
+            let score = words.iter().filter(|w| hay.contains(*w)).count();
+            (score > 0).then(|| (score, cid.to_string()))
+        })
+        .collect();
+    scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    scored.into_iter().take(5).map(|(_, id)| id).collect()
+}
 
 /// Resources: the project (as `doc_inspect`) and the command catalog (as `command_list`).
 const DOCUMENT_URI: &str = "filmcraft://document";
@@ -755,7 +847,18 @@ mod tests {
             }
         }
         let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
-        for want in ["command_list", "command_run", "command_batch", "doc_inspect", "render_preview", "project_inspect", "render_frame", "ui_click"] {
+        for want in [
+            "command_list",
+            "command_run",
+            "command_batch",
+            "command_describe",
+            "doc_inspect",
+            "render_preview",
+            "project_inspect",
+            "render_frame",
+            "ui_click",
+            "ui_find",
+        ] {
             assert!(names.contains(&want), "{want} not listed");
         }
         let ro = |n: &str| tools.iter().find(|t| t["name"] == n).map(|t| t["annotations"]["readOnlyHint"].clone());
@@ -797,6 +900,44 @@ mod tests {
         assert!(v["project"].is_object() && v["sequence"].is_object(), "{v}");
         let r = c.call(9, "render_preview", json!({"max_side": 64})).await;
         assert_eq!(r["result"]["content"][0]["type"], "image", "{r}");
+    }
+
+    /// `command_batch {atomic: true}` is all or nothing and one undo step; `command_describe`
+    /// explains one command and suggests ids for a wrong one.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn atomic_batches_and_describe() {
+        let mut c = Client::start(demo());
+        c.init().await;
+        let text = |r: &Value| r["result"]["content"][0]["text"].as_str().unwrap_or_default().to_string();
+        let seq = |r: &Value| -> Value { serde_json::from_str(&text(r)).unwrap() };
+        let before = seq(&c.call(1, "sequence_inspect", json!({})).await);
+        let cut = |t: f64| json!({"id": "sequence.addEditAllTracks", "params": {"seconds": t}});
+        // a failing step: nothing changed
+        let r = c.call(2, "command_batch", json!({"atomic": true, "steps": [cut(1.0), {"id": "no.such"}]})).await;
+        assert_eq!(r["result"]["isError"], true, "{r}");
+        assert!(text(&r).contains("step 2 (`no.such`)") && text(&r).contains("rolled back"), "{r}");
+        assert_eq!(seq(&c.call(3, "sequence_inspect", json!({})).await)["tracks"], before["tracks"]);
+        // success: one undo step with the label, undone at once
+        let r = c.call(4, "command_batch", json!({"atomic": true, "label": "Agent: cuts", "steps": [cut(1.0), cut(2.0)]})).await;
+        assert_eq!(r["result"]["isError"], false, "{r}");
+        assert_eq!(seq(&r)["undo"], "Agent: cuts", "{r}");
+        let h = seq(&c.call(5, "command_run", json!({"id": "history.list"})).await);
+        assert_eq!(h["undo"].as_array().unwrap().last(), Some(&json!("Agent: cuts")), "{h}");
+        c.call(6, "command_run", json!({"id": "edit.undo"})).await;
+        assert_eq!(seq(&c.call(7, "sequence_inspect", json!({})).await)["tracks"], before["tracks"]);
+        // describe: params and why it can't run now
+        let r = c.call(8, "command_describe", json!({"id": "edit.ripple.delete.nope"})).await;
+        assert_eq!(r["result"]["isError"], true, "{r}");
+        assert!(text(&r).contains("did you mean") && text(&r).contains("delete"), "{r}");
+        c.call(9, "command_run", json!({"id": "timeline.select", "params": {"clips": []}})).await;
+        let d = seq(&c.call(10, "command_describe", json!({"id": "edit.clear"})).await);
+        assert_eq!((d["enabled"].as_bool(), d["scope"].as_str()), (Some(false), Some("engine")), "{d}");
+        assert!(d["disabledReason"].as_str().is_some_and(|w| w.contains("select")), "{d}");
+        // what ran lately
+        let recent = seq(&c.call(11, "command_run", json!({"id": "command.recent"})).await);
+        let ids: Vec<&str> = recent["commands"].as_array().unwrap().iter().filter_map(|c| c["id"].as_str()).collect();
+        assert!(ids.contains(&"edit.batch") && ids.contains(&"edit.undo"), "{recent}");
+        assert!(!ids.contains(&"sequence.inspect"), "queries are not listed: {recent}");
     }
 
     /// `filmcraft://document` and `filmcraft://commands` are listed and readable as JSON.

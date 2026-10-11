@@ -713,7 +713,10 @@ All of these dispatch the same command ids.
 
 - **Automation ids.** Every interactive widget calls `app.auto.add(id, rect, label)` each frame
   (`crates/ui-egui/src/automation.rs`). Agents click by id, e.g. `tools.Razor`,
-  `timeline.clip.<id>`, `effects.item.gaussian_blur`, `panel.Timeline`.
+  `timeline.clip.<id>`, `effects.item.gaussian_blur`, `panel.Timeline`. While the app is driven
+  (`--control`) it also reads egui's AccessKit tree, which adds each element's `role`, `enabled`,
+  `checked` and `value` and lists any widget nobody registered as `auto.<panel>.<label>`
+  (`every_button_ui` keeps that list empty).
 - **UI state** that is not project data (tool, workspace, dock layout, zoom, scroll, monitor
   settings) is in `crates/ui-egui/src/state.rs` as serde structs, so `ui.inspect` and `ui.set` can
   read and write it.

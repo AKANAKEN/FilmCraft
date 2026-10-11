@@ -995,7 +995,7 @@ fn draw_headers(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence, rows:
         // 1. source patch (absent when unpatched)
         let patched = if r.kind == TrackKind::Video { tg.video_dest == Some(r.track) } else { tg.audio_dest == Some(r.track) };
         let pr = btn_rect(13.0);
-        app.auto.add(&format!("timeline.track.{label}.sourcePatch"), pr, "Source patch");
+        app.auto.add(&format!("timeline.track.{label}.sourcePatch"), pr.intersect(visible), "Source patch");
         if patch_button(ui, pr, visible, &label, patched, false, egui::Id::new(("patch", r.track.0)), t).clicked() {
             actions.push(("timeline.setTargeting".into(), json!({"track": r.track.0, "sourcePatch": !patched})));
         }
@@ -1012,7 +1012,7 @@ fn draw_headers(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence, rows:
             egui::Id::new(("locked", r.track.0)),
             Some(if tr.locked { t.icon_active } else { t.text_dim }),
         );
-        app.auto.add(&format!("timeline.track.{label}.locked"), lock_r, "Toggle Track Lock");
+        app.auto.add(&format!("timeline.track.{label}.locked"), lock_r.intersect(visible), "Toggle Track Lock");
         if lresp.clicked() {
             actions.push(("timeline.setTrack".into(), json!({"track": r.track.0, "locked": !tr.locked})));
         }
@@ -1023,7 +1023,7 @@ fn draw_headers(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence, rows:
         // 3. target
         let targeted = tg.targeted.contains(&r.track);
         let trr = btn_rect(61.0);
-        app.auto.add(&format!("timeline.track.{label}.target"), trr, "Toggle track targeting");
+        app.auto.add(&format!("timeline.track.{label}.target"), trr.intersect(visible), "Toggle track targeting");
         if patch_button(ui, trr, visible, &label, targeted, true, egui::Id::new(("target", r.track.0)), t).clicked() {
             actions.push(("timeline.setTargeting".into(), json!({"track": r.track.0, "targeted": !targeted})));
         }
@@ -1032,7 +1032,7 @@ fn draw_headers(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence, rows:
         let sr = small(x, upper_y);
         let sresp =
             crate::widgets::icon_toggle(ui, sr.intersect(visible), Icon::SyncLock, tr.sync_lock, t, egui::Id::new(("syncLock", r.track.0)), Some(t.text_dim));
-        app.auto.add(&format!("timeline.track.{label}.syncLock"), sr, "Toggle Sync Lock");
+        app.auto.add(&format!("timeline.track.{label}.syncLock"), sr.intersect(visible), "Toggle Sync Lock");
         if sresp.clicked() {
             actions.push(("timeline.setTrack".into(), json!({"track": r.track.0, "syncLock": !tr.sync_lock})));
         }
@@ -1048,7 +1048,7 @@ fn draw_headers(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence, rows:
                 egui::Id::new(("enabled", r.track.0)),
                 Some(t.text_dim),
             );
-            app.auto.add(&format!("timeline.track.{label}.enabled"), er, "Toggle Track Output");
+            app.auto.add(&format!("timeline.track.{label}.enabled"), er.intersect(visible), "Toggle Track Output");
             if eresp.clicked() {
                 actions.push(("timeline.setTrack".into(), json!({"track": r.track.0, "enabled": !tr.enabled})));
             }
@@ -1063,7 +1063,7 @@ fn draw_headers(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence, rows:
                 t,
                 egui::Id::new(("mute", r.track.0)),
             );
-            app.auto.add(&format!("timeline.track.{label}.muted"), mr, "Mute Track");
+            app.auto.add(&format!("timeline.track.{label}.muted"), mr.intersect(visible), "Mute Track");
             if mresp.clicked() {
                 actions.push(("timeline.setTrack".into(), json!({"track": r.track.0, "muted": !tr.muted})));
             }
@@ -1077,7 +1077,7 @@ fn draw_headers(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence, rows:
                 t,
                 egui::Id::new(("solo", r.track.0)),
             );
-            app.auto.add(&format!("timeline.track.{label}.solo"), s2, "Solo Track");
+            app.auto.add(&format!("timeline.track.{label}.solo"), s2.intersect(visible), "Solo Track");
             if so.clicked() {
                 actions.push(("timeline.setTrack".into(), json!({"track": r.track.0, "solo": !tr.solo})));
             }
@@ -1105,11 +1105,9 @@ fn draw_headers(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence, rows:
                 *h = (*h + d).clamp(22.0, 220.0);
             }
         }
-        let resp = ui.interact(
-            Rect::from_min_max(pos2(hrect.min.x + 90.0, hrect.min.y + 26.0), hrect.max).intersect(visible),
-            egui::Id::new(("hdr", r.track.0)),
-            Sense::click(),
-        );
+        let hdr = Rect::from_min_max(pos2(hrect.min.x + 90.0, hrect.min.y + 26.0), hrect.max).intersect(visible);
+        let resp = ui.interact(hdr, egui::Id::new(("hdr", r.track.0)), Sense::click());
+        app.auto.add(&format!("timeline.track.{label}.header"), hdr, "Track header (double-click to expand or collapse)");
         if resp.double_clicked() {
             let h = if r.kind == TrackKind::Video { &mut app.ui.timeline.video_track_h } else { &mut app.ui.timeline.audio_track_h };
             *h = if *h < 50.0 { 64.0 } else { 30.0 };
@@ -2207,14 +2205,17 @@ fn interact(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence, layout: &
             }
             for &(label, cmd) in *group {
                 if cmd == "edit.label" {
-                    ui.menu_button(crate::i18n::t(label), |ui| {
+                    let sub = ui.menu_button(crate::i18n::t(label), |ui| {
                         for l in filmcraft_project::Label::ALL {
-                            if ui.button(crate::i18n::t(l.name())).clicked() {
+                            let r = ui.button(crate::i18n::t(l.name()));
+                            app.auto.add(&format!("timeline.clipMenu.edit.label.{}", l.name()), r.rect, l.name());
+                            if r.clicked() {
                                 let _ = app.session.execute("edit.label", json!({"label": l.name()}));
                                 ui.close();
                             }
                         }
                     });
+                    app.auto.add("timeline.clipMenu.edit.label", sub.response.rect, label);
                     continue;
                 }
                 if cmd == "clip.multicam" {

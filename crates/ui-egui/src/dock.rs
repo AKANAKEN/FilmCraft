@@ -119,6 +119,32 @@ impl PanelKind {
             _ => None,
         }
     }
+    /// The panel that draws the element with automation id `id` (by its first segment:
+    /// `timeline.track.V1.locked` → Timeline), so a click on an element of a panel that isn't on
+    /// screen can bring the panel up first. None for ids of dialogs, menus and the header.
+    pub fn owning(id: &str) -> Option<PanelKind> {
+        let head = id.split('.').next()?;
+        Some(match head {
+            "timeline" => PanelKind::Timeline,
+            "project" | "projectBin" | "projectPanel" => PanelKind::Project,
+            "mediaBrowser" => PanelKind::MediaBrowser,
+            "program" | "trimMonitor" => PanelKind::Program,
+            "source" | "src" => PanelKind::Source,
+            "effectControls" | "masks" => PanelKind::EffectControls,
+            "effects" => PanelKind::Effects,
+            "mixer" => PanelKind::AudioTrackMixer,
+            "clipMixer" => PanelKind::AudioClipMixer,
+            "lumetri" => PanelKind::LumetriColor,
+            "scopes" => PanelKind::LumetriScopes,
+            "essentialSound" => PanelKind::EssentialSound,
+            "graphics" => PanelKind::EssentialGraphics,
+            "text" | "captions" => PanelKind::Text,
+            "audioMeters" => PanelKind::AudioMeters,
+            "reference" => PanelKind::ReferenceMonitor,
+            "panel" => PanelKind::from_name(id.split('.').nth(1)?)?,
+            other => PanelKind::from_name(other)?,
+        })
+    }
     /// Narrow chrome-less panels (no tab strip; a slim grip instead).
     pub fn compact(self) -> bool {
         matches!(self, PanelKind::Tools | PanelKind::AudioMeters)
@@ -259,7 +285,8 @@ pub fn workspace(name: &str) -> DockNode {
                 hsplit(Ratio(0.5), tabs(&[Source, EffectControls, AudioClipMixer], 1), tabs(&[Program], 0)),
                 hsplit(Ratio(0.3), tabs(&[Project, MediaBrowser, Info, Markers, History], 0), bottom_editing()),
             ),
-            vsplit(Ratio(0.5), tabs(&[Effects], 0), tabs(&[EffectControls, EssentialGraphics], 1)),
+            // Effect Controls is in the upper left already: a panel is in one place only
+            vsplit(Ratio(0.5), tabs(&[Effects], 0), tabs(&[EssentialGraphics], 0)),
         ),
         "Audio" => hsplit(
             FixedB(320.0),
@@ -757,6 +784,30 @@ mod tests {
         assert_eq!(split_first(SplitSize::FixedA(300.0), 1000.0), 300.0);
         assert_eq!(split_first(SplitSize::FixedB(300.0), 1000.0), 700.0);
         assert_eq!(split_first(SplitSize::Ratio(0.0), 1000.0), 20.0);
+    }
+
+    /// A panel is in one place only: two tabs of one panel made `panel.tab.<Panel>` name two
+    /// widgets and left `activate` to pick one (the Effects workspace had Effect Controls twice).
+    #[test]
+    fn no_workspace_has_a_panel_twice() {
+        for name in WORKSPACES {
+            let mut panels = Vec::new();
+            workspace(name).panels(&mut panels);
+            let mut seen = std::collections::HashSet::new();
+            for p in panels {
+                assert!(seen.insert(p), "{name} has {p:?} twice");
+            }
+        }
+    }
+
+    #[test]
+    fn owning_panels_of_element_ids() {
+        assert_eq!(PanelKind::owning("timeline.track.V1.locked"), Some(PanelKind::Timeline));
+        assert_eq!(PanelKind::owning("mixer.A1.mute"), Some(PanelKind::AudioTrackMixer));
+        assert_eq!(PanelKind::owning("panel.Program"), Some(PanelKind::Program));
+        assert_eq!(PanelKind::owning("history.state.2"), Some(PanelKind::History));
+        assert_eq!(PanelKind::owning("window.audioGain.close"), None);
+        assert_eq!(PanelKind::owning(""), None);
     }
 
     #[test]

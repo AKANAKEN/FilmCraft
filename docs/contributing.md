@@ -246,6 +246,12 @@ stream is cut into blocks (there are tests for this).
   app.auto.add(&format!("effects.item.{}", d.id), rect, d.name);
   ```
   Ids are stable, dot-separated and start with the panel (`timeline.track.V1.lock`, `tools.Razor`).
+  Register the rect that takes the click (clipped to what is visible), not a padded one. The
+  `every_button_ui` test (`crates/ui-egui/tests/every_button_ui.rs`) opens every workspace, panel,
+  mode, menu dialog, panel menu and context menu and fails on any widget egui drew without an id,
+  naming it, its rect and the registered element next to it. A button's action runs a command
+  (`session.execute` / `menus::invoke`), never `session.undo()` or a direct project change, so
+  agents can do it headless and a click reports what it ran.
 - UI state that should survive or be scriptable goes in `crates/ui-egui/src/state.rs` (serde), so
   `ui.inspect` and `ui.set` can reach it.
 - Project changes go through `session.execute(…)`, never by mutating the project directly.

@@ -54,9 +54,10 @@ claude mcp add filmcraft -- filmcraft-cli mcp
 
 | Tool | Modes | Purpose |
 |---|---|---|
-| `command_list` | both | every command: id, label, menu, shortcut, params, enabled now (`filter`, `enabled_only`) |
+| `command_list` | both | every command: id, label, menu, shortcut, params, enabled now and, if not, `disabledReason`; `scope` is `engine` or, in bridge mode, `ui` for the app's own commands (tools, playback, view, workspaces, panels) (`filter`, `enabled_only`) |
+| `command_describe` | both | one command in full (`{id}`); a wrong id gets the closest matches |
 | `command_run` | both | run a command `{id, params}`; edits are undoable |
-| `command_batch` | both | run several commands in order `{steps: [{id, params}], stop_on_error}` → `{completed, failed, results}` |
+| `command_batch` | both | run several commands in order `{steps: [{id, params}], stop_on_error}` → `{completed, failed, results}`; with `atomic: true` (and an undo `label`) all or nothing and **one** undo step, see [§1a](#1a-edits-that-must-be-right) |
 | `doc_inspect` | both | the project tree and the active sequence in one call (`project_inspect` + `sequence_inspect`) |
 | `render_preview` | both | same as `render_frame` |
 | `project_inspect` | both | bins and items with ids, types, durations; active sequence |
@@ -64,8 +65,9 @@ claude mcp add filmcraft -- filmcraft-cli mcp
 | `media_import` | both | import files by absolute path (`text`, one path per line) |
 | `render_frame` | both | PNG of the program frame at `seconds` (headless renders; bridge screenshots the Program monitor). Read-only: the playhead and selection are left as they were |
 | `ui_inspect` | bridge | UI state: tool, workspace, panels, zoom, playback, fps |
-| `ui_elements` | bridge | on-screen interactive elements with id, label and rect (`prefix` filter) |
-| `ui_click` | bridge | click by `id` or `x`,`y`; `button`, `count`, `modifiers` |
+| `ui_elements` | bridge | every on-screen control: id, label, rect, `role`, `enabled`, `checked`, `value` (`prefix`, `query`, `role`, `discovered` filters), see [§1b](#1b-every-button) |
+| `ui_find` | bridge | controls whose id or label has all the words of `query` (optionally one `role`) |
+| `ui_click` | bridge | click by `id` or `x`,`y`; `button`, `count`, `modifiers`. Opens the panel of an element that isn't on screen, and returns `{ran: [{id, params, error?}]}`, the commands the click ran (with a `warning` when it ran nothing on an element that looked disabled) |
 | `ui_drag` | bridge | press–move–release between points or element ids |
 | `ui_key` | bridge | key or shortcut: `Space`, `Cmd+K`, `Shift+Delete` |
 | `ui_type` | bridge | type text into the focused field |
@@ -75,6 +77,52 @@ claude mcp add filmcraft -- filmcraft-cli mcp
 Typical loop: `project_inspect` / `sequence_inspect` → get ids → `command_run` → `render_frame` or
 `ui_screenshot` → look at the result → `edit.undo` if it's wrong.
 
+### 1a. Edits that must be right
+
+For work a person will review rather than redo, make each change one transaction:
+
+1. **Read.** `doc_inspect` (or `sequence_inspect`) gives the ids of items, clips and tracks and the
+   exact `start` / `end` in ticks and frames. Never guess an id or a time.
+2. **Check the commands.** `command_describe {id}` gives the parameters and, when the command can't
+   run now, why (`disabledReason`: "no clips selected", "no sequence is open"). Name the targets
+   (`clips`, `item`) instead of relying on the selection.
+3. **Change.** `command_batch {steps, atomic: true, label: "Agent: rough cut of scene 3"}` runs the
+   steps as the engine command `edit.batch`. If a step fails, every earlier step is rolled back
+   (project, selection, playhead, history and journal as before) and the error names the step. If
+   all succeed, the whole change is one step in History named `label`: the reviewer takes it back
+   with one Undo, or clicks the step before it in the History panel (`history.step {steps: -1}`).
+4. **Verify.** `sequence_inspect` again and compare the numbers you expect; `render_preview` at the
+   cuts you made. `command_run {id: "command.recent"}` lists the commands that ran (yours, and in
+   bridge mode the person's: a click on a button reports its command too).
+
+A batch cannot take back files it wrote (exports, saves), preferences or background jobs, and in
+the desktop app not frontend state (tool, workspace, playback). In bridge mode the steps run as
+`engine.execute` would run them, so UI commands (`tool.razor`, `window.panel.Timeline`) work in a
+batch; headless, only engine commands exist.
+
+### 1b. Every button
+
+Every control the app draws can be operated by id, in bridge mode:
+
+- `ui_elements` / `ui_find` list what is on screen with `role` (`button`, `checkbox`, `radio`,
+  `comboBox`, `slider`, `number`, `textInput`, `tab`, `link`, `clickable` for custom widgets),
+  `enabled` (false: greyed out, a click does nothing), `checked` (toggles, mute / solo, selected
+  rows) and `value` (fields, sliders, the current choice of a dropdown).
+- Ids are registered by the panels (`timeline.track.V1.locked`, `effectControls.motion.scale.value`,
+  `properties.motion.position.x`, `panel.menu.Program.maximize`, `history.state.3`). What egui draws
+  by itself has fixed ids too: a dialog's close button `window.<title>.close`, a movable dialog's
+  title bar `window.<title>.titleBar`, a slider's number box `<slider id>.value`.
+- A widget nobody registered still appears, as `auto.<panel>.<label>` with `discovered: true`. That
+  is a bug: `crates/ui-egui/tests/every_button_ui.rs` opens every workspace, panel, mode, menu
+  dialog, panel menu and context menu and fails on any.
+- `ui_click {id}` on an element of a closed or hidden panel (or in Import / Export mode) brings the
+  panel up first. A click returns the commands it ran: `[{"id": "timeline.setTrack", "params":
+  {"track": 3, "locked": true}}]`. Next time, run that command directly: it works headless, needs
+  no layout and is exact. An empty `ran` means the click only changed the view (zoom, a twirl, a
+  tab) or hit nothing; on an element that looked disabled the reply has a `warning` too.
+- The app's `command_list` includes its own commands (`scope: "ui"`): `tool.*`, `playback.*`,
+  `view.*`, `window.workspace.*`, `window.panel.*`, `app.settings.*`, `mode.*`.
+
 ### Conventions
 
 The server follows a few conventions that make it predictable for agents. They are not
@@ -83,6 +131,8 @@ driven one app can drive the others.
 
 - **Core tools.** `command_list`, `command_run`, `command_batch`, `doc_inspect` and `render_preview`
   work in both modes. The FilmCraft tools above stay as they are.
+- **Instructions.** The server's `instructions` (sent at `initialize`) carry the loop of
+  [§1a](#1a-edits-that-must-be-right), so an agent that has read nothing else edits safely.
 - **Titles and annotations.** Every tool has a `title` and the four MCP hints (`readOnlyHint`,
   `destructiveHint`, `idempotentHint`, `openWorldHint`), so a client can let the read-only tools
   (lists, inspects, renders, screenshots) run without asking and ask before edits. When you add a

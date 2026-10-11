@@ -24,9 +24,9 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
             format!("{} ({})", app.ui.language.tr(current.label()), current.shortcut())
         };
         let resp = ui.interact(r, egui::Id::new(("tool", format!("{:?}", group[0]))), Sense::click()).on_hover_text(tip);
-        for tl in &group {
-            app.auto.add(&format!("tools.{tl:?}"), r, tl.label());
-        }
+        // only the tool the button shows: a click selects that one, whatever else is in its group
+        // (the others are `tools.select.<Tool>` in the flyout, or the `tool.*` commands)
+        app.auto.add(&format!("tools.{current:?}"), r, current.label());
         let active = group.contains(&app.ui.tool);
         if active {
             ui.painter().rect_filled(Rect::from_center_size(r.center(), vec2(26.0, 26.0)), 4.0, t.accent);
@@ -40,7 +40,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         }
         let held = ui.data(|d| d.get_temp::<egui::Id>(held_id)) == Some(resp.id);
         if resp.clicked() && !held {
-            app.ui.tool = current;
+            select(app, current);
         }
         if group.len() > 1 {
             let held_for = resp.is_pointer_button_down_on().then(|| ui.input(|i| i.pointer.press_start_time().map(|s| i.time - s))).flatten();
@@ -66,7 +66,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                     let row = ui.selectable_label(app.ui.tool == *tl, format!("{}   {}", app.ui.language.tr(tl.label()), tl.shortcut()));
                     app.auto.add(&format!("tools.select.{tl:?}"), row.rect, tl.label());
                     if row.clicked() {
-                        app.ui.tool = *tl;
+                        select(app, *tl);
                         ui.close();
                     }
                 }
@@ -77,6 +77,12 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
             break;
         }
     }
+}
+
+/// Make `tool` current, noted as its command (`tool.razor`) so a click reports what it did.
+fn select(app: &mut FilmcraftApp, tool: Tool) {
+    app.ui.tool = tool;
+    app.session.note_command(&format!("tool.{}", crate::automation::slug(&format!("{tool:?}"))), &serde_json::json!({}), None);
 }
 
 #[cfg(test)]

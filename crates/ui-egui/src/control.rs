@@ -7,7 +7,10 @@
 //! - `engine.execute {command, params}` / `ui.menu.invoke {id}`: run any engine or UI command
 //! - `engine.commands`: list engine commands; `ui.menu.list`: menu tree with enablement
 //! - `ui.inspect`: UI state + every registered widget (`elements`: id, label, rect)
-//! - `ui.elements {prefix?}`: registered widgets (optionally filtered by id prefix)
+//! - `ui.elements {prefix?, query?, role?, discovered?}`: every on-screen widget (registered ids, and
+//!   while driven the ones only AccessKit knows, as `auto.*`), with role / enabled / checked / value
+//! - `ui.click {id}` brings up the panel that draws `id` when it isn't on screen; the reply of
+//!   `ui.click` / `ui.drag` / `ui.key` / … lists the commands the input ran (`ran`)
 //! - `ui.set {tool?, workspace?, mode?, theme?, focused?, playbackRes?, timeline?:{pps,scroll}}`
 //! - `ui.panel.show {panel}` / `ui.panel.close {panel}`
 //! - `ui.click {id | x,y, button?, count?, modifiers?}` / `ui.move {x,y}` / `ui.scroll {x,y,dx,dy}`
@@ -95,6 +98,42 @@ fn point(app: &FilmcraftApp, p: &Value) -> Result<egui::Pos2, String> {
     Ok(egui::pos2(x as f32, y as f32))
 }
 
+/// Bring up the panel that draws element `{id}` when it isn't on screen (its panel is closed or
+/// behind another tab, or the app is in Import / Export mode), so any element can be clicked by id.
+fn reveal(app: &mut FilmcraftApp, p: &Value) {
+    let Some(id) = p.get("id").and_then(Value::as_str) else { return };
+    if app.auto.find(id).is_some() {
+        return;
+    }
+    let Some(panel) = PanelKind::owning(id) else { return };
+    if app.ui.mode != Mode::Edit {
+        app.ui.mode = Mode::Edit;
+    }
+    if app.auto.find(&format!("panel.{}", panel.id())).is_none() {
+        app.show_panel(panel);
+    }
+}
+
+/// `ui.elements {prefix?, query?, role?, discovered?}`: the on-screen elements, filtered. `query`
+/// matches id or label (case-insensitive, every word); `role` the kind of control (`button`,
+/// `checkbox`, …); `discovered: true` only the widgets no panel registered.
+fn elements<'a>(app: &'a FilmcraftApp, p: &Value) -> Vec<&'a crate::automation::Element> {
+    let prefix = p.get("prefix").and_then(Value::as_str).unwrap_or("");
+    let words: Vec<String> = p.get("query").and_then(Value::as_str).unwrap_or("").split_whitespace().map(str::to_lowercase).collect();
+    let role = p.get("role").and_then(Value::as_str);
+    let discovered = p.get("discovered").and_then(Value::as_bool);
+    app.auto
+        .query(prefix)
+        .into_iter()
+        .filter(|e| {
+            let hay = format!("{} {}", e.id, e.label).to_lowercase();
+            words.iter().all(|w| hay.contains(w.as_str()))
+                && role.is_none_or(|r| e.role.is_some_and(|er| er.eq_ignore_ascii_case(r)))
+                && discovered.is_none_or(|d| e.discovered == d)
+        })
+        .collect()
+}
+
 pub fn handle(app: &mut FilmcraftApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
     let p = &req.params;
     let s = |k: &str| p.get(k).and_then(Value::as_str);
@@ -119,8 +158,7 @@ pub fn handle(app: &mut FilmcraftApp, ctx: &egui::Context, req: &ControlRequest)
                 // rects of timeline elements are still moving (e.g. the fit after opening a sequence)
                 return Outcome::Retry("the timeline is still zooming".into());
             }
-            let prefix = s("prefix").unwrap_or("");
-            ok(serde_json::to_value(app.auto.query(prefix)).unwrap_or_default())
+            ok(serde_json::to_value(elements(app, p)).unwrap_or_default())
         }
         "ui.set" => {
             if let Some(t) = s("tool") {
@@ -305,6 +343,7 @@ pub fn handle(app: &mut FilmcraftApp, ctx: &egui::Context, req: &ControlRequest)
             ok(Value::Null)
         }
         "ui.click" | "ui.move" => {
+            reveal(app, p);
             let pos = match point(app, p) {
                 Ok(p) => p,
                 Err(e) if e.starts_with(RETRY) => return Outcome::Retry(e.trim_start_matches(RETRY).to_string()),
@@ -328,6 +367,7 @@ pub fn handle(app: &mut FilmcraftApp, ctx: &egui::Context, req: &ControlRequest)
         }
         "ui.drag" => {
             let (Some(from), Some(to)) = (p.get("from"), p.get("to")) else { return err("need `from` and `to`") };
+            reveal(app, from);
             let (a, b) = match (point(app, from), point(app, to)) {
                 (Ok(a), Ok(b)) => (a, b),
                 (Err(e), _) | (_, Err(e)) if e.starts_with(RETRY) => return Outcome::Retry(e.trim_start_matches(RETRY).to_string()),
