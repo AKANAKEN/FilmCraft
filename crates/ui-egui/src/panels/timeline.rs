@@ -42,8 +42,9 @@ pub struct TlState {
     pub layout: Option<Layout>,
     /// Snap indicator x (screen) this frame.
     snap_x: Option<f32>,
-    pub peaks: Arc<Mutex<HashMap<ItemId, Arc<Vec<(f32, f32)>>>>>,
-    peaks_pending: Arc<Mutex<Vec<ItemId>>>,
+    /// Waveform peaks by media item and audio stream ([`PeakKey`]).
+    pub peaks: Arc<Mutex<HashMap<PeakKey, Arc<Vec<(f32, f32)>>>>>,
+    peaks_pending: Arc<Mutex<Vec<PeakKey>>>,
     /// Nested sequences have waveforms too, of their mix. Unlike media a sequence changes: this is
     /// the content key (see [`sequence_audio_key`]) the cached peaks of each sequence were made
     /// from, and the key worked out for the session revision last seen.
@@ -51,9 +52,14 @@ pub struct TlState {
     seq_keys_seen: HashMap<ItemId, (u64, u64)>,
     /// Source peak of each cached peak list (keyed by the list's address), for the waveform
     /// display gain: scanning the whole source per clip per frame cost more than drawing.
-    peak_max: HashMap<ItemId, (usize, f32)>,
+    peak_max: HashMap<PeakKey, (usize, f32)>,
     zoom_anchor: Option<(f64, f32)>,
 }
+
+/// What waveform peaks are cached by: the media item and the audio stream a clip plays (a
+/// recording with several audio streams puts one clip per stream on A1, A2…, each with its own
+/// sound). Nested sequences use stream 0.
+pub type PeakKey = (ItemId, usize);
 
 impl TlState {
     /// Forget cached waveform peaks: they are keyed by item id, and ids repeat across projects
@@ -712,7 +718,7 @@ fn draw_clip(
 }
 
 fn draw_waveform(app: &mut FilmcraftApp, p: &egui::Painter, body: Rect, it: &TrackItem, col: Color32) {
-    let Some(peaks) = request_peaks(app, it.item) else { return };
+    let Some(peaks) = request_peaks(app, it.item, it.audio_stream) else { return };
     let spp = 256.0;
     let sr = 48_000.0;
     let zone_h = (body.height() * 0.42).max(8.0);
@@ -722,11 +728,11 @@ fn draw_waveform(app: &mut FilmcraftApp, p: &egui::Painter, body: Rect, it: &Tra
         return;
     }
     let key = Arc::as_ptr(&peaks) as usize;
-    let peak = match app.tl.peak_max.get(&it.item) {
+    let peak = match app.tl.peak_max.get(&(it.item, it.audio_stream)) {
         Some(&(k, v)) if k == key => v,
         _ => {
             let v = peaks.iter().fold(0f32, |m, (a, b)| m.max(a.abs()).max(b.abs()));
-            app.tl.peak_max.insert(it.item, (key, v));
+            app.tl.peak_max.insert((it.item, it.audio_stream), (key, v));
             v
         }
     };
@@ -802,17 +808,17 @@ fn request_sequence_peaks(app: &mut FilmcraftApp, item: ItemId) -> Option<Arc<Ve
             key
         }
     };
-    let have = app.tl.peaks.lock().unwrap_or_else(|e| e.into_inner()).get(&item).cloned();
+    let have = app.tl.peaks.lock().unwrap_or_else(|e| e.into_inner()).get(&(item, 0)).cloned();
     let current = app.tl.seq_peak_keys.lock().unwrap_or_else(|e| e.into_inner()).get(&item) == Some(&key);
     if current && have.is_some() {
         return have;
     }
     {
         let mut pend = app.tl.peaks_pending.lock().unwrap_or_else(|e| e.into_inner());
-        if pend.contains(&item) {
+        if pend.contains(&(item, 0)) {
             return have;
         }
-        pend.push(item);
+        pend.push((item, 0));
     }
     let (peaks, keys, pending) = (app.tl.peaks.clone(), app.tl.seq_peak_keys.clone(), app.tl.peaks_pending.clone());
     let project = app.session.project.clone();
@@ -841,10 +847,10 @@ fn request_sequence_peaks(app: &mut FilmcraftApp, item: ItemId) -> Option<Arc<Ve
             Some(out)
         }));
         if let Ok(Some(out)) = mixed {
-            peaks.lock().unwrap_or_else(|e| e.into_inner()).insert(item, Arc::new(out));
+            peaks.lock().unwrap_or_else(|e| e.into_inner()).insert((item, 0), Arc::new(out));
             keys.lock().unwrap_or_else(|e| e.into_inner()).insert(item, key);
         }
-        pending.lock().unwrap_or_else(|e| e.into_inner()).retain(|i| *i != item);
+        pending.lock().unwrap_or_else(|e| e.into_inner()).retain(|k| *k != (item, 0));
     };
     #[cfg(not(target_arch = "wasm32"))]
     std::thread::spawn(run);
@@ -853,21 +859,24 @@ fn request_sequence_peaks(app: &mut FilmcraftApp, item: ItemId) -> Option<Arc<Ve
     have
 }
 
-pub(crate) fn request_peaks(app: &mut FilmcraftApp, item: ItemId) -> Option<Arc<Vec<(f32, f32)>>> {
+/// The waveform peaks of audio stream `stream` of `item` (min/max over its channels per 256
+/// samples at 48 kHz), computed in the background: None until they are ready.
+pub(crate) fn request_peaks(app: &mut FilmcraftApp, item: ItemId, stream: usize) -> Option<Arc<Vec<(f32, f32)>>> {
     if app.session.project.sequence(item).is_some() {
         return request_sequence_peaks(app, item);
     }
-    if let Some(p) = app.tl.peaks.lock().unwrap_or_else(|e| e.into_inner()).get(&item) {
+    let key: PeakKey = (item, stream);
+    if let Some(p) = app.tl.peaks.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
         return Some(p.clone());
     }
     // No source: try again on a later frame instead of leaving the item pending forever.
     let src = app.session.source(item)?;
     {
         let mut pend = app.tl.peaks_pending.lock().unwrap_or_else(|e| e.into_inner());
-        if pend.contains(&item) {
+        if pend.contains(&key) {
             return None;
         }
-        pend.push(item);
+        pend.push(key);
     }
     let peaks = app.tl.peaks.clone();
     let pending = app.tl.peaks_pending.clone();
@@ -880,11 +889,14 @@ pub(crate) fn request_peaks(app: &mut FilmcraftApp, item: ItemId) -> Option<Arc<
         let mut s = 0usize;
         while s < total {
             let n = chunk.min(total - s);
-            match src.audio(s as i64, n, sr) {
+            match src.audio_stream(stream, s as i64, n, sr) {
                 Ok(buf) => {
-                    let ch = buf.channels.first().cloned().unwrap_or_default();
-                    for c in ch.chunks(256) {
-                        let (lo, hi) = c.iter().fold((0f32, 0f32), |(l, h), v| (l.min(*v), h.max(*v)));
+                    // every channel: a voice recorded on one side of a stereo pair shows too
+                    let len = buf.channels.iter().map(Vec::len).max().unwrap_or(0);
+                    for a in (0..len).step_by(256) {
+                        let b = (a + 256).min(len);
+                        let (lo, hi) =
+                            buf.channels.iter().filter_map(|ch| ch.get(a..b.min(ch.len()))).flatten().fold((0f32, 0f32), |(l, h), v| (l.min(*v), h.max(*v)));
                         out.push((lo, hi));
                     }
                 }
@@ -892,8 +904,8 @@ pub(crate) fn request_peaks(app: &mut FilmcraftApp, item: ItemId) -> Option<Arc<
             }
             s += n;
         }
-        peaks.lock().unwrap_or_else(|e| e.into_inner()).insert(item, Arc::new(out));
-        pending.lock().unwrap_or_else(|e| e.into_inner()).retain(|i| *i != item);
+        peaks.lock().unwrap_or_else(|e| e.into_inner()).insert(key, Arc::new(out));
+        pending.lock().unwrap_or_else(|e| e.into_inner()).retain(|k| *k != key);
     };
     #[cfg(not(target_arch = "wasm32"))]
     std::thread::spawn(run);

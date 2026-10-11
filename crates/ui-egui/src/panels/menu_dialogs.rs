@@ -197,10 +197,9 @@ pub fn route(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, params: &Val
         "clip.generateAudioWaveform" => {
             let r = app.session.execute(id, params.clone()).map_err(|e| e.to_string());
             if let Ok(v) = &r {
-                let mut peaks = app.tl.peaks.lock().unwrap_or_else(|e| e.into_inner());
-                for i in v["items"].as_array().cloned().unwrap_or_default() {
-                    peaks.remove(&filmcraft_engine::project::ItemId(i.as_u64().unwrap_or_default()));
-                }
+                let ids: Vec<u64> = v["items"].as_array().map(|a| a.iter().filter_map(serde_json::Value::as_u64).collect()).unwrap_or_default();
+                // every audio stream of those items
+                app.tl.peaks.lock().unwrap_or_else(|e| e.into_inner()).retain(|(i, _), _| !ids.contains(&i.0));
             }
             return Some(r);
         }
