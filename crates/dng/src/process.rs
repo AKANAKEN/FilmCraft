@@ -18,7 +18,8 @@
 use rayon::prelude::*;
 
 use crate::color::{M3, V3};
-use crate::demosaic::{Pattern, demosaic};
+use crate::demosaic::{Pattern, demosaic_with};
+use crate::options::ProcessOptions;
 use crate::raw::RawImage;
 use crate::{Error, Result};
 
@@ -131,6 +132,12 @@ pub struct Developed {
 
 /// Develop `raw` (steps 1–7). `neutral` and `matrix` come from [`crate::color::Calibration::solve`].
 pub fn develop(raw: &RawImage, p: &Params, neutral: &V3, matrix: &M3) -> Result<Developed> {
+    develop_with(raw, p, neutral, matrix, &ProcessOptions::default())
+}
+
+/// [`develop`] with raw settings. White balance and exposure are already in `neutral` and
+/// `matrix` ([`crate::Dng::develop_with`] solves them); this applies the demosaic quality.
+pub fn develop_with(raw: &RawImage, p: &Params, neutral: &V3, matrix: &M3, o: &ProcessOptions) -> Result<Developed> {
     let spp = raw.samples_per_pixel;
     if p.cfa.is_some() && spp != 1 {
         return Err(Error::Malformed("a CFA image with more than one sample per pixel"));
@@ -144,7 +151,7 @@ pub fn develop(raw: &RawImage, p: &Params, neutral: &V3, matrix: &M3) -> Result<
     let norm = normalise(raw, p, active, neutral, planes)?;
     // three samples per pixel
     let rgb = match (&p.cfa, spp) {
-        (Some(pat), _) => demosaic(&norm, aw, ah, pat),
+        (Some(pat), _) => demosaic_with(&norm, aw, ah, pat, o.demosaic),
         (None, 3) => norm,
         _ => norm.iter().flat_map(|&v| [v, v, v]).collect(),
     };

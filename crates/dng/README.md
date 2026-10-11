@@ -22,6 +22,7 @@ when it is installed, never linked.
 | Malvar, He, Cutler, "High-quality linear interpolation for demosaicing of Bayer-patterned color images", IEEE ICASSP | 2004 | the Bayer demosaic filters |
 | McCamy, "Correlated color temperature as an explicit function of chromaticity coordinates", Color Res. Appl. 17(2) | 1992 | white xy → temperature for the calibration interpolation |
 | IEC 61966-2-1 (sRGB) | 1999 | Rec. 709 / sRGB primaries and D65 white |
+| Krystek, "An algorithm to calculate correlated colour temperature", Color Res. Appl. 10(1) | 1985 | the Planckian locus in CIE 1960 uv for temperature / tint white balance |
 
 ## API
 
@@ -33,7 +34,16 @@ if filmcraft_dng::sniff(&bytes) {
     let img = dng.develop()?;   // linear Rec. 709 RGBA f32 (alpha 1), info.width × info.height
 }
 let img = filmcraft_dng::decode(&bytes)?; // parse + develop
+// raw settings: white balance (as shot or temperature / tint), exposure, highlights, demosaic
+// quality, output space, and a target size for a reduced-resolution fast path
+let o = filmcraft_dng::ProcessOptions { exposure: 0.5, ..Default::default() };
+let img = filmcraft_dng::decode_with(&bytes, &o)?;
 ```
+
+`ProcessOptions::default()` develops exactly like `decode`. `Highlights::Recover` is accepted but
+not implemented yet (it develops like `Clip`). `Dng::as_shot_temperature_tint` gives the as-shot
+white as kelvin and tint, the starting point of a white-balance control; temperature and tint
+are a point on the Planckian locus (Krystek 1985) and a CIE 1960 Δuv (tint 150 = Δuv −0.05).
 
 `writer` (feature `writer`, tests only) writes synthetic DNGs: uncompressed at any depth or
 lossless JPEG with any predictor, strips or tiles, either byte order, an optional preview IFD with

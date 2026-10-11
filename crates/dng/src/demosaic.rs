@@ -13,6 +13,8 @@
 #[cfg(feature = "threads")]
 use rayon::prelude::*;
 
+use crate::options::DemosaicQuality;
+
 /// A CFA pattern: `rows` × `cols` colour indices (0 red, 1 green, 2 blue), origin at the top left
 /// of the image.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -71,12 +73,17 @@ fn padded(plane: &[f32], w: usize, h: usize) -> (Vec<f32>, usize) {
 
 /// Demosaic `plane` (`w` × `h`, one sample per pixel) into interleaved RGB.
 pub fn demosaic(plane: &[f32], w: usize, h: usize, pattern: &Pattern) -> Vec<f32> {
+    demosaic_with(plane, w, h, pattern, DemosaicQuality::High)
+}
+
+/// [`demosaic`] at a chosen quality: [`DemosaicQuality::Fast`] is bilinear for every pattern.
+pub fn demosaic_with(plane: &[f32], w: usize, h: usize, pattern: &Pattern, quality: DemosaicQuality) -> Vec<f32> {
     let mut out = vec![0f32; w * h * 3];
     if w == 0 || h == 0 || plane.len() < w * h {
         return out;
     }
     let (p, pw) = padded(plane, w, h);
-    let bayer = pattern.is_bayer() && w >= 3 && h >= 3;
+    let bayer = quality == DemosaicQuality::High && pattern.is_bayer() && w >= 3 && h >= 3;
     let row = |y: usize, o: &mut [f32]| {
         if bayer {
             malvar_row(&p, pw, y, w, pattern, o);
