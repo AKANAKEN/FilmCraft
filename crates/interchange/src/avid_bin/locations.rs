@@ -9,6 +9,9 @@ pub struct Locator<'a> {
     pub path: Option<Text<'a>>,
     pub posix: Option<Text<'a>>,
     pub utf8: Option<Text<'a>>,
+    /// FILE extension 3: an additional UTF-8 location, observed as either a UNC or
+    /// POSIX path. Retained separately; its precedence over other paths is unknown.
+    pub alternate_utf8: Option<Text<'a>>,
     pub volume: Option<Text<'a>>,
     pub volume_utf8: Option<Text<'a>>,
     pub legacy_id_raw: Option<&'a [u8]>,
@@ -92,7 +95,8 @@ impl<'a> Decode<'a, '_> {
         Ok(rate)
     }
     pub(super) fn locator(&mut self, class: [u8; 4]) -> Result<Locator<'a>> {
-        let mut out = Locator { path: None, posix: None, utf8: None, volume: None, volume_utf8: None, legacy_id_raw: None, id: None, domain: None };
+        let mut out =
+            Locator { path: None, posix: None, utf8: None, alternate_utf8: None, volume: None, volume_utf8: None, legacy_id_raw: None, id: None, domain: None };
         if class == *b"URLL" {
             return Ok(out);
         } // Only the observed empty locator is supported; EOF checked by caller.
@@ -111,6 +115,7 @@ impl<'a> Decode<'a, '_> {
                     out.posix = self.text()?;
                 }
                 (c, 2) if c == *b"FILE" => out.utf8 = Some(self.utf8()?),
+                (c, 3) if c == *b"FILE" => out.alternate_utf8 = Some(self.utf8()?),
                 (c, 1) if c == *b"MSML" => {
                     self.expect(&[0x47])?;
                     out.domain = Some(self.u32()?);

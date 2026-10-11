@@ -108,8 +108,8 @@ pub fn full_identity(id: &Value) -> Result<[u8; 32]> {
     identity_key(&serde_json::json!({"id":id}))?.try_into().map_err(|_| bad("media binding requires a full source identity"))
 }
 
-/// Compare recorded picture edit units with an independently verified MXF rate. The only
-/// rounded representation currently supported is the observed 29.97 / 30000:1001 pair.
+/// Compare recorded edit units with an independently corroborated clock. Recognized nominal
+/// NTSC labels are explicit pairs, never a floating-point tolerance or blanket substitution.
 /// This is not permission to substitute rates without opening the identified picture source.
 pub fn picture_rate_matches(recorded: &Value, actual: filmcraft_time::FrameRate) -> bool {
     let Some(n) = recorded["rate"]["numerator"].as_i64().filter(|n| *n > 0) else { return false };
@@ -117,7 +117,11 @@ pub fn picture_rate_matches(recorded: &Value, actual: filmcraft_time::FrameRate)
     actual.num > 0
         && actual.den > 0
         && (i128::from(n) * i128::from(actual.den) == i128::from(d) * i128::from(actual.num)
-            || (filmcraft_time::FrameRate::new(n, d) == filmcraft_time::FrameRate::new(2997, 100) && actual == filmcraft_time::FrameRate::new(30000, 1001)))
+            || [(23976, 1000, 24000), (2997, 100, 30000), (47952, 1000, 48000), (4795, 100, 48000), (5994, 100, 60000), (11988, 100, 120000)].iter().any(
+                |&(rn, rd, an)| {
+                    filmcraft_time::FrameRate::new(n, d) == filmcraft_time::FrameRate::new(rn, rd) && actual == filmcraft_time::FrameRate::new(an, 1001)
+                },
+            ))
 }
 /// Integer conversion with sub-tick flooring; original count/rate stays in evidence.
 fn duration(v: &Value) -> Result<(Tick, bool)> {
@@ -309,7 +313,7 @@ pub fn plan_scoped(bytes: &[u8], mode: TransferMode) -> Result<Plan> {
         result.bins.push(out);
     }
     if quantized_count > 0 {
-        result.warnings.push(format!("{quantized_count} durations were floored by less than one FilmCraft tick; original counts and rational rates are preserved without NTSC rate substitution."));
+        result.warnings.push(format!("For {quantized_count} clips, the recorded Avid rate gives a duration between FilmCraft ticks. Original counts and rates are retained in source metadata."));
     }
     Ok(result)
 }
@@ -459,7 +463,7 @@ mod tests {
         let p = decode(&v).unwrap();
         assert_eq!(p.bins[0].clips[0].duration.0, (i128::from(TICKS_PER_SECOND) * 125 / 2997) as i64);
         assert_eq!(p.bins[0].clips[0].evidence["rate"], v["bins"][0]["catalog"]["clips"][0]["rate"]);
-        assert!(p.warnings.iter().any(|w| w.contains("less than one")));
+        assert!(p.warnings.iter().any(|w| w.contains("between FilmCraft ticks")));
         assert_eq!(p.bins[0].name, "音声");
     }
     #[test]

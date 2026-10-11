@@ -169,7 +169,12 @@ struct SearchResult {
 impl SearchResult {
     fn problem(&mut self, message: String) {
         self.complete = false;
-        self.notice(message);
+        // Keep blocking problems visible even after ordinary notices fill the report.
+        if self.diagnostics.len() >= 128 {
+            self.diagnostics.pop();
+            self.omitted_diagnostics += 1;
+        }
+        self.diagnostics.insert(0, message);
     }
     fn notice(&mut self, message: String) {
         if self.diagnostics.len() < 128 {
@@ -225,14 +230,32 @@ impl filmcraft_mxf::ByteSource for Source {
         self.reader.read_at(offset, buf)
     }
 }
-fn scan(project: &Project, targets: Vec<Target>, folders: Vec<String>, services: &dyn Services, progress: Arc<filmcraft_export::Progress>) -> SearchResult {
-    let mut out = SearchResult { complete: true, ..Default::default() };
-    let mut index: BTreeMap<[u8; 32], Vec<String>> = BTreeMap::new();
-    for t in &targets {
-        if let Ok(id) = media(project, t).and_then(|m| identity(&m, t.component)) {
-            index.entry(id).or_default();
+/// Search evidence shared by native import preparation and component relinking.
+/// Paths are usable automatically only after a complete scan with one copy per identity.
+pub(crate) struct IdentityIndex {
+    paths: BTreeMap<[u8; 32], Vec<String>>,
+    report: SearchResult,
+}
+impl IdentityIndex {
+    pub(crate) fn unique_path(&self, id: [u8; 32]) -> Option<&str> {
+        if !self.report.complete {
+            return None;
         }
+        let copies = self.paths.get(&id)?;
+        if copies.len() == 1 { copies.first().map(String::as_str) } else { None }
     }
+}
+pub(crate) fn index_identities(
+    identities: BTreeSet<[u8; 32]>,
+    folders: Vec<String>,
+    services: &dyn Services,
+    progress: Arc<filmcraft_export::Progress>,
+) -> Result<IdentityIndex> {
+    if identities.len() > MAX_TARGETS || folders.is_empty() || folders.len() > 32 {
+        return Err(bad("provide at most 4096 identities and 1–32 media folders"));
+    }
+    let mut out = SearchResult { complete: true, ..Default::default() };
+    let mut index: BTreeMap<[u8; 32], Vec<String>> = identities.into_iter().map(|id| (id, Vec::new())).collect();
     // One identity index and one set of limits across all roots. Canonical directory keys
     // prevent parent/child, repeated and aliased selections from producing duplicate copies.
     let mut dirs = VecDeque::new();
@@ -357,14 +380,29 @@ fn scan(project: &Project, targets: Vec<Target>, folders: Vec<String>, services:
             }
         }
     }
+    if progress.cancel.load(Ordering::Relaxed) {
+        return Err(bad("search cancelled"));
+    }
+    for paths in index.values_mut() {
+        paths.sort();
+    }
+    Ok(IdentityIndex { paths: index, report: out })
+}
+fn validate_index(
+    project: &Project,
+    targets: Vec<Target>,
+    index: &IdentityIndex,
+    services: &dyn Services,
+    progress: Arc<filmcraft_export::Progress>,
+) -> SearchResult {
+    let mut out = index.report.clone();
     let mut candidate_count = 0usize;
     for target in targets {
         let mut row = Row { target: target.clone(), status: "absent", candidates: Vec::new() };
         if let Ok(original) = media(project, &target)
             && let Ok(id) = identity(&original, target.component)
-            && let Some(copies) = index.get_mut(&id)
+            && let Some(copies) = index.paths.get(&id)
         {
-            copies.sort();
             for path in copies.iter() {
                 if candidate_count >= MAX_CANDIDATES {
                     out.problem("Search candidate limit reached; search fewer components".into());
@@ -401,8 +439,20 @@ fn scan(project: &Project, targets: Vec<Target>, folders: Vec<String>, services:
     }
     out
 }
+fn scan(project: &Project, targets: Vec<Target>, folders: Vec<String>, services: &dyn Services, progress: Arc<filmcraft_export::Progress>) -> SearchResult {
+    let identities = targets.iter().filter_map(|t| media(project, t).and_then(|m| identity(&m, t.component)).ok()).collect();
+    match index_identities(identities, folders, services, progress.clone()) {
+        Ok(index) => validate_index(project, targets, &index, services, progress),
+        Err(e) => {
+            let mut report = SearchResult::default();
+            report.problem(e.to_string());
+            report
+        }
+    }
+}
 /// Resolve only newly imported components on a disposable project. A complete search and
 /// exactly one validated copy are required; ambiguous or incomplete results stay offline.
+#[cfg(test)]
 pub(crate) fn link_prepared(
     project: &mut Project,
     items: &[ItemId],
@@ -410,9 +460,38 @@ pub(crate) fn link_prepared(
     services: &dyn Services,
     progress: Arc<filmcraft_export::Progress>,
 ) -> Result<Value> {
-    if folders.is_empty() || folders.len() > 32 {
-        return Err(bad("provide 1–32 media folders"));
+    link_prepared_inner(project, items, Some(folders), None, services, progress)
+}
+pub(crate) fn link_prepared_index(
+    project: &mut Project,
+    items: &[ItemId],
+    index: &IdentityIndex,
+    services: &dyn Services,
+    progress: Arc<filmcraft_export::Progress>,
+) -> Result<Value> {
+    // Early binding may have used these paths to corroborate timing. Only publish paths
+    // that also pass this final search validation; incomplete results remain offline.
+    for id in items {
+        let media = project.item_mut(*id).and_then(|i| i.as_media_mut()).ok_or_else(|| bad("new import item is not media"))?;
+        if let MediaRef::Components { channels, picture } = &mut media.media {
+            for channel in channels {
+                channel.path = None;
+            }
+            if let Some(picture) = picture {
+                picture.path = None;
+            }
+        }
     }
+    link_prepared_inner(project, items, None, Some(index), services, progress)
+}
+fn link_prepared_inner(
+    project: &mut Project,
+    items: &[ItemId],
+    folders: Option<Vec<String>>,
+    index: Option<&IdentityIndex>,
+    services: &dyn Services,
+    progress: Arc<filmcraft_export::Progress>,
+) -> Result<Value> {
     let mut targets = Vec::new();
     for id in items {
         let item = project.item(*id).and_then(|i| i.as_media()).ok_or_else(|| bad("new import item is not media"))?;
@@ -428,7 +507,11 @@ pub(crate) fn link_prepared(
             return Err(bad("import exceeds 4096 media components; import without folder search and relink in smaller groups"));
         }
     }
-    let report = scan(project, targets, folders, services, progress.clone());
+    let report = if let Some(index) = index {
+        validate_index(project, targets, index, services, progress.clone())
+    } else {
+        scan(project, targets, folders.ok_or_else(|| bad("missing media folders"))?, services, progress.clone())
+    };
     if progress.cancel.load(Ordering::Relaxed) {
         return Err(bad("import cancelled"));
     }

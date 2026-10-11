@@ -411,9 +411,15 @@ fn endian_id_utf8_and_high_word_timecode_are_independent() {
         n(&mut f, (text.len() + 2) as u64, 2, order);
         f.extend_from_slice(&[0, 0]);
         f.extend_from_slice(text.as_bytes());
+        f.extend_from_slice(&[1, 3, 0x4c]);
+        let alternate = "\\\\server\\媒体\\café.mov";
+        n(&mut f, (alternate.len() + 2) as u64, 2, order);
+        f.extend_from_slice(&[0, 0]);
+        f.extend_from_slice(alternate.as_bytes());
         f.push(3);
         let Decoded::Locator(l) = bin(*b"FILE", &f, order).decode(1).unwrap() else { panic!() };
         assert_eq!(l.utf8.unwrap().value, text);
+        assert_eq!(l.alternate_utf8.unwrap().value, alternate);
         for (class, bytes) in [(*b"FILE", f), (*b"MSML", b), (*b"TCCP", t)] {
             for end in 0..bytes.len() {
                 assert!(std::panic::catch_unwind(|| bin(class, &bytes[..end], order).decode(1)).unwrap().is_err());

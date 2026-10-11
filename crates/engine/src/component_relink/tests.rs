@@ -309,3 +309,34 @@ fn import_search_combines_roots_deduplicates_overlap_and_preserves_real_copies()
     }
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn blocking_search_problems_remain_visible_after_notice_limit() {
+    let mut report = SearchResult { complete: true, ..Default::default() };
+    for n in 0..150 {
+        report.notice(format!("ordinary notice {n}"));
+    }
+    report.problem("unreadable candidate".into());
+    assert!(!report.complete);
+    assert_eq!(report.diagnostics.len(), 128);
+    assert_eq!(report.diagnostics[0], "unreadable candidate");
+    assert_eq!(report.omitted_diagnostics, 23);
+}
+
+#[test]
+fn early_binding_paths_are_not_published_when_final_validation_fails() {
+    let (s, id, channels, dir) = fixture("early-binding-stale-path");
+    let identities = channels.iter().map(|c| c.file_package).collect();
+    let index = index_identities(identities, vec![dir.to_str().unwrap().into()], &*s.services, Arc::default()).unwrap();
+    let mut prepared = (*s.project).clone();
+    let media = prepared.item_mut(id).unwrap().as_media_mut().unwrap();
+    media.media = MediaRef::Components { channels: channels.clone(), picture: None };
+    std::fs::write(channels[0].path.as_ref().unwrap(), b"truncated").unwrap();
+    let report = link_prepared_index(&mut prepared, &[id], &index, &*s.services, Arc::default()).unwrap();
+    assert_eq!(report["linkedComponents"], 1);
+    assert_eq!(report["offlineComponents"], 1);
+    let MediaRef::Components { channels: after, .. } = &prepared.item(id).unwrap().as_media().unwrap().media else { panic!() };
+    assert!(after[0].path.is_none());
+    assert_eq!(after[1].path, channels[1].path);
+    std::fs::remove_dir_all(dir).unwrap();
+}

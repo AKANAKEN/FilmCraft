@@ -627,3 +627,183 @@ fn best_effort_sequences_isolate_bad_entries_without_reviving_history() {
     assert!(!prepared.project.items.values().any(|item| item.name == "Unconverted Avid segment"));
     assert_eq!(filmcraft_format::decode(&filmcraft_format::encode(&prepared.project, false)).unwrap().project, prepared.project);
 }
+
+#[test]
+fn indexed_mxf_corroborates_full_audio_clock_before_binding_and_retains_raw_evidence() {
+    use crate::avid_catalog::{ImportOptions, prepare_document_with_index};
+    use filmcraft_interchange::avid_catalog::TransferMode;
+    let root = std::env::temp_dir().join(format!(
+        "filmcraft-audio-clock-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    for (sr, frames, multiplier) in [(48000u32, 99i64, 4i64), (44100, 48, 1)] {
+        let folder = root.join(sr.to_string());
+        std::fs::create_dir_all(&folder).unwrap();
+        let (v, _) = fixture();
+        let mut v = with_audio_descriptors(v);
+        let samples = (i128::from(frames) * 1001 * i128::from(sr) / 24000) as usize;
+        let mut media = BTreeMap::new();
+        let mut identities = std::collections::BTreeSet::new();
+        let clip = &mut v["bins"][0]["catalog"]["clips"][0];
+        clip["length"] = json!(frames);
+        clip["rate"] = json!({"numerator":23976,"denominator":1000});
+        clip["workflow_evidence"] = json!("managed_avb_source_descriptors");
+        for (i, t) in clip["tracks"].as_array_mut().unwrap().iter_mut().enumerate() {
+            let ids = filmcraft_mxf::PackageIds::from_seed(&format!("clock-{sr}-{i}"), "test");
+            let id = json!({"raw":ids.file.0.iter().map(|b|format!("{b:02x}")).collect::<String>(),"byte_order":"big"});
+            identities.insert(ids.file.0);
+            let path = folder.join(format!("channel-{i}.mxf"));
+            let bytes = filmcraft_mxf::write_opatom_pcm(
+                &filmcraft_mxf::OpAtomPcm { sample_rate: sr, bits: 16, channels: 1, edit_rate: None, ids, timecode: None },
+                &vec![if i == 0 { 4000 } else { -8000 }; samples],
+            )
+            .unwrap();
+            std::fs::write(&path, &bytes).unwrap();
+            media.insert(path.to_str().unwrap().to_owned(), bytes);
+            t["component"]["source_id"] = id.clone();
+            t["component"]["length"] = json!(frames * multiplier);
+            t["component"]["rate"] = json!({"numerator":23976 * multiplier,"denominator":1000});
+            let r = &mut t["references"][0];
+            r["source_id"] = id;
+            r["length"] = json!(frames * multiplier);
+            r["rate"] = json!({"numerator":23976 * multiplier,"denominator":1000});
+            r["status"] = json!("unresolved");
+            r["managed_descriptor_verified"] = json!(true);
+            r["location_scope"] = json!("no_media_locations_scanned");
+            r["locations"] = json!([]);
+        }
+        v["bins"][0]["mobs"][0] = v["bins"][0]["catalog"]["clips"][0].clone();
+        for i in 0..2 {
+            let id = v["bins"][0]["mobs"][0]["tracks"][i]["references"][0]["source_id"].clone();
+            let d = &mut v["bins"][0]["mobs"][i + 2];
+            d["id"] = id.clone();
+            d["descriptor"]["locator"]["properties"]["mob_id"] = json!({"id_raw":id["raw"],"byte_order":"big"});
+            d["descriptor"]["sample_rate"] = json!(sr);
+            d["descriptor"]["edit_rate"] = json!(sr);
+            d["descriptor"]["average_bps"] = json!(sr * 2);
+            // Descriptor padding must not be used as the playable range.
+            d["descriptor"]["length"] = json!(samples + 132);
+        }
+        let (s, services) = session(&v, media.clone());
+        let before = s.project.clone();
+        let index = crate::component_relink::index_identities(identities.clone(), vec![folder.to_str().unwrap().into()], &*services, Arc::default()).unwrap();
+        let prepare = |v: &Value, index| {
+            prepare_document_with_index(
+                &before,
+                &*services,
+                &serde_json::to_vec(v).unwrap(),
+                ImportOptions { mode: TransferMode::Media, allow_missing: true, best_effort: true },
+                None,
+                &|| Ok(()),
+                index,
+            )
+            .unwrap()
+        };
+        let prepared = prepare(&v, Some(&index));
+        assert!(prepared.result["errors"].as_array().unwrap().is_empty(), "{}", prepared.result);
+        assert_eq!(prepared.result["bound"][0]["audioTimingReconciled"], true);
+        assert_eq!(prepared.result["bound"][0]["offlineComponents"], 0);
+        assert!(prepared.result["warnings"].to_string().contains("declared whole samples"));
+        let id = ItemId(prepared.result["bound"][0]["item"].as_u64().unwrap());
+        let item = prepared.project.item(id).unwrap();
+        let clip = item.as_media().unwrap();
+        assert_eq!(clip.info.duration, Tick::from_units(frames * 1001, 24000));
+        let filmcraft_project::MediaRef::Components { channels, picture } = &clip.media else { panic!() };
+        assert!(picture.is_none());
+        assert_eq!(channels[0].length, Tick::from_units(samples as i64, i64::from(sr)));
+        let (source, failures) = crate::component_audio::open(clip.info.clone(), channels, &*services).unwrap();
+        assert!(failures.is_empty());
+        let audio = source.audio(samples as i64 - 1, 2, sr).unwrap();
+        assert_eq!(audio.channels[0], vec![4000.0 / 32768.0, 0.0]);
+        assert_eq!(audio.channels[1], vec![-8000.0 / 32768.0, 0.0]);
+        let evidence: Value = serde_json::from_str(&item.metadata[filmcraft_interchange::avid_catalog::SOURCE_KEY]).unwrap();
+        assert_eq!(evidence["clip"]["rate"]["numerator"], 23976);
+        assert_eq!(evidence["audio_rate_reconciliation"]["master_rate"], json!({"numerator":24000,"denominator":1001}));
+        assert_eq!(filmcraft_format::decode(&filmcraft_format::encode(&prepared.project, false)).unwrap().project, prepared.project);
+        assert_eq!(s.project, before);
+        assert_eq!(prepare(&v, None).result["bound"].as_array().unwrap().len(), 0, "nominal decimal alone must not authorize a clock");
+        for case in ["offset", "wrong_clock", "wrong_length", "incomplete"] {
+            let mut bad = v.clone();
+            let t = &mut bad["bins"][0]["catalog"]["clips"][0]["tracks"][0];
+            match case {
+                "offset" => {
+                    t["component"]["start"] = json!(1);
+                    t["references"][0]["source_start"] = json!(1);
+                }
+                "wrong_clock" => {
+                    t["component"]["rate"]["numerator"] = json!(24000 * multiplier);
+                    t["references"][0]["rate"]["numerator"] = json!(24000 * multiplier);
+                }
+                "wrong_length" => {
+                    t["component"]["length"] = json!(frames * multiplier + 1);
+                    t["references"][0]["length"] = json!(frames * multiplier + 1);
+                }
+                _ => {
+                    t["component"]["truncated"] = json!(true);
+                }
+            }
+            bad["bins"][0]["mobs"][0] = bad["bins"][0]["catalog"]["clips"][0].clone();
+            let result = prepare(&bad, Some(&index));
+            assert_eq!(result.result["bound"].as_array().unwrap().len(), 0, "{case}");
+        }
+        // A structurally valid MXF can declare one more sample than it stores. That must
+        // not corroborate the candidate clock, even if the declared endpoint matches.
+        let mut short_media = BTreeMap::new();
+        for (i, path) in media.keys().enumerate() {
+            let ids = filmcraft_mxf::PackageIds::from_seed(&format!("clock-{sr}-{i}"), "test");
+            let mut bytes = filmcraft_mxf::write_opatom_pcm(
+                &filmcraft_mxf::OpAtomPcm { sample_rate: sr, bits: 16, channels: 1, edit_rate: None, ids, timecode: None },
+                &vec![4000; samples - 1],
+            )
+            .unwrap();
+            let mut tag = vec![0x02, 0x02, 0, 8];
+            tag.extend_from_slice(&((samples - 1) as i64).to_be_bytes());
+            let positions: Vec<_> = bytes.windows(tag.len()).enumerate().filter(|(_, v)| *v == tag).map(|(i, _)| i).collect();
+            assert!(!positions.is_empty());
+            for at in positions {
+                bytes[at + 4..at + 12].copy_from_slice(&(samples as i64).to_be_bytes());
+            }
+            let mxf = filmcraft_mxf::open(bytes.as_slice()).unwrap();
+            assert_eq!(mxf.tracks[0].duration, Some(samples as i64));
+            assert_eq!(mxf.tracks[0].stored_sample_frames(), samples as u64 - 1);
+            short_media.insert(path.clone(), bytes);
+        }
+        let (_, short_services) = session(&v, short_media);
+        let short_index =
+            crate::component_relink::index_identities(identities.clone(), vec![folder.to_str().unwrap().into()], &*short_services, Arc::default()).unwrap();
+        let short = prepare_document_with_index(
+            &before,
+            &*short_services,
+            &serde_json::to_vec(&v).unwrap(),
+            ImportOptions { mode: TransferMode::Media, allow_missing: true, best_effort: true },
+            None,
+            &|| Ok(()),
+            Some(&short_index),
+        )
+        .unwrap();
+        assert!(short.result["bound"].as_array().unwrap().is_empty());
+        let incomplete = crate::component_relink::index_identities(
+            identities.clone(),
+            vec![folder.to_str().unwrap().into(), root.join("missing").to_str().unwrap().into()],
+            &*services,
+            Arc::default(),
+        )
+        .unwrap();
+        assert_eq!(prepare(&v, Some(&incomplete)).result["bound"].as_array().unwrap().len(), 0);
+        let duplicate = folder.join("duplicate.mxf");
+        let bytes = media.values().next().unwrap().clone();
+        std::fs::write(&duplicate, &bytes).unwrap();
+        let mut duplicate_media = media.clone();
+        duplicate_media.insert(duplicate.to_str().unwrap().into(), bytes);
+        let (_, duplicate_services) = session(&v, duplicate_media);
+        let duplicate_index =
+            crate::component_relink::index_identities(identities, vec![folder.to_str().unwrap().into()], &*duplicate_services, Arc::default()).unwrap();
+        assert_eq!(prepare(&v, Some(&duplicate_index)).result["bound"].as_array().unwrap().len(), 0);
+        for (path, bytes) in media {
+            assert_eq!(std::fs::read(path).unwrap(), bytes);
+        }
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}

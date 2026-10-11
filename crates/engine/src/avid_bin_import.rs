@@ -96,6 +96,7 @@ pub(crate) fn prepare(s: &mut Session, p: &Value) -> Result<Value> {
                 progress.done.store(bytes.len() as u64, Ordering::Relaxed);
             }
             *lock(&progress.status) = "Decoding Avid bin".into();
+            let mut media_index = None;
             let mut prepared = if mode == TransferMode::Metadata {
                 let plan = avid_catalog::plan_native(&bytes, &path).map_err(bad)?;
                 let mut project = (*source_project).clone();
@@ -104,17 +105,39 @@ pub(crate) fn prepare(s: &mut Session, p: &Value) -> Result<Value> {
                 Prepared { project, result: json!({"bins":bins,"warnings":warnings,"mode":"metadata","mediaBinding":"unbound"}), first_sequence: None }
             } else {
                 let document = avid_catalog::native_document(&bytes, &path).map_err(bad)?;
+                if !folders.is_empty() {
+                    *lock(&progress.status) = "Finding media by Avid identity".into();
+                    let mut identities = std::collections::BTreeSet::new();
+                    for bin in document["bins"].as_array().into_iter().flatten() {
+                        for clip in bin["catalog"]["clips"].as_array().into_iter().flatten() {
+                            for track in clip["tracks"].as_array().into_iter().flatten() {
+                                for reference in track["references"].as_array().into_iter().flatten() {
+                                    if let Ok(id) = avid_catalog::full_identity(&reference["source_id"]) {
+                                        identities.insert(id);
+                                    }
+                                    if identities.len() > 4096 {
+                                        return Err(bad("import exceeds 4096 source identities; import without folder search"));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    media_index = Some(crate::component_relink::index_identities(identities, folders.clone(), &*services, progress.clone())?);
+                    cancelled(&progress)?;
+                    *lock(&progress.status) = "Binding Avid media".into();
+                }
                 let document = serde_json::to_vec(&document).map_err(bad)?;
-                crate::avid_catalog::prepare_document(
+                crate::avid_catalog::prepare_document_with_index(
                     &source_project,
                     &*services,
                     &document,
                     crate::avid_catalog::ImportOptions { mode, allow_missing: true, best_effort: true },
                     parent,
                     &|| cancelled(&progress),
+                    media_index.as_ref(),
                 )?
             };
-            if !folders.is_empty() {
+            if let Some(index) = media_index.as_ref() {
                 *lock(&progress.status) = "Finding media by Avid identity".into();
                 let ids = prepared.result["bound"]
                     .as_array()
@@ -122,7 +145,7 @@ pub(crate) fn prepare(s: &mut Session, p: &Value) -> Result<Value> {
                     .flatten()
                     .map(|b| b["item"].as_u64().map(filmcraft_project::ItemId).ok_or_else(|| bad("invalid prepared item")))
                     .collect::<Result<Vec<_>>>()?;
-                let links = crate::component_relink::link_prepared(&mut prepared.project, &ids, folders, &*services, progress.clone())?;
+                let links = crate::component_relink::link_prepared_index(&mut prepared.project, &ids, index, &*services, progress.clone())?;
                 prepared.result["mediaBinding"] = json!(if links["offlineComponents"] == 0 && prepared.result["errors"].as_array().is_none_or(Vec::is_empty) {
                     "verified_components"
                 } else {

@@ -11,6 +11,7 @@ use crate::{Error, Result, avid_catalog};
 
 pub const SEQUENCE_KEY: &str = "filmcraft:avid-sequence";
 const MAX_NODES: usize = 100_000;
+const MAX_SEQUENCE_TRACKS: usize = 128;
 
 #[derive(Debug, Serialize)]
 pub struct Plan {
@@ -69,7 +70,9 @@ fn rate(v: &Value) -> Result<FrameRate> {
     Ok(FrameRate::new(n, d))
 }
 fn ticks(v: &Value, key: &str) -> Result<Tick> {
-    let r = rate(v)?;
+    ticks_at(v, key, rate(v)?)
+}
+fn ticks_at(v: &Value, key: &str, r: FrameRate) -> Result<Tick> {
     let n = i128::from(number(v, key)?)
         .checked_mul(i128::from(r.den))
         .and_then(|n| n.checked_mul(i128::from(TICKS_PER_SECOND)))
@@ -124,15 +127,17 @@ fn sources(p: &Project, bin: BinId) -> Result<(String, BTreeMap<[u8; 32], ItemId
     Ok((uid.ok_or_else(|| bad("selected bin has no imported masters"))?, ids))
 }
 
+mod formats;
 mod rates;
 mod recovery;
-use rates::automatic_source_rate;
+use rates::automatic_source_rate_at;
 pub(crate) use rates::offline_rate_evidence;
 
 struct Walk<'a> {
     project: &'a Project,
     sources: &'a BTreeMap<[u8; 32], ItemId>,
     rate: FrameRate,
+    clock: formats::Clock,
     kind: TrackKind,
     nodes: &'a mut usize,
     warnings: &'a mut Vec<String>,
@@ -140,10 +145,54 @@ struct Walk<'a> {
     audio_channels: usize,
 }
 impl Walk<'_> {
+    fn phase_warning(&mut self, c: &Value, start: Tick) {
+        if c["properties"]["phase_offset"] != 0 {
+            self.warnings.push(format!(
+                "Frame {}: Avid adapter phase offset {} is not translated. Using the recorded source-frame start at 100% playback; check trimmed picture/audio alignment against Avid. Original adapter is retained.",
+                self.rate.frame_at(start), c["properties"]["phase_offset"]
+            ));
+        }
+    }
+    fn audio_adapter(&mut self, c: &Value, start: Tick, length: Tick, depth: usize) -> Result<Vec<ClipPlan>> {
+        let (leaf, source_rate) = automatic_source_rate_at(c, depth, self.nodes, self.clock.rate(c)?, self.best_effort)?;
+        let id = avid_catalog::full_identity(&leaf["source_id"])?;
+        let item = *self.sources.get(&id).ok_or_else(|| bad("audio adapter source master missing"))?;
+        let m = self.project.item(item).and_then(|i| i.as_media()).ok_or_else(|| bad("audio adapter source is not media"))?;
+        let MediaRef::Components { channels, .. } = &m.media else {
+            return Err(bad("audio adapter source must be bound to managed components"));
+        };
+        let track = u32::try_from(number(leaf, "source_track")?).map_err(|_| bad("source track overflow"))?;
+        let mut matches = channels.iter().enumerate().filter(|(_, ch)| ch.track == track);
+        let (index, channel) = matches.next().ok_or_else(|| bad("audio adapter source track missing"))?;
+        if matches.next().is_some() {
+            return Err(bad("ambiguous audio adapter source track"));
+        }
+        let source_in = ticks_at(leaf, "start", source_rate)?;
+        let source_length = ticks_at(leaf, "length", source_rate)?;
+        if add(source_in, source_length)? > channel.length || add(source_in, length)? > m.info.duration {
+            return Err(bad("audio adapter range exceeds source media"));
+        }
+        self.phase_warning(c, start);
+        // Avid's automatic ratio changes edit units, not PCM playback speed. Samples
+        // retain wall-clock timing; only the timeline endpoint is rounded to its frames.
+        self.warnings.push(format!(
+            "Frame {}: automatic audio rate adapter mapped to 100% playback with original source timing; Avid audio processing may differ.",
+            self.rate.frame_at(start)
+        ));
+        Ok(vec![ClipPlan {
+            item,
+            start,
+            source_in,
+            duration: length,
+            channels: vec![u16::try_from(index).map_err(|_| bad("source channel overflow"))?],
+            scale_to_frame: false,
+            placeholder: None,
+        }])
+    }
     /// Accept only constant automatic rate adaptation, not creative speed effects. Avid's
     /// output/source rate ratio represents ordinary real-time playback in FilmCraft's tick model.
     fn motion_adapter(&mut self, c: &Value, start: Tick, length: Tick, depth: usize) -> Result<Vec<ClipPlan>> {
-        let (leaf, derived_rate) = automatic_source_rate(c, depth, self.nodes)?;
+        let (leaf, derived_rate) = automatic_source_rate_at(c, depth, self.nodes, self.clock.rate(c)?, self.best_effort)?;
         let id = avid_catalog::full_identity(&leaf["source_id"])?;
         let item = *self.sources.get(&id).ok_or_else(|| bad("motion source master missing"))?;
         let m = self.project.item(item).and_then(|i| i.as_media()).ok_or_else(|| bad("motion source is not media"))?;
@@ -172,6 +221,7 @@ impl Walk<'_> {
         {
             return Err(bad("motion input does not cover the declared output range"));
         }
+        self.phase_warning(c, start);
         self.warnings.push(format!("Frame {}: {}/{} fps source adapted to {}/{} fps with FilmCraft Frame Sampling at 100% playback speed; Avid interpolation/frame selection may differ.",self.rate.frame_at(start),src_rate.num,src_rate.den,self.rate.num,self.rate.den));
         Ok(vec![ClipPlan { item, start, source_in, duration: length, channels: Vec::new(), scale_to_frame: false, placeholder: None }])
     }
@@ -184,20 +234,21 @@ impl Walk<'_> {
         if c.get("truncated").is_some_and(|v| v != &Value::Bool(false)) {
             return Err(bad("truncated component"));
         }
-        if rate(c)? != self.rate {
+        if self.clock.rate(c)? != self.rate {
             return Err(bad("mixed-rate component is unsupported"));
         }
         let expected = if self.kind == TrackKind::Video { 1 } else { 2 };
         if c["media_kind"] != expected {
             return Err(bad("component media kind disagrees with track"));
         }
-        let length = ticks(c, "length")?;
+        let length = self.clock.ticks(c, "length")?;
         add(start, length)?;
         let class = text(c, "class")?;
         let combiner = class == "TKFX" && c.pointer("/properties/effect_id").and_then(Value::as_str) == Some("EFF2_AUDIO_CHANNEL_COMBINER");
         let spatial = class == "TKFX" && c.pointer("/properties/effect_id").and_then(Value::as_str) == Some("INT_EFF_SPATIAL_ADAPTER");
         let motion = class == "SPED" && c.pointer("/properties/effect_id").and_then(Value::as_str) == Some("EFF_TIMEWARP.MOTION_CTL");
-        if c.get("unsupported").is_some() && !((combiner || spatial || motion) && c["unsupported"] == "component_semantics") {
+        let audio_adapter = class == "SPED" && c.pointer("/properties/effect_id").and_then(Value::as_str) == Some("EFF_TIMEWARP.AUDIO_TIME_WARP");
+        if c.get("unsupported").is_some() && !((combiner || spatial || motion || audio_adapter) && c["unsupported"] == "component_semantics") {
             return Err(bad(format!(
                 "unsupported {class} at frame {} ({})",
                 self.rate.frame_at(start),
@@ -211,7 +262,7 @@ impl Walk<'_> {
                 let mut clips = Vec::new();
                 for child in list(c, "components", MAX_NODES)? {
                     clips.extend(self.node(child, pos, depth + 1)?);
-                    pos = add(pos, ticks(child, "length")?)?;
+                    pos = add(pos, self.clock.ticks(child, "length")?)?;
                 }
                 if pos != add(start, length)? {
                     return Err(bad("sequence child lengths disagree with parent"));
@@ -228,7 +279,7 @@ impl Walk<'_> {
                 let MediaRef::Components { channels, picture } = &m.media else {
                     return Err(bad("source master must be bound to managed components first"));
                 };
-                let source_in = ticks(c, "start")?;
+                let source_in = self.clock.ticks(c, "start")?;
                 if add(source_in, length)? > m.info.duration {
                     return Err(bad("source range exceeds master duration"));
                 }
@@ -250,7 +301,7 @@ impl Walk<'_> {
             "TKFX" if spatial && self.kind == TrackKind::Video => {
                 let inputs = list(c, "input_tracks", 1)?;
                 let input = inputs.first().ok_or_else(|| bad("spatial adapter needs one input"))?;
-                if input["index"] != 1 || ticks(&input["component"], "length")? != length {
+                if input["index"] != 1 || self.clock.ticks(&input["component"], "length")? != length {
                     return Err(bad("spatial adapter input duration/index mismatch"));
                 }
                 let mut clips = self.node(&input["component"], start, depth + 1)?;
@@ -264,6 +315,7 @@ impl Walk<'_> {
                 Ok(clips)
             }
             "SPED" if motion && self.kind == TrackKind::Video => self.motion_adapter(c, start, length, depth),
+            "SPED" if audio_adapter && self.kind == TrackKind::Audio => self.audio_adapter(c, start, length, depth),
             "TKFX" if combiner && self.kind == TrackKind::Audio => {
                 let inputs = list(c, "input_tracks", 2)?;
                 if inputs.len() != 2 {
@@ -310,23 +362,16 @@ fn sequence(p: &Project, ids: &BTreeMap<[u8; 32], ItemId>, m: &Value, nodes: &mu
     }
     avid_catalog::full_identity(&m["id"])?;
     let name = text(m, "name")?.to_owned();
-    let r = rate(m)?;
-    let mut warnings = Vec::new();
-    // Strict conversion retains the validated raster gate; best effort makes its fallback explicit.
-    if m.pointer("/attributes/SEQUERNCE_FORMAT_STRING").and_then(Value::as_str) != Some("HD 1080p/24") || r != FrameRate::FPS_24 {
-        if !best_effort {
-            return Err(bad("sequence format is outside validated HD 1080p/24 coverage"));
-        }
-        warnings.push("Sequence format is outside validated coverage: using 1920×1080 and the recorded edit rate; check project settings.".into());
-    }
-    let settings =
-        SequenceSettings { frame_rate: r, preset: if r == FrameRate::FPS_24 { "HD 1080p/24".into() } else { "Avid sequence".into() }, ..Default::default() };
-    settings.validate().map_err(bad)?;
-    let duration = ticks(m, "length")?;
+    let format = formats::resolve(m, best_effort)?;
+    let r = format.clock.actual;
+    let clock = format.clock;
+    let mut warnings = format.warnings;
+    let mut settings = format.settings;
+    let duration = clock.ticks(m, "length")?;
     let mut tracks = Vec::new();
     let mut seen = BTreeSet::new();
     let mut tc = None;
-    for t in list(m, "tracks", 128)? {
+    for t in list(m, "tracks", MAX_SEQUENCE_TRACKS)? {
         let c = &t["component"];
         if t.get("unsupported").is_some()
             || [t, c].iter().any(|v| v.get("truncated").is_some_and(|x| x != &Value::Bool(false)))
@@ -339,17 +384,29 @@ fn sequence(p: &Project, ids: &BTreeMap<[u8; 32], ItemId>, m: &Value, nodes: &mu
             Some(1) => TrackKind::Video,
             Some(2) => TrackKind::Audio,
             Some(3) if index == 1 => {
-                if tc.is_some() || c["class"] != "TCCP" || rate(c)? != r || c["fps"] != r.num || ticks(c, "length")? != duration || c["flags"] != 0 {
+                // Observed TCCP flags: 0 is non-drop; 1 is drop-frame. The stored
+                // start is already a frame count (107892 = 01;00;00;00 at 29.97).
+                // Other bits remain unsupported, as does DF on an incompatible rate.
+                let drop_frame = c["flags"] == 1;
+                if tc.is_some()
+                    || c["class"] != "TCCP"
+                    || clock.rate(c)? != r
+                    || c["fps"] != r.timecode_base()
+                    || clock.ticks(c, "length")? != duration
+                    || !(c["flags"] == 0 || (drop_frame && r.supports_drop_frame()))
+                {
                     if best_effort {
                         warnings.push("Primary timecode could not be converted; using zero.".into());
+                        settings.drop_frame = false;
                         tc = Some(0);
                         continue;
                     }
                     return Err(bad("unsupported primary timecode"));
                 }
                 let start = number(c, "start")?;
-                ticks(c, "start")?;
+                clock.ticks(c, "start")?;
                 tc = Some(start);
+                settings.drop_frame = drop_frame;
                 continue;
             }
             Some(3 | 4) => continue, // auxiliary timecode and edgecode are retained as evidence
@@ -360,10 +417,10 @@ fn sequence(p: &Project, ids: &BTreeMap<[u8; 32], ItemId>, m: &Value, nodes: &mu
                 if c["class"] != "SEQU"
                     || child["class"] != "FILL"
                     || child["media_kind"] != 7
-                    || rate(c)? != r
-                    || rate(child)? != r
-                    || ticks(c, "length")? != duration
-                    || ticks(child, "length")? != duration
+                    || clock.rate(c)? != r
+                    || clock.rate(child)? != r
+                    || clock.ticks(c, "length")? != duration
+                    || clock.ticks(child, "length")? != duration
                     || [c, child].iter().any(|v| v.get("unsupported").is_some() || v.get("truncated").is_some_and(|x| x != &Value::Bool(false)))
                 {
                     if best_effort {
@@ -383,7 +440,7 @@ fn sequence(p: &Project, ids: &BTreeMap<[u8; 32], ItemId>, m: &Value, nodes: &mu
         if !(1..=64).contains(&index) || !seen.insert((kind == TrackKind::Audio, index)) {
             return Err(bad("invalid or duplicate sequence track number"));
         }
-        if ticks(c, "length")? != duration {
+        if clock.ticks(c, "length")? != duration {
             return Err(bad("track duration disagrees with composition"));
         }
         let attrs = &t["properties"]["attributes"];
@@ -392,8 +449,9 @@ fn sequence(p: &Project, ids: &BTreeMap<[u8; 32], ItemId>, m: &Value, nodes: &mu
             Some(v) if *v == 2 && kind == TrackKind::Audio => true,
             _ => return Err(bad("unsupported audio track format")),
         };
-        let clips = Walk { project: p, sources: ids, rate: r, kind, nodes, warnings: &mut warnings, best_effort, audio_channels: if stereo { 2 } else { 1 } }
-            .node(c, Tick::ZERO, 0)?;
+        let clips =
+            Walk { project: p, sources: ids, rate: r, clock, kind, nodes, warnings: &mut warnings, best_effort, audio_channels: if stereo { 2 } else { 1 } }
+                .node(c, Tick::ZERO, 0)?;
         if kind == TrackKind::Audio && clips.iter().any(|c| c.channels.len() != if stereo { 2 } else { 1 }) {
             return Err(bad("source channel mapping disagrees with timeline format"));
         }

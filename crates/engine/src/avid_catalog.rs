@@ -57,6 +57,17 @@ pub(crate) fn prepare_document(
     parent: Option<BinId>,
     checkpoint: &dyn Fn() -> Result<()>,
 ) -> Result<Prepared> {
+    prepare_document_with_index(original, services, bytes, options, parent, checkpoint, None)
+}
+pub(crate) fn prepare_document_with_index(
+    original: &Project,
+    services: &dyn crate::Services,
+    bytes: &[u8],
+    options: ImportOptions,
+    parent: Option<BinId>,
+    checkpoint: &dyn Fn() -> Result<()>,
+    index: Option<&crate::component_relink::IdentityIndex>,
+) -> Result<Prepared> {
     let ImportOptions { mode, allow_missing, best_effort } = options;
     checkpoint()?;
     let mut errors = Vec::new();
@@ -82,7 +93,7 @@ pub(crate) fn prepare_document(
             // Keep decoder work sequential and bounded, without a session/history snapshot per batch.
             for chunk in items.chunks(if best_effort { 1 } else { 64 }) {
                 checkpoint()?;
-                let binding = match crate::avid_audio::prepare_binding(&project, services, chunk, true, allow_missing) {
+                let binding = match crate::avid_audio::prepare_binding_with_index(&project, services, chunk, true, allow_missing, index) {
                     Ok(v) => v,
                     Err(e) if best_effort => {
                         let item = project.item_mut(chunk[0]).ok_or_else(|| failure("imported item disappeared"))?;
@@ -125,6 +136,10 @@ pub(crate) fn prepare_document(
                 first_sequence = first_sequence.or(Some(id));
             }
         }
+    }
+    let reconciled = bound.iter().filter(|b| b["audioTimingReconciled"] == true).count();
+    if reconciled > 0 {
+        warnings.push(format!("{reconciled} audio masters use Avid's nominal 23.976 clock corroborated by identified MXF track sample counts. Raw rates/counts are retained; component ends use declared whole samples, excluding stored padding."));
     }
     let has_offline = !errors.is_empty() || bound.iter().any(|b| b["offlineComponents"].as_u64().is_some_and(|n| n > 0));
     let result = json!({"bins":bins,"warnings":warnings,"errors":errors,"bound":bound,"sequences":sequences,

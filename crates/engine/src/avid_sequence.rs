@@ -116,6 +116,142 @@ mod tests {
         s.execute("edit.redo", json!({})).unwrap();
         assert_eq!(s.project, after);
     }
+    fn set_sequence_clock(v: &mut Value, rate: &Value) {
+        match v {
+            Value::Object(map) => {
+                if map.contains_key("rate") {
+                    map.insert("rate".into(), rate.clone());
+                }
+                for (key, value) in map {
+                    if key != "rate" {
+                        set_sequence_clock(value, rate);
+                    }
+                }
+            }
+            Value::Array(values) => {
+                for value in values {
+                    set_sequence_clock(value, rate);
+                }
+            }
+            _ => {}
+        }
+    }
+    #[test]
+    fn sequence_formats_preserve_raster_rational_clock_cuts_and_timecode() {
+        for (label, n, d, exact, size) in [
+            ("HD 1080p/23.976", 23976, 1000, FrameRate::FPS_23_976, (1920, 1080)),
+            ("HD 720p/25", 25, 1, FrameRate::new(25, 1), (1280, 720)),
+            ("UHD/29.97", 2997, 100, FrameRate::FPS_29_97, (3840, 2160)),
+            ("4K 4096x2160p/24", 24, 1, FrameRate::FPS_24, (4096, 2160)),
+            ("UHD/50", 50, 1, FrameRate::new(50, 1), (3840, 2160)),
+            ("UHD/59.94", 5994, 100, FrameRate::FPS_59_94, (3840, 2160)),
+        ] {
+            let mut v = fixture();
+            let seq = &mut v["bins"][0]["mobs"][1];
+            seq["attributes"]["SEQUERNCE_FORMAT_STRING"] = json!(label);
+            set_sequence_clock(seq, &json!({"numerator":n,"denominator":d}));
+            seq["tracks"][0]["component"]["fps"] = json!(exact.timecode_base());
+            let raw = seq.clone();
+            let (mut s, bin) = session(&v);
+            let out = s.execute("file.importAvidSequences", json!({"path":"test","bin":bin})).unwrap();
+            let id = filmcraft_project::ItemId(out["sequences"][0].as_u64().unwrap());
+            let q = s.project.sequence(id).unwrap();
+            assert_eq!((q.settings.width, q.settings.height), size);
+            assert_eq!(q.settings.frame_rate, exact);
+            assert_eq!(q.start_timecode, 86400);
+            assert_eq!(q.duration(), exact.tick_of(96));
+            let c = &q.audio_tracks[0].items[0];
+            assert_eq!((c.start, c.source_in, c.duration), (exact.tick_of(24), exact.tick_of(24), exact.tick_of(48)));
+            assert_eq!(q.audio_tracks[2].items[0].source_channels, vec![1, 0]);
+            let evidence: Value = serde_json::from_str(&s.project.item(id).unwrap().metadata[adapter::SEQUENCE_KEY]).unwrap();
+            assert_eq!(evidence["composition"], raw);
+            assert_eq!(filmcraft_format::decode(&filmcraft_format::encode(&s.project, false)).unwrap().project, *s.project);
+        }
+    }
+    #[test]
+    fn sequence_drop_frame_preserves_frame_count_and_saved_display_mode() {
+        for (label, n, d, exact, start) in [("HD 1080p/29.97", 2997, 100, FrameRate::FPS_29_97, 107892), ("UHD/59.94", 5994, 100, FrameRate::FPS_59_94, 215784)]
+        {
+            for flags in [0, 1, 2, 3, u32::MAX] {
+                let mut v = fixture();
+                let seq = &mut v["bins"][0]["mobs"][1];
+                seq["attributes"]["SEQUERNCE_FORMAT_STRING"] = json!(label);
+                set_sequence_clock(seq, &json!({"numerator":n,"denominator":d}));
+                let tc = &mut seq["tracks"][0]["component"];
+                tc["fps"] = json!(exact.timecode_base());
+                tc["flags"] = json!(flags);
+                tc["start"] = json!(start);
+                let (mut s, bin) = session(&v);
+                let before = s.project.clone();
+                let result = s.execute("file.importAvidSequences", json!({"path":"test","bin":bin}));
+                if flags > 1 {
+                    assert!(result.is_err());
+                    assert_eq!(s.project, before);
+                    continue;
+                }
+                let id = filmcraft_project::ItemId(result.unwrap()["sequences"][0].as_u64().unwrap());
+                let q = s.project.sequence(id).unwrap();
+                assert_eq!(q.settings.drop_frame, flags == 1);
+                assert_eq!(q.start_timecode, start);
+                assert_eq!(q.duration(), exact.tick_of(96));
+                if flags == 1 {
+                    assert_eq!(filmcraft_time::format_timecode_frames(q.start_timecode, exact, true), "01;00;00;00");
+                }
+                assert_eq!(filmcraft_format::decode(&filmcraft_format::encode(&s.project, false)).unwrap().project, *s.project);
+                let after = s.project.clone();
+                s.execute("edit.undo", json!({})).unwrap();
+                assert_eq!(s.project, before);
+                s.execute("edit.redo", json!({})).unwrap();
+                assert_eq!(s.project, after);
+            }
+        }
+        let mut v = fixture();
+        v["bins"][0]["mobs"][1]["tracks"][0]["component"]["flags"] = json!(1);
+        let (mut s, bin) = session(&v);
+        assert!(s.execute("file.importAvidSequences", json!({"path":"test","bin":bin})).is_err(), "24 fps cannot use drop-frame");
+    }
+    #[test]
+    fn fractional_sequence_keeps_long_gap_without_drift() {
+        let mut v = fixture();
+        let seq = &mut v["bins"][0]["mobs"][1];
+        seq["attributes"]["SEQUERNCE_FORMAT_STRING"] = json!("HD 1080p/29.97");
+        set_sequence_clock(seq, &json!({"numerator":2997,"denominator":100}));
+        let lead = 108000i64;
+        let leaf = seq["tracks"][1]["component"]["components"][1].clone();
+        let r = json!({"numerator":2997,"denominator":100});
+        seq["length"] = json!(lead + 48);
+        seq["tracks"] = json!([
+            {"index":1,"component":{"class":"TCCP","length":lead+48,"rate":r,"media_kind":3,"fps":30,"start":107892,"flags":0}},
+            {"index":1,"component":{"class":"SEQU","length":lead+48,"rate":r,"media_kind":2,"components":[
+                {"class":"FILL","length":lead,"rate":r,"media_kind":2},leaf]}}
+        ]);
+        let (mut s, bin) = session(&v);
+        let out = s.execute("file.importAvidSequences", json!({"path":"test","bin":bin})).unwrap();
+        let q = s.project.sequence(filmcraft_project::ItemId(out["sequences"][0].as_u64().unwrap())).unwrap();
+        assert_eq!(q.audio_tracks[0].items[0].start, FrameRate::FPS_29_97.tick_of(lead));
+        assert_eq!(q.duration(), FrameRate::FPS_29_97.tick_of(lead + 48));
+        assert_eq!(q.start_timecode, 107892);
+    }
+    #[test]
+    fn best_effort_placeholders_keep_fractional_clock_and_known_raster() {
+        let mut v = fixture();
+        let seq = &mut v["bins"][0]["mobs"][1];
+        seq["attributes"]["SEQUERNCE_FORMAT_STRING"] = json!("UHD/23.976");
+        set_sequence_clock(seq, &json!({"numerator":23976,"denominator":1000}));
+        seq["tracks"][1]["component"]["components"][1]["class"] = json!("UNKNOWN");
+        let (mut s, bin) = session(&v);
+        let plan = adapter::plan_best_effort(&s.project, &serde_json::to_vec(&v).unwrap(), bin).unwrap();
+        let (ids, rejected) = adapter::apply_supported(Arc::make_mut(&mut s.project), plan).unwrap();
+        assert!(rejected.is_empty());
+        let q = s.project.sequence(ids[0]).unwrap();
+        assert_eq!((q.settings.width, q.settings.height), (3840, 2160));
+        assert_eq!(q.settings.frame_rate, FrameRate::FPS_23_976);
+        assert_eq!(q.duration(), FrameRate::FPS_23_976.tick_of(96));
+        let clip = &q.audio_tracks[0].items[0];
+        assert_eq!(clip.start, FrameRate::FPS_23_976.tick_of(24));
+        assert_eq!(clip.duration, FrameRate::FPS_23_976.tick_of(48));
+        assert!(s.project.item(clip.item).unwrap().as_media().unwrap().offline);
+    }
     #[test]
     fn sequence_same_rate_picture_preserves_trim_and_empty_lead() {
         use filmcraft_media::MediaSource;
@@ -204,6 +340,131 @@ mod tests {
         let saved = filmcraft_format::decode(&filmcraft_format::encode(&s.project, false)).unwrap();
         assert_eq!(saved.project, *s.project);
         assert!(s.project.item(id).unwrap().metadata[adapter::SEQUENCE_KEY].contains("Frame Sampling"));
+    }
+    #[test]
+    fn sequence_automatic_audio_adapter_keeps_sample_clock_and_channel() {
+        for (label, n, d, exact) in [
+            ("HD 1080p/23.976", 23976, 1000, FrameRate::FPS_23_976),
+            ("HD 1080p/29.97", 2997, 100, FrameRate::FPS_29_97),
+            ("2160p/25", 25, 1, FrameRate::new(25, 1)),
+        ] {
+            let mut v = fixture();
+            let seq = &mut v["bins"][0]["mobs"][1];
+            let mut leaf = seq["tracks"][1]["component"]["components"][1].clone();
+            leaf["source_track"] = json!(2);
+            leaf["length"] = json!((48 * 24 * exact.den + exact.num - 1) / exact.num);
+            set_sequence_clock(seq, &json!({"numerator":n,"denominator":d}));
+            seq["attributes"]["SEQUERNCE_FORMAT_STRING"] = json!(label);
+            seq["tracks"][0]["component"]["fps"] = json!(exact.timecode_base());
+            seq["tracks"].as_array_mut().unwrap().truncate(2);
+            seq["length"] = json!(72);
+            seq["tracks"][0]["component"]["length"] = json!(72);
+            seq["tracks"][1]["component"]["length"] = json!(72);
+            seq["tracks"][1]["component"]["components"].as_array_mut().unwrap().truncate(2);
+            let ratio = FrameRate::new(exact.num, exact.den * 24);
+            seq["tracks"][1]["component"]["components"][1] = json!({
+                "class":"SPED","media_kind":2,"length":48,"rate":{"numerator":n,"denominator":d},"unsupported":"component_semantics",
+                "properties":{"effect_id":"EFF_TIMEWARP.AUDIO_TIME_WARP","attributes":{"_MIXMATCH_MOTIONADAPTER":2},"speed_ratio":[ratio.num,ratio.den],"phase_offset":0,"offset_adjust":0.0,"new_source_calculation":false,"mc_mode":0},
+                "input_tracks":[{"index":1,"component":leaf}]});
+            let (mut s, bin) = session(&v);
+            let out = s.execute("file.importAvidSequences", json!({"path":"test","bin":bin})).unwrap();
+            let q = s.project.sequence(filmcraft_project::ItemId(out["sequences"][0].as_u64().unwrap())).unwrap();
+            let clip = &q.audio_tracks[0].items[0];
+            assert_eq!((clip.start, clip.source_in, clip.duration), (exact.tick_of(24), Tick::from_units(1, 1), exact.tick_of(48)));
+            assert_eq!(clip.source_channels, vec![1]);
+            assert_eq!(clip.speed, 1.0);
+            // Video edit units must not resample or retime the PCM clock.
+            assert_eq!(clip.source_time_at(clip.start + Tick::from_units(48001, 48000)), Tick::from_units(1, 1) + Tick::from_units(48001, 48000));
+            assert_eq!(filmcraft_format::decode(&filmcraft_format::encode(&s.project, false)).unwrap().project, *s.project);
+            let pointer = "/bins/0/mobs/1/tracks/1/component/components/1";
+            let mut phased = v.clone();
+            *phased.pointer_mut(&format!("{pointer}/properties/phase_offset")).unwrap() = json!(109);
+            let raw = phased["bins"][0]["mobs"][1].clone();
+            let (mut approximate, bin) = session(&phased);
+            let plan = adapter::plan_best_effort(&approximate.project, &serde_json::to_vec(&phased).unwrap(), bin).unwrap();
+            let (ids, rejected) = adapter::apply_supported(Arc::make_mut(&mut approximate.project), plan).unwrap();
+            assert!(rejected.is_empty());
+            let q = approximate.project.sequence(ids[0]).unwrap();
+            assert_eq!(q.audio_tracks[0].items[0], *clip);
+            let evidence: Value = serde_json::from_str(&approximate.project.item(ids[0]).unwrap().metadata[adapter::SEQUENCE_KEY]).unwrap();
+            assert_eq!(evidence["composition"], raw);
+            assert!(evidence.to_string().contains("phase offset 109 is not translated"));
+            for (field, bad_value) in [
+                ("/properties/phase_offset", json!(1)),
+                ("/properties/speed_ratio", json!([2, 1])),
+                ("/input_tracks/0/component/source_track", json!(3)),
+                ("/input_tracks/0/component/start", json!(1_000_000)),
+                ("/input_tracks/0/component/length", json!(1)),
+                ("/input_tracks/0/component/media_kind", json!(1)),
+            ] {
+                let mut invalid = v.clone();
+                *invalid.pointer_mut(&format!("{pointer}{field}")).unwrap() = bad_value;
+                let (mut s, bin) = session(&invalid);
+                let before = s.project.clone();
+                assert!(s.execute("file.importAvidSequences", json!({"path":"test","bin":bin})).is_err(), "{field}");
+                assert_eq!(s.project, before);
+            }
+        }
+    }
+    #[test]
+    fn mixed_rate_picture_keeps_source_clock_on_fractional_and_integer_timelines() {
+        for (label, n, d, out_rate) in [
+            ("HD 1080p/23.976", 23976, 1000, FrameRate::FPS_23_976),
+            ("HD 1080p/25", 25, 1, FrameRate::new(25, 1)),
+            ("UHD/50", 50, 1, FrameRate::new(50, 1)),
+            ("UHD/59.94", 5994, 100, FrameRate::FPS_59_94),
+        ] {
+            let mut v = rate_fixture();
+            let seq = &mut v["bins"][0]["mobs"][1];
+            let path = "/tracks/3/component/components/1/input_tracks/0/component";
+            let leaf = seq.pointer(&format!("{path}/input_tracks/0/component")).unwrap().clone();
+            set_sequence_clock(seq, &json!({"numerator":n,"denominator":d}));
+            seq["attributes"]["SEQUERNCE_FORMAT_STRING"] = json!(label);
+            seq["tracks"][0]["component"]["fps"] = json!(out_rate.timecode_base());
+            let motion = seq.pointer_mut(path).unwrap();
+            motion["input_tracks"][0]["component"] = leaf;
+            let sr = FrameRate::FPS_29_97;
+            let ratio = FrameRate::new(out_rate.num * sr.den, out_rate.den * sr.num);
+            motion["properties"]["speed_ratio"] = json!([ratio.num, ratio.den]);
+            motion["input_tracks"][0]["component"]["length"] = json!((48 * ratio.den + ratio.num - 1) / ratio.num);
+            let (mut s, bin) = rate_session(&v);
+            let out = s.execute("file.importAvidSequences", json!({"path":"test","bin":bin})).unwrap();
+            let id = filmcraft_project::ItemId(out["sequences"][0].as_u64().unwrap());
+            let q = s.project.sequence(id).unwrap();
+            assert_eq!(q.settings.frame_rate, out_rate);
+            let c = &q.video_tracks[0].items[0];
+            assert_eq!((c.start, c.source_in, c.duration), (out_rate.tick_of(24), sr.tick_of(30), out_rate.tick_of(48)));
+            assert_eq!(c.speed, 1.0);
+            for frame in 0..48 {
+                assert_eq!(sr.frame_at(c.source_time_at(c.start + out_rate.tick_of(frame))), 30 + frame * ratio.den / ratio.num);
+            }
+        }
+    }
+    #[test]
+    fn sequences_in_one_bin_keep_independent_settings() {
+        let mut v = fixture();
+        let mut other = v["bins"][0]["mobs"][1].clone();
+        other["id"]["raw"] = json!("03".repeat(32));
+        other["name"] = json!("UHD 25 cut");
+        other["attributes"]["SEQUERNCE_FORMAT_STRING"] = json!("UHD/25");
+        set_sequence_clock(&mut other, &json!({"numerator":25,"denominator":1}));
+        other["tracks"][0]["component"]["fps"] = json!(25);
+        v["bins"][0]["mobs"].as_array_mut().unwrap().push(other);
+        let (mut s, bin) = session(&v);
+        let before = s.project.clone();
+        let out = s.execute("file.importAvidSequences", json!({"path":"test","bin":bin})).unwrap();
+        let ids = out["sequences"].as_array().unwrap();
+        assert_eq!(ids.len(), 2);
+        for (i, (size, rate)) in [((1920, 1080), FrameRate::FPS_24), ((3840, 2160), FrameRate::new(25, 1))].iter().enumerate() {
+            let q = s.project.sequence(filmcraft_project::ItemId(ids[i].as_u64().unwrap())).unwrap();
+            assert_eq!((q.settings.width, q.settings.height), *size);
+            assert_eq!(q.settings.frame_rate, *rate);
+        }
+        let after = s.project.clone();
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(s.project, before);
+        s.execute("edit.redo", json!({})).unwrap();
+        assert_eq!(s.project, after);
     }
     #[test]
     fn repeated_mixed_rate_cuts_preserve_every_boundary_and_source_frame() {

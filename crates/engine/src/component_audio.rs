@@ -28,6 +28,17 @@ pub(super) fn open_mxf(
     length: Tick,
     services: &dyn Services,
 ) -> Result<SharedSource, MediaError> {
+    Ok(Arc::new(inspect_mxf(path, identity, kind, start, length, services)?))
+}
+/// Typed metadata access for import corroboration; uses the same identity/profile/range checks.
+pub(super) fn inspect_mxf(
+    path: Option<&str>,
+    identity: [u8; 32],
+    kind: filmcraft_mxf::TrackKind,
+    start: Tick,
+    length: Tick,
+    services: &dyn Services,
+) -> Result<filmcraft_codecs::mxf::MxfSource, MediaError> {
     if identity == [0; 32] {
         return Err(bad("component has no file-package identity"));
     }
@@ -45,7 +56,7 @@ pub(super) fn open_mxf(
     if start < Tick::ZERO || length < Tick::ZERO || start.0.checked_add(length.0).is_none_or(|n| n > source.info().duration.0) {
         return Err(bad("component source range exceeds decoded media"));
     }
-    Ok(Arc::new(source))
+    Ok(source)
 }
 
 pub struct ComponentAudio {

@@ -5,6 +5,7 @@ use filmcraft_media::{AudioStreamInfo, MediaKind};
 use filmcraft_project::{AudioChannelMap, AudioChannels, AudioComponent, ItemId, MediaClip, MediaRef, PictureComponent, Project};
 use filmcraft_time::{TICKS_PER_SECOND, Tick};
 use serde_json::{Value, json};
+mod timing;
 fn bad(s: impl Into<String>) -> EngineError {
     EngineError::Other(format!("Avid media binding: {}", s.into()))
 }
@@ -93,6 +94,16 @@ impl BindingPlan {
     }
 }
 pub(crate) fn prepare_binding(project: &Project, services: &dyn Services, items: &[ItemId], allow_picture: bool, allow_missing: bool) -> Result<BindingPlan> {
+    prepare_binding_with_index(project, services, items, allow_picture, allow_missing, None)
+}
+pub(crate) fn prepare_binding_with_index(
+    project: &Project,
+    services: &dyn Services,
+    items: &[ItemId],
+    allow_picture: bool,
+    allow_missing: bool,
+    media_index: Option<&crate::component_relink::IdentityIndex>,
+) -> Result<BindingPlan> {
     if items.is_empty() || items.len() > 64 {
         return Err(bad("provide 1–64 item IDs"));
     }
@@ -113,6 +124,10 @@ pub(crate) fn prepare_binding(project: &Project, services: &dyn Services, items:
             return Err(bad("only managed MXF media is supported by this command"));
         }
         let tracks = clip["tracks"].as_array().filter(|a| !a.is_empty() && a.len() <= 64).ok_or_else(|| bad("invalid component tracks"))?;
+        let audio_timing = if native_descriptors { timing::reconcile(clip, media_index, services)? } else { None };
+        if let Some(timing) = &audio_timing {
+            media.info.duration = timing.duration;
+        }
         let mut components = Vec::new();
         let mut picture = None;
         let mut reconciliation = None;
@@ -152,10 +167,12 @@ pub(crate) fn prepare_binding(project: &Project, services: &dyn Services, items:
                 if direct["start"].as_u64().is_none() || direct["start"] != r["source_start"] {
                     return Err(bad("picture source offset disagrees with resolved reference"));
                 }
-            } else if ticks(direct, "start")? != ticks(r, "source_start")? || ticks(direct, "length")? != ticks(r, "length")? {
+            } else if audio_timing.is_none() && (ticks(direct, "start")? != ticks(r, "source_start")? || ticks(direct, "length")? != ticks(r, "length")?) {
                 return Err(bad("audio source range disagrees with resolved reference"));
             }
-            let path = if r["status"] == "absent" || unscanned {
+            let path = if let Some(path) = media_index.and_then(|index| index.unique_path(file_package)) {
+                Some(path.to_owned())
+            } else if r["status"] == "absent" || unscanned {
                 None
             } else {
                 let locations = r["locations"].as_array().filter(|a| a.len() == 1).ok_or_else(|| bad("expected a unique file location"))?;
@@ -233,8 +250,12 @@ pub(crate) fn prepare_binding(project: &Project, services: &dyn Services, items:
                 path,
                 stream: 0,
                 channel: 0,
-                source_start: ticks(r, "source_start")?,
-                length: ticks(r, "length")?,
+                source_start: if audio_timing.is_some() { Tick::ZERO } else { ticks(r, "source_start")? },
+                length: if let Some(timing) = &audio_timing {
+                    *timing.lengths.get(&index).ok_or_else(|| bad("missing corroborated audio range"))?
+                } else {
+                    ticks(r, "length")?
+                },
             };
             let has_descriptor =
                 evidence["source_descriptors"].as_array().is_some_and(|entries| entries.iter().any(|d| full_identity(&d["id"]).ok() == Some(file_package)));
@@ -291,7 +312,12 @@ pub(crate) fn prepare_binding(project: &Project, services: &dyn Services, items:
             failures
                 .push("Picture frame counts use the corroborated exact rate; original Avid rate and interpretation basis remain in source evidence.".into());
         }
-        reports.push(json!({"item":id,"channels":components.len(),"picture":picture.is_some(),"offlineComponents":offline_components,"warnings":failures}));
+        let audio_reconciled = audio_timing.is_some();
+        if let Some(timing) = audio_timing {
+            evidence["audio_rate_reconciliation"] = timing.evidence;
+            failures.push("Audio timing uses Avid's nominal 23.976 clock corroborated by identified MXF track sample counts; raw rates and counts are preserved. Component ends are limited to declared whole samples, not stored padding.".into());
+        }
+        reports.push(json!({"item":id,"channels":components.len(),"picture":picture.is_some(),"offlineComponents":offline_components,"warnings":failures,"audioTimingReconciled":audio_reconciled}));
         media.media = MediaRef::Components { channels: components, picture };
         media.info.container = "MXF components".into();
         media.offline = false;

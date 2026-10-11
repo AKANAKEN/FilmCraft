@@ -193,6 +193,10 @@ pub struct EssenceTrack {
     pub name: Option<String>,
     /// Edit rate of the file package track.
     pub edit_rate: Rational,
+    /// Original material track clock, before conversion into file-package edit units.
+    pub material_edit_rate: Option<Rational>,
+    /// Original material source-clip duration, in `material_edit_rate` units.
+    pub material_duration: Option<i64>,
     /// File package track origin (edit units of pre-charge before the zero point).
     pub origin: i64,
     /// Material package source clip start position (edit units after the origin).
@@ -462,6 +466,7 @@ fn track_kind_of(def: Option<Ul>) -> Option<(bool, TrackKind)> {
     // Legacy AAF DataDefinition AUIDs, encoded in MXF's half-swapped UUID form.
     // These are the same identifiers supported by interchange::aaf::ids::ddef.
     match d.0 {
+        [0x80, 0x7d, 0, 0x60, 8, 0x14, 0x3e, 0x6f, 0x6f, 0x3c, 0x8c, 0xe1, 0x6c, 0xef, 0x11, 0xd2] => return Some((false, TrackKind::Picture)),
         [0x80, 0x7d, 0, 0x60, 8, 0x14, 0x3e, 0x6f, 0x78, 0xe1, 0xeb, 0xe1, 0x6c, 0xef, 0x11, 0xd2] => return Some((false, TrackKind::Sound)),
         [0x80, 0x7f, 0, 0x60, 8, 0x14, 0x3e, 0x6f, 0x7f, 0x27, 0x5e, 0x81, 0x77, 0xe5, 0x11, 0xd2] => return Some((true, TrackKind::Data)),
         _ => {}
@@ -569,6 +574,8 @@ struct TrackRef {
     kind: TrackKind,
     name: Option<String>,
     edit_rate: Rational,
+    material_edit_rate: Option<Rational>,
+    material_duration: Option<i64>,
     origin: i64,
     start_position: i64,
     duration: Option<i64>,
@@ -630,6 +637,8 @@ fn resolve_tracks(md: &Metadata, warnings: &mut Vec<String>) -> (Vec<TrackRef>, 
                 kind: tk,
                 name: name.clone().or_else(|| t.string(tag::TRACK_NAME)),
                 edit_rate: t.rational(tag::EDIT_RATE).unwrap_or_default(),
+                material_edit_rate: None,
+                material_duration: None,
                 origin: t.i(tag::ORIGIN).unwrap_or(0),
                 start_position: start,
                 duration,
@@ -660,6 +669,8 @@ fn resolve_tracks(md: &Metadata, warnings: &mut Vec<String>) -> (Vec<TrackRef>, 
             // durations are in the material track's edit rate; convert when the file track's differs
             let mrate = t.rational(tag::EDIT_RATE).unwrap_or_default();
             if let Some(mut tr) = file_track(pkg, Some(kind), src_track, clip.i(tag::START_POSITION).unwrap_or(0), duration, t.string(tag::TRACK_NAME)) {
+                tr.material_edit_rate = mrate.is_valid().then_some(mrate);
+                tr.material_duration = duration;
                 if mrate.is_valid() && tr.edit_rate.is_valid() && mrate != tr.edit_rate {
                     let conv = |v: i64| (v as i128 * tr.edit_rate.num as i128 * mrate.den as i128 / (tr.edit_rate.den as i128 * mrate.num as i128)) as i64;
                     tr.duration = tr.duration.map(conv);
@@ -817,6 +828,8 @@ fn build_track(
         kind: r.kind,
         name: r.name.clone(),
         edit_rate: r.edit_rate,
+        material_edit_rate: r.material_edit_rate,
+        material_duration: r.material_duration,
         origin: r.origin,
         start_position: r.start_position,
         duration: r.duration,

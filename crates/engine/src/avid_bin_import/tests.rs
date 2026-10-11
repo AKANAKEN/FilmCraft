@@ -228,6 +228,77 @@ fn native_graph_imports_tested_managed_sequences_offline() {
 }
 
 #[test]
+#[ignore = "explicit private Phase 14 bins and Phase 12 media folder; originals remain read-only"]
+fn native_phase14_formats_timecode_and_mixed_rate_edits() {
+    use filmcraft_time::{FrameRate, Tick};
+    let folder = std::path::PathBuf::from(std::env::var("FILMCRAFT_AVID_PHASE14_FOLDER").unwrap());
+    let media = std::env::var("FILMCRAFT_AVID_PHASE12_MEDIA_FOLDER").unwrap();
+    for (name, size, rate, frames, start, drop, v1, a1) in [
+        ("1080 2398 Bin.avb", (1920, 1080), FrameRate::FPS_23_976, 686, 86400, false, [(0, 197), (197, 118)], [(197, 118), (315, 371)]),
+        ("2997 drop frame.avb", (1920, 1080), FrameRate::FPS_29_97, 1299, 107892, true, [(0, 302), (302, 334)], [(0, 302), (636, 663)]),
+        ("UHD 25 Bin.avb", (3840, 2160), FrameRate::FPS_25, 1083, 90000, false, [(0, 252), (252, 278)], [(0, 252), (530, 553)]),
+    ] {
+        let path = folder.join(name);
+        let original = std::fs::read(&path).unwrap();
+        let mut s = Session::default();
+        let before = s.project.clone();
+        let job = s.execute("file.prepareAvidBin", json!({"path":path,"mediaFolders":[media],"wait":true})).unwrap();
+        let preview = s.execute("file.avidBinPreparation", job.clone()).unwrap();
+        assert_eq!(s.project, before);
+        assert!(s.history.undo.is_empty());
+        let result = s.execute("file.importAvidBin", job).unwrap();
+        assert_eq!(result, preview["report"]);
+        assert_eq!(result["errors"], json!([]), "{name}: {result}");
+        assert_eq!(result["mediaSearch"]["linkedComponents"], 6);
+        assert_eq!(result["mediaSearch"]["offlineComponents"], 0);
+        assert_eq!(result["sequences"].as_array().unwrap().len(), 1);
+        let id = filmcraft_project::ItemId(result["sequences"][0]["item"].as_u64().unwrap());
+        let q = s.project.sequence(id).unwrap();
+        assert_eq!((q.settings.width, q.settings.height), size);
+        assert_eq!(q.settings.frame_rate, rate);
+        assert_eq!(q.settings.drop_frame, drop);
+        assert_eq!(q.start_timecode, start);
+        assert_eq!(q.duration(), rate.tick_of(frames));
+        assert_eq!(q.video_tracks.len(), 1);
+        assert_eq!(q.audio_tracks.len(), 2);
+        for (track, cuts) in [(&q.video_tracks[0], v1), (&q.audio_tracks[0], a1), (&q.audio_tracks[1], a1)] {
+            assert_eq!(track.items.len(), 2);
+            for (clip, (position, length)) in track.items.iter().zip(cuts) {
+                assert_eq!((clip.start, clip.duration), (rate.tick_of(position), rate.tick_of(length)));
+                assert_eq!(clip.speed, 1.0);
+                assert!(!s.project.item(clip.item).unwrap().as_media().unwrap().offline);
+            }
+        }
+        for (channel, track) in q.audio_tracks.iter().enumerate() {
+            for clip in &track.items {
+                assert_eq!(clip.source_channels, vec![channel as u16]);
+            }
+        }
+        if rate == FrameRate::FPS_23_976 {
+            assert_eq!(q.video_tracks[0].items[0].source_in, FrameRate::FPS_29_97.tick_of(87));
+            assert_eq!(q.video_tracks[0].items[1].source_in, FrameRate::FPS_24.tick_of(109));
+            for track in &q.audio_tracks {
+                assert_eq!(track.items[0].source_in, FrameRate::FPS_24.tick_of(109));
+                assert_eq!(track.items[1].source_in, FrameRate::FPS_24.tick_of(55));
+            }
+            assert!(result["warnings"].to_string().contains("phase offset 109 is not translated"));
+        } else {
+            for track in q.video_tracks.iter().chain(&q.audio_tracks) {
+                assert!(track.items.iter().all(|c| c.source_in == Tick::ZERO));
+            }
+        }
+        let after = s.project.clone();
+        assert_eq!(filmcraft_format::decode(&filmcraft_format::encode(&after, false)).unwrap().project, *after);
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(s.project, before);
+        s.execute("edit.redo", json!({})).unwrap();
+        assert_eq!(s.project, after);
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        eprintln!("{name}: {frames} frames, {size:?}, {rate:?}, start {start}, DF={drop}; six linked components and six timeline edits");
+    }
+}
+
+#[test]
 #[ignore = "explicit private Phase 12 report; native AVB import and media scan"]
 fn native_phase12_matches_catalog_and_links_in_one_transaction() {
     let report_path = std::env::var("FILMCRAFT_AVID_PHASE12_REPORT").unwrap();
@@ -349,4 +420,93 @@ fn native_large_bin_default_attempts_every_master() {
         result["bound"].as_array().unwrap().len(),
         result["errors"].as_array().unwrap().len()
     );
+}
+
+#[test]
+#[ignore = "explicit private Phase 6 AVB manifest and FILMCRAFT_AVID_PHASE6_MEDIA_FOLDER"]
+fn native_large_bin_indexes_before_binding_and_verifies_audio_ranges() {
+    let manifest: Value = serde_json::from_slice(&std::fs::read(std::env::var("FILMCRAFT_AVB_CORPUS_MANIFEST").unwrap()).unwrap()).unwrap();
+    let path = manifest.as_array().unwrap().iter().filter_map(|e| e["path"].as_str()).find(|p| p.contains("/Phase 6/")).unwrap();
+    let folder = std::env::var("FILMCRAFT_AVID_PHASE6_MEDIA_FOLDER").unwrap();
+    let original = std::fs::read(path).unwrap();
+    let mut s = Session::default();
+    let before = s.project.clone();
+    let job = s.execute("file.prepareAvidBin", json!({"path":path,"mediaFolders":[folder],"wait":true})).unwrap();
+    let preview = s.execute("file.avidBinPreparation", job.clone()).unwrap();
+    assert_eq!(s.project, before);
+    assert!(s.history.undo.is_empty());
+    let report = s.execute("file.importAvidBin", job).unwrap();
+    assert_eq!(report, preview["report"]);
+    assert_eq!(report["bins"][0]["clips"], 1953);
+    assert_eq!(report["bound"].as_array().unwrap().len(), 1280);
+    assert_eq!(report["errors"].as_array().unwrap().len(), 673);
+    assert_eq!(report["mediaSearch"]["linkedComponents"], 2163);
+    assert_eq!(report["mediaSearch"]["offlineComponents"], 0);
+    assert_eq!(report["mediaSearch"]["search"]["complete"], true);
+    let mut channel_count = 0;
+    let mut sampled = 0;
+    for bound in report["bound"].as_array().unwrap() {
+        let id = filmcraft_project::ItemId(bound["item"].as_u64().unwrap());
+        let item = s.project.item(id).unwrap();
+        let media = item.as_media().unwrap();
+        let filmcraft_project::MediaRef::Components { channels, picture } = &media.media else { panic!() };
+        assert!(picture.is_none());
+        let evidence: Value = serde_json::from_str(&item.metadata[avid_catalog::SOURCE_KEY]).unwrap();
+        assert_eq!(evidence["audio_rate_reconciliation"]["master_rate"], json!({"numerator":24000,"denominator":1001}));
+        for (slot, channel) in channels.iter().enumerate() {
+            assert_eq!(channel.track as usize, slot + 1);
+            assert_eq!(channel.source_start, filmcraft_time::Tick::ZERO);
+            assert!(channel.path.is_some());
+            assert!(channel.length <= media.info.duration);
+            // Reopen every binding through playback's identity and range checks.
+            crate::component_audio::open_component(channel, &*s.services).unwrap();
+            channel_count += 1;
+        }
+        if sampled < 12 {
+            let source = s.media.full_res_source(&s.project, id, &*s.services).unwrap();
+            let rate = media.info.audio().unwrap().sample_rate;
+            let count = channels[0].length.to_units_floor(i64::from(rate));
+            let head = source.audio(0, 8, rate).unwrap();
+            let tail = source.audio(count - 4, 8, rate).unwrap();
+            assert!(head.channels.iter().flatten().all(|v| v.is_finite()));
+            assert!(tail.channels.iter().all(|c| c[4..] == [0.0; 4]));
+            if let Ok(ffmpeg) = std::env::var("FILMCRAFT_AVID_FFMPEG") {
+                for (slot, channel) in channels.iter().enumerate() {
+                    let output = std::process::Command::new(&ffmpeg)
+                        .args([
+                            "-v",
+                            "error",
+                            "-i",
+                            channel.path.as_deref().unwrap(),
+                            "-map",
+                            "0:a:0",
+                            "-af",
+                            "atrim=start_sample=0:end_sample=8",
+                            "-f",
+                            "f32le",
+                            "-acodec",
+                            "pcm_f32le",
+                            "pipe:1",
+                        ])
+                        .output()
+                        .unwrap();
+                    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+                    assert_eq!(output.stdout.len(), 8 * 4);
+                    let expected: Vec<_> = output.stdout.chunks_exact(4).map(|v| f32::from_le_bytes(v.try_into().unwrap())).collect();
+                    assert_eq!(head.channels[slot], expected, "PCM oracle mismatch for slot {slot}");
+                }
+            }
+            sampled += 1;
+        }
+    }
+    assert_eq!(channel_count, 2163);
+    let after = s.project.clone();
+    assert_eq!(filmcraft_format::decode(&filmcraft_format::encode(&after, false)).unwrap().project, *after);
+    assert_eq!(s.history.undo.len(), 1);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.project, before);
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(s.project, after);
+    assert_eq!(std::fs::read(path).unwrap(), original);
+    eprintln!("Phase 6: 1280 linked masters / 2163 verified components; 673 diagnosed unbound; sample/range, undo/redo and roundtrip checks pass");
 }

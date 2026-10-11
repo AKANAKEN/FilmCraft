@@ -5,15 +5,18 @@ impl Walk<'_> {
         match self.checked_node(c, start, depth) {
             Ok(v) => Ok(v),
             Err(error) if self.best_effort && *self.nodes <= MAX_NODES && depth < 16 => {
-                let length = ticks(c, "length")?;
-                if length <= Tick::ZERO || rate(c)? != self.rate {
+                let length = self.clock.ticks(c, "length")?;
+                if length <= Tick::ZERO || self.clock.rate(c)? != self.rate {
                     return Err(error);
                 }
                 add(start, length)?;
                 let class = c["class"].as_str().unwrap_or("unknown");
                 if let Some(inputs) = c["input_tracks"].as_array().filter(|v| v.len() == 1) {
                     let child = &inputs[0]["component"];
-                    if ticks(child, "length").ok() == Some(length) && rate(child).ok() == Some(self.rate) && child["media_kind"] == c["media_kind"] {
+                    if self.clock.ticks(child, "length").ok() == Some(length)
+                        && self.clock.rate(child).ok() == Some(self.rate)
+                        && child["media_kind"] == c["media_kind"]
+                    {
                         self.warnings.push(format!("Frame {}: {class} effect bypassed; underlying clip timing retained. {error}", self.rate.frame_at(start)));
                         return self.node(child, start, depth + 1);
                     }
@@ -79,12 +82,12 @@ pub(super) fn placeholder(p: &mut Project, bin: BinId, kind: TrackKind, stereo: 
 /// Last resort when individual tracks cannot be interpreted but the composition clock and
 /// duration are valid. Keep a visible sequence for inspection without inventing any edits.
 pub(super) fn sequence_placeholder(m: &Value, error: &Error) -> Result<SequencePlan> {
-    let rate = rate(m)?;
-    let duration = ticks(m, "length")?;
+    let format = formats::resolve(m, true)?;
+    let duration = format.clock.ticks(m, "length")?;
     if duration <= Tick::ZERO {
         return Err(bad("cannot preserve an empty or invalid composition range"));
     }
-    let settings = SequenceSettings { frame_rate: rate, preset: "Avid sequence placeholder".into(), ..Default::default() };
+    let settings = format.settings;
     settings.validate().map_err(bad)?;
     let reason = format!("Entire sequence represented by an offline placeholder: {error}");
     Ok(SequencePlan {
@@ -109,6 +112,10 @@ pub(super) fn sequence_placeholder(m: &Value, error: &Error) -> Result<SequenceP
             }],
         }],
         evidence: m.clone(),
-        warnings: vec![reason, "Sequence start timecode uses zero; original evidence is retained for debugging.".into()],
+        warnings: format
+            .warnings
+            .into_iter()
+            .chain([reason, "Sequence start timecode uses zero; original evidence is retained for debugging.".into()])
+            .collect(),
     })
 }
