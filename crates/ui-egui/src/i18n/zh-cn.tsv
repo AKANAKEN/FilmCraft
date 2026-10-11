@@ -187,6 +187,7 @@
 	Light	浅
 	Link	链接
 	Link Media…	链接媒体…
+	Import Avid Bin…	导入 Avid 素材箱…
 	Refresh Changed Media	刷新已更改的媒体
 	Linked Selection	关联选择
 	Lock Guides	锁定参考线
@@ -784,6 +785,13 @@
 	Offline	脱机
 	Missing	缺失
 	Link Media	链接媒体
+	Click '{button}' to apply the matches. Media is still offline until then.	单击“{button}”以应用匹配结果。在此之前，媒体仍处于脱机状态。
+	Link 1 file	链接 1 个文件
+	Link {n} files	链接 {n} 个文件
+	Linked {n} media component(s)	已链接 {n} 个媒体组件
+	Match selected. Click Link to reconnect the media.	已选择匹配项。单击“链接”以重新连接媒体。
+	Search finds matching files. Click Link to reconnect them, or leave them offline.	搜索可查找匹配文件。单击“链接”以重新连接媒体，或保持脱机状态。
+	{n} media file(s) need reconnecting.	{n} 个媒体文件需要重新连接。
 	{n} clip(s) can't find their media. Locate them, search a folder, or leave them offline.	有 {n} 个剪辑找不到其媒体。请定位它们、搜索文件夹，或保持脱机状态。
 	Clip Name	剪辑名称
 	File Name	文件名
