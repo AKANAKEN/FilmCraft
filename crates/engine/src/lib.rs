@@ -12,6 +12,7 @@
 
 pub mod aaf_omf;
 pub mod autosave;
+pub mod batch;
 pub mod captions;
 pub mod clip_ops;
 pub mod color;
@@ -190,6 +191,22 @@ impl Services for FsServices {
     }
 }
 
+/// Commands [`Session::recent_commands`] keeps.
+pub const RECENT_COMMANDS: usize = 64;
+
+/// One command in [`Session::recent_commands`].
+#[derive(Clone, Debug, Serialize)]
+pub struct RanCommand {
+    pub id: String,
+    pub params: Value,
+    /// Why it failed; absent when it succeeded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Its number in [`Session::commands_run`].
+    #[serde(skip)]
+    pub seq: u64,
+}
+
 /// Undo history of whole-project snapshots.
 #[derive(Clone, Default)]
 pub struct History {
@@ -345,6 +362,13 @@ pub struct Session {
     pub events: Vec<Event>,
     /// Commands executed (for macros/debugging): (id, params).
     pub journal: Vec<(String, Value)>,
+    /// The last commands run from outside (menus, panels, shortcuts, control channel, MCP), newest
+    /// last, at most [`RECENT_COMMANDS`]: edits, frontend commands and failures, not queries. A
+    /// click reports the ones it caused (`ui.click` → `ran`), so an agent learns which command a
+    /// button runs and sees a click that did nothing.
+    pub recent_commands: std::collections::VecDeque<RanCommand>,
+    /// How many commands [`Session::recent_commands`] has seen in all (it keeps only the last few).
+    pub commands_run: u64,
     /// Background jobs (exports, render previews…).
     pub jobs: Vec<Job>,
     /// User preferences (`prefs.*` commands) and where they persist (None = not persisted).
@@ -458,6 +482,8 @@ impl Session {
             services,
             events: Vec::new(),
             journal: Vec::new(),
+            recent_commands: Default::default(),
+            commands_run: 0,
             jobs: Vec::new(),
             prefs: Default::default(),
             prefs_path: None,
@@ -632,6 +658,23 @@ impl Session {
         self.revision != self.saved_revision
     }
 
+    /// Record a command in [`Session::recent_commands`]. [`Session::execute`] does it for engine
+    /// commands; a frontend calls it for the commands it runs itself (tools, playback, panels).
+    pub fn note_command(&mut self, id: &str, params: &Value, error: Option<String>) {
+        if self.recent_commands.len() >= RECENT_COMMANDS {
+            self.recent_commands.pop_front();
+        }
+        // a huge parameter object (a batch of thousands of steps) is summarised, not copied
+        let params = if params.to_string().len() > 4096 { serde_json::json!({"truncated": true}) } else { params.clone() };
+        self.commands_run = self.commands_run.saturating_add(1);
+        self.recent_commands.push_back(RanCommand { id: id.to_string(), params, error, seq: self.commands_run });
+    }
+
+    /// The commands recorded after `since` (a value of [`Session::commands_run`]), oldest first.
+    pub fn commands_since(&self, since: u64) -> Vec<&RanCommand> {
+        self.recent_commands.iter().filter(|c| c.seq > since).collect()
+    }
+
     /// Run a command by id.
     pub fn execute(&mut self, id: &str, params: Value) -> Result<Value> {
         let spec = commands::find(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
@@ -642,6 +685,7 @@ impl Session {
             let e = EngineError::Disabled(id.to_string(), why);
             if self.exec_depth == 0 {
                 self.log.push(panels::Level::Warning, id, e.to_string());
+                self.note_command(id, &params, Some(e.to_string()));
             }
             return Err(e);
         }
@@ -664,6 +708,10 @@ impl Session {
         self.sync_persistence();
         // playback reads the newest snapshot (mixer moves, mutes… are heard while playing)
         self.previews.live.publish_project(self.project.clone());
+        // a batch journals its steps, but is one thing the caller did
+        if self.exec_depth == 0 && (spec.journal || id == "edit.batch" || r.is_err()) {
+            self.note_command(id, &params, r.as_ref().err().map(ToString::to_string));
+        }
         if r.is_ok() && spec.journal {
             self.journal.push((id.to_string(), params));
             if self.journal.len() > 10_000 {
@@ -1073,6 +1121,8 @@ mod audio_effects_tests;
 mod audio_placement_tests;
 #[cfg(test)]
 mod autosave_tests;
+#[cfg(test)]
+mod batch_tests;
 #[cfg(test)]
 mod clip_ops_tests;
 #[cfg(test)]

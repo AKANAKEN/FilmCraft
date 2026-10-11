@@ -2730,10 +2730,21 @@ fn build() -> Vec<CommandSpec> {
                     .iter()
                     .map(|c| {
                         let all: Vec<&str> = s.shortcuts.for_command(c.id).iter().map(|b| b.keys.as_str()).collect();
-                        json!({"id": c.id, "label": c.label, "menu": c.menu, "shortcut": s.shortcuts.primary(c.id), "shortcuts": all, "defaultShortcut": c.shortcut, "params": c.params, "enabled": (c.enabled)(s).is_ok()})
+                        let enabled = (c.enabled)(s);
+                        let mut v = json!({"id": c.id, "label": c.label, "menu": c.menu, "shortcut": s.shortcuts.primary(c.id), "shortcuts": all, "defaultShortcut": c.shortcut, "params": c.params, "enabled": enabled.is_ok(), "scope": "engine"});
+                        // why a command can't run now ("no clips selected"): an agent can fix that first
+                        if let (Err(why), Some(o)) = (enabled, v.as_object_mut()) {
+                            o.insert("disabledReason".into(), json!(why));
+                        }
+                        v
                     })
                     .collect(),
             ))
+        }),
+        query!("command.recent", "Recent Commands", r#"{"limit":n?}"#, |s, p| {
+            let limit = p.get("limit").and_then(Value::as_u64).map_or(crate::RECENT_COMMANDS, |n| n as usize);
+            let skip = s.recent_commands.len().saturating_sub(limit);
+            Ok(json!({"total": s.commands_run, "commands": s.recent_commands.iter().skip(skip).collect::<Vec<_>>()}))
         }),
         query!("project.inspect", "Inspect Project", "{}", |s, _| Ok(crate::commands::inspect_project(s))),
         query!("sequence.inspect", "Inspect Sequence", r#"{"item":id?}"#, |s, p| {
@@ -2748,11 +2759,25 @@ fn build() -> Vec<CommandSpec> {
             r#"{"kind":"Video"|"Audio"|"VideoTransition"|"AudioTransition"?,"folder":"Video Transitions/Wipe"?,"detail":bool?}"#,
             |_, p| Ok(list_effects(p))
         ),
+        // the History panel: a click on a state undoes (steps < 0) or redoes (steps > 0) up to it
+        cmd!("history.step", "Go to History State", [], None, r#"{"steps":i64}"#, always, |s, p| {
+            let steps = p.get("steps").and_then(Value::as_i64).ok_or_else(|| bad("history.step", "need `steps` (negative: undo, positive: redo)"))?;
+            let (mut undone, mut redone) = (Vec::new(), Vec::new());
+            // at most the history there is: a huge count is not a long loop
+            let n = steps.unsigned_abs().min((s.history.undo.len() + s.history.redo.len()) as u64);
+            for _ in 0..n {
+                let label = if steps < 0 { s.undo() } else { s.redo() };
+                let Some(label) = label else { break };
+                if steps < 0 { undone.push(label) } else { redone.push(label) }
+            }
+            Ok(json!({"undone": undone, "redone": redone}))
+        }),
         query!("history.list", "List History", "{}", |s, _| Ok(
             json!({"undo": s.history.undo.iter().map(|h| &h.0).collect::<Vec<_>>(), "redo": s.history.redo.iter().map(|h| &h.0).collect::<Vec<_>>()})
         )),
     ];
     crate::sequence_tools::splice(&mut v);
+    v.extend(crate::batch::commands());
     v.extend(crate::captions::commands());
     v.extend(crate::settings::commands());
     v.extend(crate::mixer::commands());
