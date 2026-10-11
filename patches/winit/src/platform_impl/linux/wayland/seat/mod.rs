@@ -19,11 +19,13 @@ use crate::event::WindowEvent;
 use crate::keyboard::ModifiersState;
 use crate::platform_impl::wayland::state::WinitState;
 
+mod dnd;
 mod keyboard;
 mod pointer;
 mod text_input;
 mod touch;
 
+pub use dnd::DndState;
 pub use pointer::relative_pointer::RelativePointerState;
 pub use pointer::{PointerConstraintsState, WinitPointerData, WinitPointerDataExt};
 pub use text_input::{TextInputState, ZwpTextInputV3Ext};
@@ -36,6 +38,9 @@ use touch::TouchPoint;
 pub struct WinitSeatState {
     /// The pointer bound on the seat.
     pointer: Option<Arc<ThemedPointer<WinitPointerData>>>,
+
+    /// The data device bound on the seat, which delivers drags from other applications.
+    data_device: Option<sctk::data_device_manager::data_device::DataDevice>,
 
     /// The touch bound on the seat.
     touch: Option<WlTouch>,
@@ -130,6 +135,11 @@ impl SeatHandler for WinitState {
                 seat_state.pointer = Some(themed_pointer);
             },
             _ => (),
+        }
+
+        if seat_state.data_device.is_none() {
+            seat_state.data_device =
+                self.data_device_manager.as_ref().map(|manager| manager.get_data_device(queue_handle, &seat));
         }
 
         if let Some(text_input_state) =
