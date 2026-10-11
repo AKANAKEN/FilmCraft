@@ -1640,7 +1640,7 @@ impl FilmcraftApp {
                 .collect(),
             active: self.session.state.active_sequence.map(|i| i.0),
         };
-        for g in &groups {
+        for g in &mut groups {
             actions.extend(dock::draw_group_chrome(ui, g, self.ui.focused, &seqs, &t, &mut self.auto));
         }
         if maximized.is_none() {
@@ -1652,6 +1652,11 @@ impl FilmcraftApp {
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(g.content).id_salt(("panel", p.id())));
             child.set_clip_rect(g.content);
             panels::show(self, &mut child, p, g.content);
+        }
+        if maximized.is_none()
+            && let Some(action) = dock::panel_drop(ui, &groups, &t, &mut self.auto)
+        {
+            actions.push(action);
         }
         for a in actions {
             match a {
@@ -1675,6 +1680,13 @@ impl FilmcraftApp {
                 dock::DockAction::MoveSequence(id, index) => {
                     if let Err(e) = self.session.execute("sequence.moveTab", json!({"item": id, "index": index})) {
                         self.ui.status = e.to_string();
+                    }
+                }
+                dock::DockAction::MovePanel(panel, target, placement) => {
+                    if let Err(e) =
+                        menus::invoke(self, ui.ctx(), "window.panel.move", json!({"panel": panel.title(), "target": target.title(), "placement": placement}))
+                    {
+                        self.ui.status = e;
                     }
                 }
                 dock::DockAction::PanelMenu(p, pos) => {
