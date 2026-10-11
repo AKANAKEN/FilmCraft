@@ -144,17 +144,124 @@ See [the audit record](avid-code-audit.md) and the
 corpus coverage and decoder provenance. Private media, projects, screenshots and reports are
 not included in the repository. Public regressions generate their own fixtures.
 
-The native large-bin check retains all 1,953 masters. Only five currently bind as offline sources;
-1,948 retain metadata and binding diagnostics. This is **not native Phase 6 playback acceptance**.
-The earlier standalone reader's 6,934 live MDB matches, 3,043 verified MXF identities and
-1,761 complete / 192 partial clip counts describe catalog evidence, not this playback path.
+The large Phase 6 sound-effects bin retains all **1,953 masters**. With its media folders
+supplied, **1,280 masters / 2,163 components** link to verified paths. The remaining **673**
+retain metadata and explicit binding diagnostics: 381 fail remaining exact-timing requirements,
+192 lack sufficient managed-source evidence, 84 have sparse audio slots, and 16 exceed decoded
+media ranges. Without media folders, five bind as offline sources and 1,948 retain diagnostics.
+This is partial native playback coverage. The standalone reader's 6,934 live MDB matches,
+3,043 verified MXF identities and 1,761 complete / 192 partial clip counts describe catalog
+availability, not this playback path.
 
-Current import preparation binds descriptors before searching selected MXFs. A failed binding
-therefore cannot yet be rescued by that search. The next media-coverage increment should index
-selected media first and use verified identities and timing evidence during binding. Observed
-quarter-frame audio rates and component ranges need their own regression coverage.
+### Managed audio clocks and media search
 
-Other follow-ups are AMA media binding/remapping, broader codecs/descriptors, real Windows AVB
-samples, multiple-bin selection, color presentation and more timeline semantics. Complex
-feature-film bins are deferred until after the initial PR. No additional user captures or
-routine database rebuilds are required for the current subset.
+Selected roots are indexed once before binding. Final path validation reuses this bounded
+index, requires a complete scan and one copy per identity, and reopens candidates through the
+same identity/profile/range checks used by playback. Duplicates, unreadable files and cancellation
+do not authorize automatic linking. Blocking diagnostics remain visible when routine reader
+notices exceed the report limit. The no-folder path and standalone catalog commands retain
+their existing behavior.
+
+A narrow clock rule supports complete managed audio masters recorded at 23.976, with zero-offset
+direct audio references at 23.976 or four units per frame at 95.904. Every channel must have an
+identity-matched mono PCM MXF with zero origin/start and enough stored samples to back its declared
+range. The declared range must equal the whole audio samples in the candidate 24000/1001 master
+duration. This combines Avid's nominal-rate convention with independent file evidence; it is not
+a blanket decimal-rate substitution. Master duration remains exact, while component lengths end
+at declared whole samples. Raw rates/counts and per-component interpretation evidence are retained
+and the preview reports the interpretation. Arbitrary offsets, overruns and essence padding are
+not inferred.
+
+The distinction matters in the supplied media: one file stores 248,443 samples but declares
+248,311; another stores 88,289 but declares 88,288. Native and external FFprobe checks agree on
+the declared ranges. AVB descriptor lengths, stored samples and playable ranges remain separate.
+The MXF reader also recognizes the legacy AAF picture DataDefinition in this corpus and exposes
+original material-track rates/durations separately from converted file-package edit units.
+
+Generated tests cover 44.1/48 kHz endpoints, quarter-frame units, source padding, invalid ranges,
+incomplete/duplicate searches, stale final validation and retained evidence. The private Phase 6
+regression reopens all 2,163 components, samples 12 clips, checks undo/redo and project roundtrip,
+and verifies unchanged AVB bytes. `FILMCRAFT_AVID_FFMPEG` enables exact PCM comparisons for those
+clips. The first debug CLI measurement, including JSON reporting and project save, was 11.24 s
+and approximately 964 MiB peak RSS; this is not a release-performance claim.
+
+### Sequence formats and timecode
+
+Each composition resolves its own format label and recorded edit rate. Recognized 720p, 1080p
+and UHD labels establish the raster; explicit progressive dimensions distinguish DCI apertures
+and custom sizes. Bare `4K` remains ambiguous. A matching fractional-rate label corroborates its
+rational clock (for example 23.976 and 24000/1001), used consistently for cuts, gaps, offsets,
+duration and placeholder recovery. Source clocks remain separate from timeline clocks, and
+original composition evidence is retained unchanged.
+
+Conflicting labels fail strict conversion. Best effort retains the recorded clock with a warning
+and disables conflicting label evidence for offline source-rate inference. Unknown rasters use
+an explicit 1920×1080 fallback warning. Pixel aspect ratio defaults to square and color settings
+retain FilmCraft defaults. Custom-format, anamorphic and HDR metadata are not fully interpreted.
+1080i labels identify field rates: best effort retains a frame clock and raster with a
+progressive-rendering warning; strict interlaced conversion remains unsupported.
+
+Primary timecode uses its nominal base (30 at 30000/1001). Observed TCCP flags 0/1 map to NDF/DF
+without reinterpreting the stored starting frame count; 107892 is `01;00;00;00` at 29.97 DF.
+Unknown flags and DF on incompatible rates are unsupported. Sequence conversion and optional
+clock evidence share a 128-total-track bound, including auxiliary tracks. A source without a
+valid full identity contributes no optional clock proof; ordinary conversion still diagnoses
+unsupported edits without blocking usable bin contents.
+
+The observed constant, single-source `EFF_TIMEWARP.AUDIO_TIME_WARP` adapter retains its original
+sample clock, source selection and 100% playback speed. Source/output ratios, coverage, component
+bounds and channel identity are validated. Audio adapters never authorize picture clock evidence.
+Strict conversion requires zero phase offset. Best effort can preserve recorded source-frame
+starts and output lengths for nonnegative phase offsets with an explicit approximation warning.
+It does not reproduce Avid's phase alignment and cannot establish an offline source clock.
+
+Public semantic references are Avid's [rational edit-rate convention](https://developer.avid.com/ctms/api/aa/resources/keyframes.html)
+and [High Resolution Workflows Guide](https://resources.avid.com/SupportFiles/attach/High_Res_WorkflowsGuide.pdf),
+tables on printed pages 114–116. These describe format semantics, not AVB serialization.
+
+### Phase 14 acceptance
+
+Three additional Avid-authored bins import three masters and one sequence each, with all six
+components linked from existing Phase 12 media. Each sequence has two picture edits and two edits
+on each of A1/A2, without offline placeholders or conversion errors:
+
+| Bin | Raster / exact rate | Length in frames | Start timecode |
+| --- | --- | --- | --- |
+| 1080 2398 Bin | 1920×1080, 24000/1001 | 686 | 01:00:00:00 NDF |
+| 2997 drop frame | 1920×1080, 30000/1001 | 1299 | 01;00;00;00 DF |
+| UHD 25 Bin | 3840×2160, 25/1 | 1083 | 01:00:00:00 NDF |
+
+Native decoding and the external pyavb oracle agree on composition lengths, decimal edit rates,
+timecode flags/bases and start counts. FILE extension 3 retains an additional bounded UTF-8
+location, observed as UNC and POSIX paths; path precedence is unknown and does not enable AMA
+binding. The UHD sample independently records 3840×2160 and 25/1 in `_TGTFORMAT_ATTRLIST`.
+Other supported label spellings and formats have synthetic coverage pending real-file evidence.
+
+The private regression checks settings, every edit boundary, source starts, routing, linked
+components, undo/redo, roundtrip and unchanged AVBs. Public tests cover long gaps without drift,
+mixed rates, independent formats in one bin, DF/NDF, malformed inputs, channel clocks, bounds,
+phase warnings and disabled offline inference. The user reported no playback issues on
+2026-10-11. This is practical acceptance, not a measured frame/sample equivalence claim; the
+nonzero phase offsets observed in the 23.976 sample (2, 109 and 55) retain their warnings.
+
+## Remaining work
+
+The current update belongs to the existing Avid import PR. Freeze further feature additions
+pending review. Persistent Avid-style media databasing and modular project storage remain
+separate work. A shareable Avid-authored fixture project is deferred until a maintainer requests
+it. No routine database rebuilds or additional screenshots are needed for this tested subset.
+
+- Test sequences containing grouped media (group clips/multicam): selected angles and audio,
+  synchronization, edit boundaries, relinking and unsupported-structure diagnostics.
+- Establish exact nonzero adapter phase semantics; preserve current approximation warnings.
+- Examine remaining audio timing profiles, sparse channel slots and missing live-source evidence
+  separately, preserving missing A1 independently from present A2.
+- Validate custom raster/rate/field metadata from `_TGTFORMAT_ATTRLIST`, plus PAR, HDR/color and
+  field rendering, without treating defaults as faithful transfers.
+- Add AMA binding/remapping, broader codecs/descriptors, Windows AVB samples, multiple-bin
+  selection, color presentation and further timeline semantics in separately validated work.
+- Keep Phase 13's complex feature-film bins deferred until after the initial PR.
+
+Research artifacts, generated projects and test launchers remain in ignored
+`target/avid-local-followups/`. The [audit record](avid-code-audit.md) distinguishes private
+sample evidence, targeted regression checks and complete repository gates.

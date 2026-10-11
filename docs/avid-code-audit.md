@@ -37,6 +37,8 @@ The relevant regressions failed before these corrections and pass afterward.
 | Ordinary Avid OP-Atom notices disabled automatic matching | Recognize only the exact validated companion-reference and opaque-packet notices; preserve all text and continue blocking on other parser warnings. |
 | Repeated native references could amplify copied payloads | Charge variable payloads and normalized values to graph byte budgets in addition to node/depth limits. |
 | UI search assertions could read stale labels | Require a completed search report and let the previous-frame automation registry catch up before checking labels. |
+| Optional adapter clock evidence made a missing/legacy full source ID fatal to the bin | Omit unusable clock proof and leave edit diagnostics to ordinary conversion; preserve other valid evidence. |
+| Clock evidence rejected more than 64 tracks despite conversion accepting 128 | Share the 128-total-track limit and test acceptance at the bound and rejection above it. |
 
 The last UI case reproduced in a parallel release run while passing in isolation. All twelve
 media UI cases subsequently passed in ten consecutive parallel runs. The correction changes
@@ -111,15 +113,43 @@ The standalone research catalog's Phase 6 counts are 1,953 masters, 6,934 live M
 3,043 verified MXF identities, 1,761 complete clips and 192 partial clips. They describe
 identity/availability evidence, not native playback acceptance.
 
-The native default import preserves all 1,953 masters, but currently binds only five offline
-sources; the other 1,948 retain metadata and diagnostics. Timing, missing source evidence,
-track slots and descriptor ranges require further work. Search currently follows binding and
-cannot rescue a rejected source using MXF evidence. This limitation is intentional and visible;
-it must not be reported as successful large-library playback.
+Native import preserves all 1,953 masters. Without media folders it binds five offline sources;
+the other 1,948 retain metadata and diagnostics. With the source media supplied, identity indexing
+now precedes binding and supports a narrow full-source audio clock interpretation corroborated
+by declared MXF sample ranges. This links 1,280 masters through 2,163 verified components.
+The remaining 673 retain explicit diagnostics: timing (381), insufficient managed-source evidence
+(192), sparse track slots (84), and decoded range overruns (16). This remains partial coverage.
 
 The tested automatic frame-rate/spatial adapter mappings are not proof of Avid rendering fidelity.
 AMA binding, general retimes/effects, complex sequences, color presentation and broad decoder
-profiles remain outside this acceptance result.
+profiles remain outside this acceptance result. Nonzero adapter phases are approximated only
+in best-effort mode with retained warnings; they do not authorize offline clock inference.
+
+## Expanded import and sequence audit — 2026-10-11
+
+The follow-up audit covers native locator extension 3, identity indexing before binding and
+final replacement validation, full-source audio clock reconciliation, sequence formats/timecode,
+mixed-rate video/audio adapters and best-effort recovery. Phase 13 was not inspected.
+The two optional-clock defects listed above were reproduced before their fixes.
+
+Targeted validation passed: 599 engine, 48 interchange and 31 MXF unit tests; eight opt-in native
+import/relink tests; and four decoder/metadata comparison tests across the existing 25-bin oracle
+corpus. The Phase 6 linked import reopens all 2,163 components, compares selected PCM samples with
+external FFmpeg, and checks project roundtrip and undo/redo. Generated fixtures cover 44.1/48 kHz,
+quarter-frame source units, stored padding, invalid declared ranges, ambiguous/incomplete scans,
+stale final validation and source-evidence retention.
+
+Phase 14 adds three Avid-authored bins: 1920×1080 at 24000/1001, 1920×1080 at 30000/1001 DF,
+and 3840×2160 at 25/1. Each links all six managed components and retains its expected timing,
+source offsets and channel routing through save/reopen and undo/redo. The user reported no
+playback issues; this is not measured frame/sample equivalence to Avid. Synthetic cases cover
+additional rasters/rates, long gaps, DF/NDF, unsupported flags and phase-approximation warnings.
+
+SHA-256 checks confirm the 28 original AVBs and six Phase 12 MXFs covered by the saved manifests
+are unchanged. Private tests additionally use `FILMCRAFT_AVB_LOCATION_ORACLE`,
+`FILMCRAFT_AVID_PHASE6_MEDIA_FOLDER`, `FILMCRAFT_AVID_FFMPEG`, `FILMCRAFT_AVID_RELINK_PROJECT`,
+`FILMCRAFT_AVID_PHASE14_FOLDER` and `FILMCRAFT_AVID_PHASE12_MEDIA_FOLDER`. Test assets stay private.
+Logs and source hashes are retained in ignored `target/avid-local-followups/audit-phase14/`.
 
 ## Checkpoint gate
 
@@ -133,7 +163,7 @@ Local evidence is retained in ignored `target/avid-checkpoint-ci-green.log`, the
 changes were checked separately in the final submission gate below.
 
 
-## Final submission gate
+## Initial submission gate
 
 After dialog localization, explicit preview-omission counts and documentation consolidation,
 `cargo xtask ci` passes on macOS 27.0.1 arm64 with Rust 1.95.0: **2,881 passed, 0 failed,
@@ -149,3 +179,17 @@ and the orange quoted Link-button guidance. These renders remain in ignored
 The separately submitted maintenance tree passes its own complete gate: 2,807 passed, 0 failed,
 41 ignored. Git commit attribution was corrected to the contributor's GitHub no-reply identity;
 the tested source trees were unchanged by that metadata correction.
+
+## Expanded import submission gate — 2026-10-11
+
+After the media-indexing, timing, sequence-format and audit fixes above, `cargo xtask ci` passes
+on macOS 27.0.1 arm64 with Rust 1.95.0: **2,899 passed, 0 failed, 64 explicitly ignored**.
+Formatting, workspace release Clippy, dependency layers, attribution for 69 assets and WASM
+compilation across 44 crates also pass. The two additional ignored tests are the private Phase 6
+linked-import and Phase 14 regressions; both passed separately in the opt-in audit run.
+
+The implementation and its public regressions are committed separately from the updated
+coverage documentation. Full gate logs are retained locally as `target/avid-pr-update/ci.log`
+and `target/avid-pr-update/ci-docs.log`.
+Private media, oracle exports, generated projects and launchers are excluded from the commits.
+The scope remains the existing Avid import PR; the maintenance PR and deferred features are unchanged.

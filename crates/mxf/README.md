@@ -24,7 +24,7 @@ Implemented from the SMPTE documents (editions used):
 | SMPTE RDD 44 | 2017 | Apple ProRes mapping |
 | SMPTE RP 224 / RP 210 | registers | labels: data definitions, picture coding, essence containers, operational patterns; property labels of the primer pack (writer) |
 | SMPTE ST 330 | 2011 | basic UMIDs of the written packages |
-| AAF Object Specification | 1.1 | legacy sound/timecode data-definition identifiers (also used by the existing AAF adapter) |
+| AAF Object Specification | 1.1 | legacy picture/sound/timecode data-definition identifiers (also used by the existing AAF adapter) |
 
 ## Reading a file
 
@@ -57,7 +57,8 @@ let pcm = mxf.read_pcm(&file, a, 48_000, 1920)?;       // planar f32, sample-exa
   `LinkedTrackID`). Without a usable material package the file packages' tracks are used directly.
   Elements are matched by track number, or — when the number is 0 or does not match (some OP-Atom
   writers) — the only unclaimed element stream of the right kind. Resolved tracks expose their
-  file-package UMID so callers can verify external component bindings. Legacy AAF sound and
+  file-package UMID so callers can verify external component bindings. Original material-track
+  rates and durations are retained separately from the converted file-track units. Legacy AAF picture, sound and
   timecode data-definition UUIDs are recognized alongside registered MXF labels.
 - **Pictures.** One `Sample` per edit unit in stored order: frame wrapping (one element each) or
   clip wrapping (one element split by the index: constant `EditUnitByteCount` or VBR entries).
