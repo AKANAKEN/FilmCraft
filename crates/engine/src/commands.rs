@@ -676,6 +676,21 @@ pub(crate) fn place_item(
     label: &str,
     audio_split: Option<(TimeRange, Tick)>,
 ) -> Result<Vec<ClipId>> {
+    place_item_impl(s, item, range, at, vdest, adest, insert, label, audio_split, false)
+}
+
+fn place_item_impl(
+    s: &mut Session,
+    item: ItemId,
+    range: TimeRange,
+    at: Tick,
+    vdest: Option<TrackId>,
+    adest: Option<TrackId>,
+    insert: bool,
+    label: &str,
+    audio_split: Option<(TimeRange, Tick)>,
+    exact_duration: bool,
+) -> Result<Vec<ClipId>> {
     let pi = s.project.item(item).ok_or_else(|| bad(label, "no such item"))?.clone();
     // the nest toggle off: a sequence edits in as its clips (a multi-camera source stays one clip)
     if s.state.sequences_as_clips && pi.as_sequence().is_some_and(|q| q.multicam.is_none()) {
@@ -708,6 +723,9 @@ pub(crate) fn place_item(
         let link = if has_v && has_a { Some(p.alloc_id()) } else { None };
         if let Some(vdest) = vdest.filter(|_| has_v) {
             let mut v = p.make_track_item(item, TrackKind::Video, at, range, rate).ok_or_else(|| bad(label, "bad item"))?;
+            if exact_duration {
+                v.duration = range.duration.max(rate.frame_duration());
+            }
             v.link = link;
             for e in &mut v.effects {
                 resolve_auto_points(e, frame, src_size);
@@ -722,6 +740,9 @@ pub(crate) fn place_item(
         if let Some(adest) = adest.filter(|_| has_a) {
             let (arange, aat) = audio_split.unwrap_or((range, at));
             let mut a = p.make_track_item(item, TrackKind::Audio, aat, arange, rate).ok_or_else(|| bad(label, "bad item"))?;
+            if exact_duration {
+                a.duration = arange.duration.max(rate.frame_duration());
+            }
             // Modify ▸ Audio Channels with several audio clips: one per clip, on the tracks below
             let clips: Vec<Vec<u16>> =
                 p.item(item).and_then(|i| i.as_media()).and_then(|m| m.interpret.audio_channels.as_ref()).map(|m| m.clips.clone()).unwrap_or_default();
@@ -2235,8 +2256,20 @@ fn build() -> Vec<CommandSpec> {
                     _ => (None, None),
                 };
                 let sin = p.get("sourceIn").and_then(Value::as_i64).map(Tick).or(mi).unwrap_or_default();
-                let dur = p.get("duration").and_then(Value::as_i64).map(Tick).unwrap_or_else(|| mo.unwrap_or(full) - sin);
-                let ids = place_item(s, item, TimeRange::new(sin, dur), at, v, a, bool_p(p, "insert").unwrap_or(false), "Place Clip", None)?;
+                let requested_duration = p.get("duration").and_then(Value::as_i64).map(Tick);
+                let dur = requested_duration.unwrap_or_else(|| mo.unwrap_or(full) - sin);
+                let ids = place_item_impl(
+                    s,
+                    item,
+                    TimeRange::new(sin, dur),
+                    at,
+                    v,
+                    a,
+                    bool_p(p, "insert").unwrap_or(false),
+                    "Place Clip",
+                    None,
+                    requested_duration.is_some(),
+                )?;
                 Ok(json!({"clips": ids.iter().map(|c| c.0).collect::<Vec<_>>()}))
             }
         ),
@@ -3757,6 +3790,9 @@ pub fn inspect_project(s: &Session) -> Value {
 
 pub fn inspect_sequence(s: &Session, id: ItemId, q: &filmcraft_project::Sequence) -> Value {
     let rate = q.settings.frame_rate;
+    let duration = q.duration();
+    // Count the frames covering the whole sequence, including a partially occupied last frame.
+    let (_, duration_frames) = filmcraft_export::frame_span(rate, TimeRange::new(Tick::ZERO, duration));
     let tr = |t: &filmcraft_project::Track| {
         json!({
             "id": t.id.0, "name": t.name, "locked": t.locked, "syncLock": t.sync_lock, "enabled": t.enabled, "muted": t.muted, "solo": t.solo,
@@ -3774,8 +3810,8 @@ pub fn inspect_sequence(s: &Session, id: ItemId, q: &filmcraft_project::Sequence
         "id": id.0,
         "name": s.project.item(id).map(|i| i.name.clone()),
         "settings": q.settings,
-        "duration": q.duration().0,
-        "durationFrames": rate.frame_at(q.duration()),
+        "duration": duration.0,
+        "durationFrames": duration_frames,
         "playhead": s.state.playheads.get(&id).map(|t| t.0),
         "in": q.mark_in.map(|t| t.0),
         "out": q.mark_out.map(|t| t.0),

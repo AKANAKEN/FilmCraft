@@ -213,6 +213,16 @@ strings; dotted keys nest (`color.r=1`). `run` prints one JSON line per command
 (`{"line","id","ok","result"|"error"}`) and stops at the first failure unless `--keep-going`.
 `--save` writes back to `--project`; `--save-as path` writes elsewhere.
 
+When `duration` is explicitly supplied, `timeline.place` preserves its requested start, source In
+and duration in integer ticks, including sub-frame values; durations shorter than one sequence
+frame retain the existing one-frame minimum. Omitting `duration` keeps the existing frame rounding,
+as do source Insert/Overwrite and other placement commands.
+For `inspect sequence` / `sequence.inspect`, the sequence-level `durationFrames` counts every frame
+covered by the full sequence at its frame rate, including a partially occupied final frame (zero
+for an empty sequence). This matches whole-sequence video export at that frame rate. Clip-level
+`startFrame`, `endFrame` and `durationFrames` remain rounded-down frame coordinates; their tick
+fields preserve the exact span. Export ranges or a different output frame rate can change the count.
+
 `markers.exportCsv {path}` exports all markers in the active sequence, including colours hidden
 in the UI and markers outside In/Out, sorted by start then id. The UTF-8 CSV has a header and CRLF
 records; quotes, commas and embedded newlines are escaped. Columns are Sequence, Marker ID, Name,

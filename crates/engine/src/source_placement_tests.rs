@@ -16,6 +16,75 @@ fn counts(s: &Session) -> (usize, usize) {
 }
 
 #[test]
+fn subframe_placement_keeps_exact_spans_and_undo_redo() {
+    for insert in [false, true] {
+        for (item, track, count) in [(11, "A2", 1), (5, "V1", 2)] {
+            let mut s = setup();
+            let before = s.project.clone();
+            s.execute(
+                "timeline.place",
+                json!({"item":item,"track":track,"time":638_568_000_000_i64,
+                       "sourceIn":254_016_000_000_i64,"duration":631_512_000_000_i64,"insert":insert}),
+            )
+            .unwrap();
+            let q = s.active_sequence().unwrap();
+            let clips: Vec<_> = q.all_tracks().flat_map(|t| t.items.iter()).collect();
+            assert_eq!(clips.len(), count);
+            for clip in &clips {
+                assert_eq!(clip.start, Tick(638_568_000_000));
+                assert_eq!(clip.duration, Tick(631_512_000_000));
+                assert_eq!(clip.end(), Tick(1_270_080_000_000));
+                assert_eq!(clip.source_in, Tick(254_016_000_000));
+                assert_eq!(clip.source_out(), Tick(885_528_000_000));
+            }
+            if count == 2 {
+                assert!(clips[0].link.is_some());
+                assert_eq!(clips[0].link, clips[1].link);
+            }
+            q.check().unwrap();
+            let after = s.project.clone();
+            s.execute("edit.undo", json!({})).unwrap();
+            assert_eq!(*s.project, *before);
+            s.execute("edit.redo", json!({})).unwrap();
+            assert_eq!(*s.project, *after);
+            assert_eq!(s.execute("sequence.inspect", json!({})).unwrap()["durationFrames"], 120);
+        }
+    }
+}
+
+#[test]
+fn source_edit_keeps_frame_rounded_duration_and_playhead() {
+    for command in ["source.insert", "source.overwrite"] {
+        let mut s = setup();
+        // Demo media is 24000/1001 fps: inclusive Out adds 10594584000 ticks.
+        s.execute("project.setMarks", json!({"item":5,"in":0,"out":620_928_000_000_i64})).unwrap();
+        s.set_playhead(Tick(638_568_000_000));
+        s.execute(command, json!({})).unwrap();
+        // Source edits keep their existing frame-rounded span and cursor.
+        assert_eq!(s.playhead(), Tick(1_270_080_000_000));
+        assert_eq!(s.active_sequence().unwrap().duration(), Tick(1_270_080_000_000));
+    }
+}
+
+#[test]
+fn explicit_placement_keeps_frame_minimum_and_implicit_rounding() {
+    for (duration, expected) in [(None, 635_040_000_000_i64), (Some(1_i64), 10_584_000_000), (Some(635_040_000_000), 635_040_000_000)] {
+        let mut s = setup();
+        s.execute("project.setMarks", json!({"item":5,"in":0,"out":620_928_000_000_i64})).unwrap();
+        let mut params = json!({"item":5,"track":"V1","time":0});
+        if let Some(duration) = duration {
+            params["duration"] = json!(duration);
+        }
+        s.execute("timeline.place", params).unwrap();
+        let q = s.active_sequence().unwrap();
+        for clip in q.all_tracks().flat_map(|t| t.items.iter()) {
+            assert_eq!(clip.duration, Tick(expected), "requested duration {duration:?}");
+        }
+        q.check().unwrap();
+    }
+}
+
+#[test]
 fn unmarked_source_defaults_to_full_span_without_writing_marks() {
     let s = setup();
     let view = clip_ops::source_view(&s, ItemId(5)).unwrap();
@@ -43,7 +112,9 @@ fn marked_range_places_video_audio_or_linked_both_as_one_undo_step() {
         let q = s.active_sequence().unwrap();
         for clip in q.all_tracks().flat_map(|t| t.items.iter()) {
             assert_eq!(clip.source_in, start);
-            assert_eq!(clip.duration, q.settings.frame_rate.snap_nearest(range.duration));
+            // Two seconds plus the inclusive 24000/1001 fps source frame, without
+            // rounding that source span to the 24 fps sequence grid.
+            assert_eq!(clip.duration, Tick(518_626_584_000));
         }
         if video && audio {
             assert!(q.video_tracks[0].items[0].link.is_some());
