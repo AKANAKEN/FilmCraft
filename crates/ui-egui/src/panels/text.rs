@@ -74,7 +74,10 @@ fn tool_button(app: &mut FilmcraftApp, ui: &mut egui::Ui, r: Rect, icon: Icon, i
 
 fn captions(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let t = app.tokens;
-    let Some(seq) = app.session.active_sequence().cloned() else {
+    // Keep the immutable project snapshot alive while UI commands mutate the session.
+    // Cloning a sequence here copies every clip and effect on every redraw.
+    let project = app.session.project.clone();
+    let Some(seq) = app.session.state.active_sequence.and_then(|id| project.sequence(id)) else {
         crate::dock::placeholder(ui, rect, &t, tl!("Open a sequence to work with captions"));
         return;
     };
@@ -355,7 +358,8 @@ fn transcript(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     });
     let rect = Rect::from_min_max(rect.min + vec2(0.0, 30.0), rect.max);
     let source = app.ui.transcript_source;
-    let words = if source { filmcraft_engine::transcript::source_words(&app.session) } else { filmcraft_engine::transcript::sequence_words(&app.session) };
+    let content = app.transcript_cache.content(&app.session, source);
+    let words = &content.words;
     // Keep progress visible even while the transcript is empty or the user switches monitors.
     if let Some(job) = app
         .session
@@ -419,7 +423,7 @@ fn transcript(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(Rect::from_min_size(bar.min, vec2(sw, 24.0))));
     let sresp = crate::widgets::search_field(&mut child, &mut app.ui.transcript_search, tl!("Search"), sw, &t);
     app.auto.add("text.transcript.search", sresp.rect, "Search transcript");
-    let hits: Vec<std::ops::Range<usize>> = filmcraft_edit::transcript::search(&words, &app.ui.transcript_search);
+    let highlights = app.transcript_cache.highlights(&app.ui.transcript_search);
     let mut x = bar.min.x + sw + 10.0;
     let range = sel.map(|(a, b)| json!({"from": a.min(b), "to": a.max(b)}));
     let tools: [(Icon, &str, &str, bool, &str, Value); 4] = [
@@ -453,8 +457,8 @@ fn transcript(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let list = Rect::from_min_max(pos2(rect.min.x + 6.0, bar.max.y + 8.0), pos2(rect.max.x - 6.0, rect.max.y - 4.0));
     ui.painter().rect_filled(list, 3.0, t.app_bg);
     let ph = if source { app.session.state.source_playhead } else { app.session.playhead() };
-    let current = filmcraft_edit::transcript::word_at(&words, ph);
-    let paras = filmcraft_edit::transcript::paragraphs(&words, filmcraft_time::Tick::from_seconds_f64(1.5));
+    let current = filmcraft_edit::transcript::word_at(words, ph);
+    let paras = &content.paragraphs;
     let rate = if source {
         app.session.state.source_item.and_then(|id| filmcraft_engine::clip_ops::source_view(&app.session, id)).map(|v| v.rate).unwrap_or_default()
     } else {
@@ -478,7 +482,7 @@ fn transcript(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 for i in pr.clone() {
                     let w = &words[i];
                     let in_sel = sa.is_some_and(|a| i >= a) && sb.is_some_and(|b| i <= b);
-                    let hit = hits.iter().any(|h| h.contains(&i));
+                    let hit = highlights.get(i).copied().unwrap_or(false);
                     let mut text = egui::RichText::new(&w.text).size(13.0).color(if Some(i) == current { t.hot_text } else { t.text });
                     if in_sel {
                         text = text.background_color(t.row_selected);

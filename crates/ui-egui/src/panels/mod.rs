@@ -48,6 +48,7 @@ pub mod timeline_captions;
 pub mod timeline_hit;
 pub mod timeline_volume;
 pub mod tools;
+pub(crate) mod transcript_cache;
 pub mod transition_controls;
 pub mod trim_monitor;
 pub mod tts;

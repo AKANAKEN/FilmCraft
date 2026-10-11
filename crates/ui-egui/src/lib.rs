@@ -300,6 +300,7 @@ pub struct FilmcraftApp {
     pub shortcut_editor: panels::shortcuts_dialog::EditorState,
     pub toast: Option<(String, f64)>,
     pub tl: panels::timeline::TlState,
+    pub(crate) transcript_cache: panels::transcript_cache::TranscriptCache,
     /// Commands from outside the UI (native menu bar), invoked on the UI thread.
     pub command_inbox: Option<Receiver<String>>,
     /// GPU compositor (when running on wgpu): device state + compositor + the egui texture it feeds.
@@ -488,6 +489,7 @@ impl FilmcraftApp {
             shortcut_editor: Default::default(),
             toast: None,
             tl: Default::default(),
+            transcript_cache: Default::default(),
             command_inbox: None,
             gpu: None,
             watched_render: None,

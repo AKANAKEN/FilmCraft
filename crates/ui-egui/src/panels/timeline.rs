@@ -226,7 +226,10 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         return;
     };
     // A damaged project can name an active sequence that no longer exists.
-    let Some(seq) = app.session.active_sequence().cloned() else {
+    // Keep the immutable project snapshot alive while UI commands mutate the session.
+    // Cloning a sequence here copies every clip and effect on every redraw.
+    let project = app.session.project.clone();
+    let Some(seq) = app.session.state.active_sequence.and_then(|id| project.sequence(id)) else {
         empty_state(app, ui, rect);
         return;
     };
@@ -370,7 +373,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let visible = (layout.tick_at(content.min.x - 2.0), layout.tick_at(content.max.x + 2.0));
     let selection: Vec<ClipId> = app.session.state.selection.clone();
     let mut previews: HashMap<ClipId, (Tick, Tick, Option<TrackId>)> = HashMap::new(); // live drag preview: (start, dur, track)
-    preview_drag(app, &seq, &layout, &mut previews);
+    preview_drag(app, seq, &layout, &mut previews);
     for r in &rows {
         let Some(tr) = seq.track(r.track) else { continue };
         let clip_rect = if r.kind == TrackKind::Video { vclip } else { aclip };
@@ -433,7 +436,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
             }
         }
         // selected edit points (trim mode): red brackets for ripple, yellow for roll / regular trim
-        super::trim_monitor::paint_edit_points(app, &p, &seq, tr, r, &layout);
+        super::trim_monitor::paint_edit_points(app, &p, seq, tr, r, &layout);
         // transitions (one being dragged where the drag puts it; the selected ones outlined)
         for trn in &tr.transitions {
             let (start, end) = match &app.tl.drag {
@@ -454,7 +457,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     }
 
     // ---- track headers
-    draw_headers(app, ui, &seq, &rows, rect, vclip, aclip, &t);
+    draw_headers(app, ui, seq, &rows, rect, vclip, aclip, &t);
     // divider between video and audio
     let div = Rect::from_min_max(pos2(rect.min.x, split_y), pos2(content.max.x, split_y + DIVIDER_H));
     painter.rect_filled(div, 0.0, t.app_bg);
@@ -481,11 +484,11 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     // ---- caption tracks
     if cap_n > 0 {
         painter.rect_filled(Rect::from_min_max(pos2(rect.min.x, caption_area.max.y), pos2(content.max.x, caption_area.max.y + DIVIDER_H)), 0.0, t.app_bg);
-        super::timeline_captions::paint(app, ui, &seq, caption_area, &layout, &t);
+        super::timeline_captions::paint(app, ui, seq, caption_area, &layout, &t);
     }
 
     // ---- top block: timecode + toggles, ruler
-    draw_top(app, ui, rect, &seq, &layout, &t, seq_id);
+    draw_top(app, ui, rect, seq, &layout, &t, seq_id);
 
     // ---- playhead
     let ph = app.session.playhead();
@@ -538,12 +541,12 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     );
 
     // ---- interaction
-    interact(app, ui, &seq, &layout, rect);
-    super::timeline_volume::interact(app, ui, &seq, &layout, aclip);
+    interact(app, ui, seq, &layout, rect);
+    super::timeline_volume::interact(app, ui, seq, &layout, aclip);
     // track keyframes (drawn and edited on top of the clips)
-    super::timeline_automation::show(app, ui, &seq, &layout, aclip);
+    super::timeline_automation::show(app, ui, seq, &layout, aclip);
     if cap_n > 0 {
-        super::timeline_captions::interact(app, ui, &seq, caption_area, &layout);
+        super::timeline_captions::interact(app, ui, seq, caption_area, &layout);
     }
     let _ = (visible, TICKS_PER_SECOND);
 }
