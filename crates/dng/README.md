@@ -1,7 +1,8 @@
 # filmcraft-dng
 
-Clean-room DNG and CinemaDNG camera RAW decoder in pure Rust. Layer L0: depends only on
-`thiserror` and (optional, feature `threads`, default on) `rayon`. Builds for
+Clean-room DNG and CinemaDNG camera RAW decoder in pure Rust. Layer L0: depends on `thiserror`,
+`image` (its baseline JPEG decoder only, for lossy JPEG DNG; the workspace already uses it in
+`codecs` and `media`) and (optional, feature `threads`, default on) `rayon`. Builds for
 `wasm32-unknown-unknown`; no `unsafe`. Implemented from the public specifications below only; the
 source of no other raw decoder (dcraw, LibRaw, rawspeed, darktable, RawTherapee, FFmpeg, the Adobe
 DNG SDK…) was read. LibRaw's `unprocessed_raw` sample program is run as an external test oracle
@@ -11,7 +12,7 @@ when it is installed, never linked.
 
 | Document | Edition | Used for |
 |---|---|---|
-| Adobe Digital Negative (DNG) Specification | 1.4.0.0 (2012) – 1.7.1.0 (2023) | raw IFD selection (NewSubFileType 0), CFA / LinearRaw data, BitsPerSample packing, LinearizationTable, BlackLevel (+ RepeatDim, DeltaH / DeltaV), WhiteLevel, ActiveArea, DefaultCrop, the colour model of chapter 6 (ColorMatrix, CameraCalibration, AnalogBalance, ForwardMatrix, AsShotNeutral / AsShotWhiteXY, CalibrationIlluminant interpolation, BaselineExposure), opcode lists (chapter 7: OpcodeList1–3 and opcodes 1–14) |
+| Adobe Digital Negative (DNG) Specification | 1.4.0.0 (2012) – 1.7.1.0 (2023) | Compression 34892 (lossy JPEG: 8-bit LinearRaw only), raw IFD selection (NewSubFileType 0), CFA / LinearRaw data, BitsPerSample packing, LinearizationTable, BlackLevel (+ RepeatDim, DeltaH / DeltaV), WhiteLevel, ActiveArea, DefaultCrop, the colour model of chapter 6 (ColorMatrix, CameraCalibration, AnalogBalance, ForwardMatrix, AsShotNeutral / AsShotWhiteXY, CalibrationIlluminant interpolation, BaselineExposure), opcode lists (chapter 7: OpcodeList1–3 and opcodes 1–14) |
 | TIFF Revision 6.0 | June 1992 | header, IFDs, field types, strips and tiles, PlanarConfiguration, row padding |
 | TIFF/EP, ISO 12234-2 | 2001 | CFARepeatPatternDim, CFAPattern |
 | TIFF Technical Note 1 (SubIFDs) | 1993 | the SubIFD tree |
@@ -46,7 +47,7 @@ white as kelvin and tint, the starting point of a white-balance control; tempera
 are a point on the Planckian locus (Krystek 1985) and a CIE 1960 Δuv (tint 150 = Δuv +0.05, a
 greener white, so a more magenta picture; D65 is about tint +10).
 
-`writer` (feature `writer`, tests only) writes synthetic DNGs: uncompressed at any depth or
+`writer` (feature `writer`, tests only) writes synthetic DNGs: uncompressed at any depth, lossy JPEG (through `image`'s encoder) or
 lossless JPEG with any predictor, strips or tiles, either byte order, an optional preview IFD with
 the raw image in a SubIFD, and arbitrary extra tags.
 
@@ -56,7 +57,9 @@ the raw image in a SubIFD, and arbitrary extra tags.
   cycles end the walk). The main image is the largest NewSubFileType 0 IFD with a CFA or LinearRaw
   photometric interpretation.
 - **Raw data:** 1–16-bit unsigned samples, uncompressed (8 and 16-bit in file byte order, other
-  depths packed most significant bit first) or lossless JPEG (all predictors 1–7, 1–4 components,
+  depths packed most significant bit first), lossy JPEG (Compression 34892: baseline DCT tiles or
+  strips of one or three components, 8-bit LinearRaw only, as DNG 1.4 allows; the JPEG's own
+  colour transform applies) or lossless JPEG (all predictors 1–7, 1–4 components,
   point transform, restart intervals of whole lines), in strips or tiles; tiles decode in
   parallel.
 - **Processing:** ActiveArea, LinearizationTable, per-site black levels with row / column deltas,
@@ -104,7 +107,7 @@ the raw image in a SubIFD, and arbitrary extra tags.
 
 ## Not supported (errors name them)
 
-Lossy JPEG and JPEG XL DNG, deflate / floating-point DNG (HDR merges), planar raw data, colour
+JPEG XL DNG, deflate / floating-point DNG (HDR merges), planar raw data, colour
 filters other than red / green / blue (CMY, RGBE), non-rectangular CFA layouts, DefaultScale and
 BestQualityScale (non-square pixels are shown square), DNG 1.6 IlluminantData for illuminant 255
 (calibration 1 is used), lossless JPEG restart intervals that split a line, and MXF-wrapped
@@ -125,6 +128,11 @@ files). Kept for now so the faster pipeline stays bit-identical to the first one
   white balance, ForwardMatrix, BaselineExposure, ActiveArea, DefaultCrop, LinearRaw); CinemaDNG
   FrameRate / TimeCodes / ReelName; hostile files (every truncation, 12 000 mutations under
   `catch_unwind`, cyclic IFDs, huge sizes, bad offsets, zero denominators).
+- `tests/lossy.rs`: lossy JPEG tiles and strips with one and three components, samples equal to
+  the JPEG decoder's, a LinearizationTable expanding 8-bit codes, CFA and 12-bit lossy files
+  refused, a tiny file claiming a huge picture, truncations and 3000 mutations.
+- `tests/opcodes.rs`, `tests/equivalence.rs`: opcode lists per stage; the faster pipeline
+  against the reference.
 - `tests/oracle_libraw.rs`: LibRaw's `unprocessed_raw` reads the same samples from our synthetic
   files (uncompressed 8–16-bit in both byte orders, lossless JPEG predictors 1–7 with one and two
   components). Skipped when it is not installed.
