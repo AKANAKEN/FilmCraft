@@ -2612,7 +2612,11 @@ fn build() -> Vec<CommandSpec> {
                 let tl = time_p(s, p, "").unwrap_or(ph);
                 let pq = p.clone();
                 // `merge`: a drag of one parameter is one undo step (#201); `begin` starts a new one
-                let merge = bool_p(p, "merge").unwrap_or(false).then(|| format!("setParam:{}:{eff}:{pid}:{}", c.0, p.get("mask").unwrap_or(&Value::Null)));
+                let merge = bool_p(p, "merge").unwrap_or(false).then(|| {
+                    str_p(p, "merge_key")
+                        .map(|k| k.to_string())
+                        .unwrap_or_else(|| format!("setParam:{}:{eff}:{pid}:{}", c.0, p.get("mask").unwrap_or(&Value::Null)))
+                });
                 if bool_p(p, "begin").unwrap_or(false) {
                     s.history.merge_key = None;
                 }
