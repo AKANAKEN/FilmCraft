@@ -87,3 +87,18 @@ fn sequence_inspect_reports_a_reversed_clip() {
     let js = s.execute("sequence.inspect", json!({})).unwrap();
     assert!(all(&js).iter().all(|(_, reversed)| !reversed));
 }
+#[test]
+fn sequence_inspect_counts_a_partial_final_frame() {
+    let mut s = Session::default();
+    s.execute("file.openDemoProject", json!({})).unwrap();
+    s.execute("file.newSequence", json!({"fps":24,"video":1,"audio":1})).unwrap();
+    assert_eq!(s.execute("sequence.inspect", json!({})).unwrap()["durationFrames"], 0);
+    s.execute("timeline.place", json!({"item":5,"frame":0,"video":true,"audio":false})).unwrap();
+    for (duration, frames) in [(1, 1), (10_584_000_000_i64, 1), (10_584_000_001, 2), (1_270_080_000_000, 120), (1_270_080_000_001, 121)] {
+        let seq = s.state.active_sequence.unwrap();
+        std::sync::Arc::make_mut(&mut s.project).sequence_mut(seq).unwrap().video_tracks[0].items[0].duration = filmcraft_time::Tick(duration);
+        let inspected = s.execute("sequence.inspect", json!({})).unwrap();
+        assert_eq!(inspected["duration"], duration);
+        assert_eq!(inspected["durationFrames"], frames, "duration {duration}");
+    }
+}
