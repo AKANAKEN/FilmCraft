@@ -1,10 +1,12 @@
 //! Raw development settings ([`ProcessOptions`]): what a "Raw settings" panel can change about how
 //! a DNG is developed. `ProcessOptions::default()` develops exactly as the camera file says (the
 //! as-shot white balance, no exposure change, highlights clipped, the high-quality demosaic,
-//! scene-linear Rec. 709, full resolution).
+//! scene-linear Rec. 709, full resolution). Feature `serde` derives Serialize / Deserialize (missing
+//! fields take their defaults).
 
 /// White balance.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum WhiteBalance {
     /// The camera's AsShotNeutral / AsShotWhiteXY (D65 without either).
     #[default]
@@ -18,6 +20,7 @@ pub enum WhiteBalance {
 
 /// What happens to values the sensor clipped.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Highlights {
     /// White-balanced samples are clipped at the sensor's white, so clipped highlights stay
     /// neutral (no magenta or cyan casts).
@@ -30,6 +33,7 @@ pub enum Highlights {
 
 /// Demosaic quality (CFA images only).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum DemosaicQuality {
     /// Bilinear interpolation: softer, a little faster (playback, scrubbing).
     Fast,
@@ -40,6 +44,7 @@ pub enum DemosaicQuality {
 
 /// The colour space of developed pictures.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum OutputSpace {
     /// Scene-linear light with Rec. 709 / sRGB primaries and a D65 white; a white surface the
     /// sensor saw at its clipping level is 1.0 × 2^(BaselineExposure + exposure).
@@ -49,6 +54,8 @@ pub enum OutputSpace {
 
 /// How to develop a DNG ([`crate::Dng::develop_with`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(default))]
 pub struct ProcessOptions {
     pub white_balance: WhiteBalance,
     /// Exposure change in stops, added to the file's BaselineExposure (the sum is limited to

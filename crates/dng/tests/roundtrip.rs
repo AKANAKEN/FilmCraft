@@ -408,3 +408,19 @@ fn process_options_default_is_the_files_development() {
     assert_eq!((fast.width, fast.height), (w, h));
     assert_ne!(fast.rgba, base.rgba);
 }
+
+#[test]
+fn process_options_serde_round_trip() {
+    let o = ProcessOptions {
+        white_balance: WhiteBalance::Custom { temperature: 5600.0, tint: -12.5 },
+        exposure: 0.75,
+        highlights: Highlights::Recover,
+        demosaic: DemosaicQuality::Fast,
+        target_size: Some((1920, 1080)),
+        ..Default::default()
+    };
+    let j = serde_json::to_string(&o).unwrap();
+    assert_eq!(serde_json::from_str::<ProcessOptions>(&j).unwrap(), o);
+    // missing fields take their defaults
+    assert_eq!(serde_json::from_str::<ProcessOptions>("{}").unwrap(), ProcessOptions::default());
+}
