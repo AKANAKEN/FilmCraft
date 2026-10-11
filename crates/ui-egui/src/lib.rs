@@ -345,8 +345,7 @@ pub struct GpuState {
     pub size: (u32, u32),
     /// Composite time of the last frame (ms).
     pub last_ms: f32,
-    /// Set by the device's uncaptured-error handler: the GPU path failed (validation, lost
-    /// device, out of memory). The app then drops it and composites on the CPU.
+    /// Set by device error/loss callbacks; preview drops the compositor and uses CPU rendering.
     pub broken: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Largest texture side the device accepts.
     pub max_texture: u32,
@@ -406,15 +405,18 @@ impl FilmcraftApp {
             self.ui.status = format!("{} ({why})", tl!("GPU acceleration is unavailable; preview renders on the CPU"));
             return;
         }
-        // wgpu's default reaction to a validation error or lost device is to panic, which closed
-        // the app (or left the monitors blank) on GPUs the compositor doesn't suit. Log instead and
-        // fall back to the CPU compositor.
+        // Error and loss callbacks feed one CPU-fallback flag.
         let broken = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let flag = broken.clone();
         rs.device.on_uncaptured_error(std::sync::Arc::new(move |e: eframe::wgpu::Error| {
             log::error!("GPU error, switching to the CPU compositor: {e}");
             flag.store(true, std::sync::atomic::Ordering::Relaxed);
         }));
+        let flag = broken.clone();
+        rs.device.set_device_lost_callback(move |reason, message| {
+            log::error!("GPU device lost ({reason:?}), switching to the CPU compositor: {message}");
+            flag.store(true, std::sync::atomic::Ordering::Relaxed);
+        });
         let made = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| filmcraft_gpu::GpuCompositor::new(&rs.device, &rs.queue)));
         match made {
             Ok(compositor) if !broken.load(std::sync::atomic::Ordering::Relaxed) => {
@@ -425,8 +427,15 @@ impl FilmcraftApp {
         }
     }
 
+    /// Whether the GPU compositor is running (not disabled by a GPU error or the CPU override).
+    pub fn gpu_compositor_active(&self) -> bool {
+        self.gpu.is_some()
+    }
+
     /// Drop the GPU compositor after a GPU error; the monitors composite on the CPU from then on.
     fn disable_gpu(&mut self, why: &str) {
+        // decoders stop handing out GPU pictures nobody samples any more
+        filmcraft_codecs::hw::set_gpu_frames(false);
         log::error!("GPU compositor disabled: {why}");
         if let Some(g) = self.gpu.take()
             && let Some(id) = g.texture
@@ -2144,6 +2153,47 @@ mod clipboard_key_tests {
 #[cfg(test)]
 mod gpu_fallback_tests {
     use filmcraft_render::plan::{FramePlan, PlanLayer};
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn destroyed_device_marks_preview_broken_before_presentation() {
+        use eframe::{egui_wgpu, wgpu};
+        use std::sync::{Arc, atomic::Ordering};
+
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor { backends: wgpu::Backends::VULKAN, ..wgpu::InstanceDescriptor::new_without_display_handle() });
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
+            eprintln!("SKIPPED: no Vulkan adapter");
+            return;
+        };
+        let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let renderer = egui_wgpu::Renderer::new(&device, format, Default::default());
+        let render_state = egui_wgpu::RenderState {
+            adapter,
+            available_adapters: vec![],
+            instance,
+            device: device.clone(),
+            queue,
+            target_format: format,
+            renderer: Arc::new(egui::mutex::RwLock::new(renderer)),
+            surface_config: egui_wgpu::SurfaceConfig::LOW_LATENCY,
+        };
+        let mut app = super::FilmcraftApp::new(filmcraft_engine::Session::default());
+        app.set_wgpu(render_state);
+        let broken = app.gpu.as_ref().expect("GPU compositor must be active").broken.clone();
+        assert!(!broken.load(Ordering::Relaxed), "healthy-device control");
+        device.destroy();
+        let _ = device.poll(wgpu::PollType::Poll);
+        assert!(broken.load(Ordering::Relaxed), "device-lost notification must reach preview policy");
+        // No pixels submitted: the broken-device guard must retire the compositor first.
+        let plan = FramePlan::Layers { width: 1, height: 1, layers: vec![] };
+        let prepared = filmcraft_gpu::prepare(&plan);
+        let key = super::FrameKey { target: super::frames::Target::SequencePlan(Default::default()), frame: 0, size: 1, revision: 0, draft: false };
+        assert!(app.gpu_present(key, &super::frames::GpuPlan { plan, prepared }).is_none());
+        assert!(!app.gpu_compositor_active());
+        eprintln!("Preview device loss: healthy flag=false, destroyed flag=true, compositor retired before presentation");
+    }
 
     /// Software rasterizers must not be treated as a GPU compositor: the preview crawled while
     /// "GPU" usage read 0 % because wgpu had silently fallen back to llvmpipe.

@@ -9,13 +9,87 @@ fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
     pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()
 }
 
+#[derive(Debug)]
+struct CacheSurface {
+    id: u64,
+    luma: wgpu::Texture,
+    chroma: wgpu::Texture,
+}
+
+impl filmcraft_frame::GpuSurface for CacheSurface {
+    fn size(&self) -> (u32, u32) {
+        (2, 2)
+    }
+    fn byte_len(&self) -> usize {
+        2 * 2 + 2
+    }
+    fn id(&self) -> u64 {
+        self.id
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn download(&self) -> Result<PixelData, String> {
+        panic!("cache-only GPU import must not download pixels");
+    }
+}
+
+fn import_cache_surface(surface: &dyn filmcraft_frame::GpuSurface, _: &wgpu::Device) -> Result<ImportedPlanes, String> {
+    let s = surface.as_any().downcast_ref::<CacheSurface>().ok_or("wrong test surface")?;
+    Ok(ImportedPlanes { luma: s.luma.clone(), chroma: s.chroma.clone(), keepalive: Box::new(()) })
+}
+
+#[test]
+fn imported_sources_obey_cache_budget_and_release_evicted_owners() {
+    let Some((dev, q)) = device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    set_surface_importer(import_cache_surface);
+    let texture = |size, format| {
+        dev.create_texture(&wgpu::TextureDescriptor {
+            label: Some("cache-lifetime-test"),
+            size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        })
+    };
+    let luma = texture(wgpu::Extent3d { width: 2, height: 2, depth_or_array_layers: 1 }, wgpu::TextureFormat::R8Unorm);
+    let chroma = texture(wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 }, wgpu::TextureFormat::Rg8Unorm);
+    let mut c = GpuCompositor::new(&dev, &q);
+    let mut owners = Vec::new();
+    for id in 1..=(SOURCE_CACHE_CAPACITY * 2) {
+        let surface = Arc::new(CacheSurface { id: id as u64, luma: luma.clone(), chroma: chroma.clone() });
+        owners.push(Arc::downgrade(&surface));
+        let f = VideoFrame {
+            width: 2,
+            height: 2,
+            data: PixelData::Gpu(filmcraft_frame::GpuPixels::new(surface, Chroma::C420, 8)),
+            color: filmcraft_color::ColorInfo::REC709,
+            par: (1, 1),
+            pts: Default::default(),
+        };
+        c.upload(&f, None).unwrap();
+        assert!(c.uploads.len() <= SOURCE_CACHE_CAPACITY);
+    }
+    assert_eq!(owners.iter().filter(|w| w.strong_count() > 0).count(), SOURCE_CACHE_CAPACITY);
+    assert!(owners[..SOURCE_CACHE_CAPACITY].iter().all(|w| w.strong_count() == 0));
+    assert_eq!(c.uploaded_bytes, 0);
+    drop(c);
+    assert!(owners.iter().all(|w| w.strong_count() == 0));
+}
+
 #[test]
 fn yuv_code_range_uniforms() {
     let mut mismatches = Vec::new();
     for bits in [8, 10, 12, 16] {
         let levels = (1u32 << bits) as f32;
         for range in [Range::Full, Range::Limited] {
-            let src = SrcInfo {
+            let mut src = SrcInfo {
                 kind: 2,
                 code_scale: if bits == 8 { 255.0 } else { levels },
                 code_levels: levels,
@@ -33,6 +107,9 @@ fn yuv_code_range_uniforms() {
             if u[16..20] != expected {
                 mismatches.push(format!("{bits}-bit {range:?}: {:?} != {expected:?}", &u[16..20]));
             }
+            src.kind = 3;
+            let imported = GpuCompositor::uniforms(&src, &Affine::IDENTITY, 1.0, Blend::Normal, (1, 1));
+            assert_eq!(&imported[16..20], &expected, "biplanar {bits}-bit {range:?}");
         }
     }
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
@@ -61,7 +138,7 @@ impl filmcraft_frame::GpuSurface for CpuFallbackSurface {
 }
 
 #[test]
-fn failed_materialization_never_caches_or_uploads_substitute_pixels() {
+fn failed_import_fallback_never_caches_or_uploads_substitute_pixels() {
     #[derive(Debug)]
     struct Lost;
     impl filmcraft_frame::GpuSurface for Lost {
@@ -119,11 +196,12 @@ fn failed_materialization_never_caches_or_uploads_substitute_pixels() {
 }
 
 #[test]
-fn surface_materialization_downloads_once_and_reuses_cpu_upload() {
+fn unsupported_surface_import_downloads_once_and_reuses_cpu_upload() {
     let Some((dev, q)) = device() else {
         eprintln!("no GPU adapter; skipping");
         return;
     };
+    set_surface_importer(import_cache_surface);
     let surface = Arc::new(CpuFallbackSurface(std::sync::atomic::AtomicUsize::new(0)));
     let frame = Arc::new(VideoFrame {
         width: 2,
