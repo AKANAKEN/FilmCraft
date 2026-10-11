@@ -71,6 +71,39 @@ fn after_a_crash_the_prompt_opens_and_esc_dismisses_it() {
     h.run_steps(3);
     assert_eq!(h.state().dialog, None, "Esc is Not Now");
     assert_eq!(h.state().session.recovery_candidates().len(), 1, "nothing discarded");
+    h.state_mut().session.shutdown();
+    drop(h);
+    // answered: the next launch does not ask again, the changes are still in File ▸ Recover…
+    let h = launch(&d);
+    assert_eq!(h.state().dialog, None, "Not Now is not asked again at every launch");
+    assert!(h.state().ui.status.contains("Recover Unsaved Changes"), "{}", h.state().ui.status);
+    assert_eq!(h.state().session.recovery_candidates().len(), 1);
     drop(h);
     let _ = std::fs::remove_dir_all(&d);
+}
+
+/// Keyboard focus on a button or checkbox (Tab; on macOS also accessibility clients such as
+/// dictation or window tools) switched every shortcut off until Esc, invisibly. Only a text field
+/// keeps the keys.
+#[test]
+fn a_focused_button_does_not_switch_the_shortcuts_off() {
+    let mut s = Session::default();
+    s.execute("file.openDemoProject", json!({})).unwrap();
+    let app = FilmcraftApp::new(s);
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_max_steps(10_000).build_eframe(move |_cc| app);
+    h.run_steps(3);
+    // Tab gives keyboard focus to the next widget: go on until it is not a text field
+    for _ in 0..40 {
+        h.key_press(egui::Key::Tab);
+        h.run_steps(2);
+        if h.ctx.memory(|m| m.focused()).is_some() && !h.ctx.text_edit_focused() {
+            break;
+        }
+    }
+    assert!(h.ctx.memory(|m| m.focused()).is_some() && !h.ctx.text_edit_focused(), "a widget other than a text field has focus");
+    let seq = |h: &Harness<'static, FilmcraftApp>| h.state().session.active_sequence().unwrap().clone();
+    assert_eq!(seq(&h).mark_in, None);
+    h.key_press(egui::Key::I);
+    h.run_steps(2);
+    assert!(seq(&h).mark_in.is_some(), "I marks In although a button has focus");
 }

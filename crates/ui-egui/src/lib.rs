@@ -1200,7 +1200,29 @@ impl FilmcraftApp {
                 hook(&items);
             }
         }
-        if ctx.egui_wants_keyboard_input() || self.dialog == Some(Dialog::Shortcuts) {
+        // Typing keeps its keys: in a text field, in a Graphics text layer being edited, in the
+        // shortcut editor. Only typing: a button or a checkbox can hold keyboard focus too (Tab,
+        // macOS accessibility clients such as dictation or window tools focus widgets), and that
+        // focus, invisible, switched every shortcut off until Esc.
+        let focus = ctx.memory(|m| m.focused());
+        // A text field that holds focus off screen (scrolled away, clipped by its panel) can't be
+        // typed in, and nothing shows where the keys go: let go of it rather than hold every shortcut.
+        if ctx.text_edit_focused()
+            && let Some(id) = focus
+            && ctx
+                .read_response(id)
+                .is_none_or(|r| r.interact_rect.width() < 1.0 || r.interact_rect.height() < 1.0 || !ctx.content_rect().intersects(r.interact_rect))
+        {
+            ctx.memory_mut(|m| m.surrender_focus(id));
+        }
+        let typing_in_layer = focus == Some(egui::Id::new(panels::graphics::TEXT_EDIT_ID));
+        if ctx.text_edit_focused() || typing_in_layer || self.dialog == Some(Dialog::Shortcuts) {
+            // said once per field: a field that keeps the keyboard is the usual "shortcuts are gone"
+            let logged = egui::Id::new("keyboard-held-logged");
+            if ctx.text_edit_focused() && ctx.data(|d| d.get_temp::<Option<egui::Id>>(logged)) != Some(focus) {
+                ctx.data_mut(|d| d.insert_temp(logged, focus));
+                log::info!("keyboard: a text field holds the keyboard; shortcuts pause until Esc or a click elsewhere");
+            }
             return;
         }
         // Esc cancels a dynamic trim in progress
@@ -1219,12 +1241,16 @@ impl FilmcraftApp {
             i.events.retain(|e| {
                 let egui::Event::Key { key, physical_key, pressed: true, modifiers, .. } = e else { return true };
                 let Some(name) = menus::key_name(*key, *physical_key) else { return true };
-                match menus::resolve(bindings, focused, name, menus::mods_of(*modifiers)) {
+                let mods = menus::mods_of(*modifiers);
+                match menus::resolve(bindings, focused, name, mods) {
                     Some(id) => {
                         fire.push(id.to_string());
                         false
                     }
-                    None => true,
+                    None => {
+                        log_unhandled_key(|| format!("{name} with {mods:?} in {focused}: no shortcut"));
+                        true
+                    }
                 }
             });
         });
@@ -1808,6 +1834,19 @@ pub fn playback_mix(session: &Session, seq_id: filmcraft_project::ItemId, sr: u3
             filmcraft_engine::settings::map_output(&mix.channels[0], &mix.channels[1.min(mix.channels.len() - 1)], buf, ch, map);
         }
         panels::voiceover::mix_cues(buf, ch, cursor, &cues);
+    }
+}
+
+/// Key presses that ran no shortcut, logged (`Logs/filmcraft.log`) for the first
+/// [`UNHANDLED_KEYS_TO_LOG`] of a session with the key, the modifiers held and the focused panel,
+/// so "the shortcuts don't work" on someone's computer can be told apart (no shortcut there, a
+/// modifier the system reports held, a text field holding the keyboard).
+static UNHANDLED_KEYS_LOGGED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+const UNHANDLED_KEYS_TO_LOG: usize = 40;
+
+fn log_unhandled_key(why: impl FnOnce() -> String) {
+    if UNHANDLED_KEYS_LOGGED.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < UNHANDLED_KEYS_TO_LOG {
+        log::info!("keyboard: {}", why());
     }
 }
 

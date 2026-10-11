@@ -187,6 +187,7 @@ write (two fsynced files).
 | `file.recoveryList` | candidates: `id`, `projectName`, `projectPath`, `savedAt`, `revision`, `cleanExit`… |
 | `file.recover {id?}` | recover (newest when no `id`). From the UI, `{}` opens the recovery dialog |
 | `file.discardRecovery {id?, all?}` | delete a candidate's journal |
+| `file.postponeRecovery` | the prompt's "Not Now": the candidates stay recoverable but the next launch does not ask again (as after a normal quit) |
 | `file.autoSaveNow` | write an auto-save now (if anything is unsaved) |
 | `file.autoSaveStatus` | prefs, folders, last auto-save / journal times, last encode/write ms and bytes |
 | `file.listAutoSaves` | auto-save files of the current project, newest first |

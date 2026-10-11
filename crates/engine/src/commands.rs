@@ -1119,6 +1119,16 @@ fn build() -> Vec<CommandSpec> {
             }
             Ok(json!({"discarded": n}))
         }),
+        cmd!("file.postponeRecovery", "Recover Unsaved Changes Later", [], None, "{}", has_recovery, |s, _| {
+            // "Not Now": no prompt at the next launch; File ▸ Recover Unsaved Changes… still has them
+            let Some(per) = s.persistence.as_mut() else { return Ok(json!({"postponed": 0})) };
+            let mut n = 0;
+            for c in per.candidates.iter_mut().filter(|c| !c.meta.clean_exit) {
+                crate::autosave::postpone_candidate(c).map_err(|e| EngineError::Other(e.to_string()))?;
+                n += 1;
+            }
+            Ok(json!({"postponed": n}))
+        }),
         query!("file.recoveryList", "List Recoverable Sessions", "{}", |s, _| {
             Ok(s.persistence.as_ref().map(|p| p.candidates_json()).unwrap_or_else(|| json!([])))
         }),

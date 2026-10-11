@@ -600,6 +600,18 @@ pub fn discard_candidate(c: &RecoveryCandidate) -> io::Result<()> {
     fs::remove_dir_all(&c.dir)
 }
 
+/// "Not Now" in the recovery prompt: the candidate stays recoverable (File ▸ Recover Unsaved
+/// Changes…) but counts as answered, like changes left by a normal quit, so the next launch does
+/// not ask again.
+pub fn postpone_candidate(c: &mut RecoveryCandidate) -> io::Result<()> {
+    let mut meta = c.meta.clone();
+    meta.clean_exit = true;
+    let bytes = serde_json::to_vec_pretty(&meta).map_err(io::Error::other)?;
+    filmcraft_format::atomic_write(&c.dir.join(META), &bytes)?;
+    c.meta = meta;
+    Ok(())
+}
+
 // ------------------------------------------------------------------ worker
 
 /// Host configuration for [`Persistence::start`].

@@ -96,6 +96,10 @@ pub fn show_recovery(app: &mut FilmcraftApp, ctx: &egui::Context) -> bool {
                         }
                     }
                     if button(app, ui, "recovery.later", tl!("Not Now"), false) || esc {
+                        // answered: not asked again at every launch (File ▸ Recover Unsaved Changes… keeps them)
+                        if let Err(e) = app.session.execute("file.postponeRecovery", json!({})) {
+                            app.ui.status = e.to_string();
+                        }
                         open = false;
                     }
                 });
