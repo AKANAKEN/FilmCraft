@@ -17,6 +17,7 @@
 pub mod color;
 pub mod demosaic;
 pub mod ljpeg;
+pub mod opcode;
 pub mod options;
 pub mod process;
 pub mod raw;
@@ -264,7 +265,19 @@ impl<'a> Dng<'a> {
             crop_origin: pair(tags::DEFAULT_CROP_ORIGIN)?,
             crop_size: pair(tags::DEFAULT_CROP_SIZE)?,
             cfa: self.cfa()?,
+            opcodes: opcode::Lists {
+                list1: self.opcode_list(tags::OPCODE_LIST_1)?,
+                list2: self.opcode_list(tags::OPCODE_LIST_2)?,
+                list3: self.opcode_list(tags::OPCODE_LIST_3)?,
+            },
         })
+    }
+
+    fn opcode_list(&self, tag: u16) -> Result<Vec<opcode::Opcode>> {
+        match self.raw_ifd().get(tag) {
+            Some(e) => opcode::parse(self.tiff.value_bytes(e)?),
+            None => Ok(Vec::new()),
+        }
     }
 
     /// The colour tags.
@@ -354,7 +367,9 @@ impl<'a> Dng<'a> {
     pub fn develop_with(&self, o: &ProcessOptions) -> Result<Image> {
         let info = self.info()?;
         let p = self.params()?;
-        let raw = self.raw()?;
+        let mut raw = self.raw()?;
+        let preview = process::preview(&p, o, &info);
+        process::apply_list1(&mut raw, &p, preview)?;
         let mut calibration = self.calibration()?;
         calibration.baseline_exposure += o.exposure_stops();
         if let WhiteBalance::Custom { temperature, tint } = o.white_balance
