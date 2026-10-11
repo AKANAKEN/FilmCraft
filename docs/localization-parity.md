@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (new file: per-language status measured from the catalogs; replaces ROADMAP.md's "Interface localization" section) · **Target:** Adobe Premiere Pro 2026 (26.5.2)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-11 · **Change:** major (Turkish, Italian and Vietnamese menus shipped; German and Russian rows corrected) · **Target:** Adobe Premiere Pro 2026 (26.5.2)
 
 Per-language status of FilmCraft's interface. Premiere 26.5.2 ships 10 interface languages (the
 installed bundle's `.lproj` folders): German, English, Spanish, French, Italian, Japanese, Korean,
@@ -10,7 +10,7 @@ Portuguese (Brazil), Russian, Simplified Chinese.
 
 Edit ▸ Language (also Settings ▸ General, `general.interfaceLanguage`) switches the interface and
 persists across restarts; System Language (the default) follows the OS's or browser's preferred
-languages and falls back to English. Commands `app.language.<english|japanese|spanish|portuguese|ukrainian|chinese|german|russian|french>`
+languages and falls back to English. Commands `app.language.<english|japanese|spanish|portuguese|ukrainian|chinese|german|russian|french|turkish|italian|vietnamese>`
 are reachable over the control channel. One catalog per language,
 `crates/ui-egui/src/i18n/<code>.tsv` (format in the header of `es.tsv`); UI code wraps strings in
 `tl!("…")` / `tlf!("…{name}", name)`, and registry names (effects and their parameters, settings,
@@ -46,21 +46,28 @@ whole interface, one PR) at ~4–8 h per language for the catalog plus tests.
 | Portuguese (Brazil) | pt-br | 348 (9.9%) | menus only | Latin | not recorded | menus only | 5–9 h + review |
 | Indonesian | id | 0 (0%) | — | Latin | — | none | 6–10 h + review |
 | Japanese | ja | 3,487 (99.7%) | as zh-cn; system-font kanji may pick the Chinese fallback (#547) | CJK fonts, vertical title text | not recorded | partial | 4–8 h + review |
-| German | de | 0 (0%) | — | Latin | — | none (requested #490) | 6–10 h + review |
+| German | de | 371 (10.6%) | menus only | Latin (bundled fonts) | not recorded | menus only | 6–10 h + review |
+| Russian | ru | 352 (10.1%) | menus only | Cyrillic (bundled) | not recorded | menus only | 5–9 h + review |
 | Korean | ko | 0 (0%) | — | needs Hangul fonts in craft-fonts and IME testing | — | none (requested #508) | 10–20 h + review |
-| Vietnamese | vi | 0 (0%) | — | Latin with stacked diacritics (font coverage to check) | — | none | 6–12 h + review |
+| Vietnamese | vi | 371 (10.6%) | menus only | Latin with stacked diacritics; bundled-font coverage in tests | not recorded | menus only | 6–12 h + review |
+| *Other shipped:* Italian | it | 371 (10.6%) | menus only | Latin | not recorded | menus only | 6–10 h + review |
+| *Other shipped:* Turkish | tr | 371 (10.6%) | menus only | Latin (dotless ı and dotted İ in every family, tested) | not recorded | menus only | 6–10 h + review |
 | *Other shipped:* Ukrainian | uk | 351 (10.0%) | menus only | Cyrillic (bundled) | not recorded | menus only | 5–9 h |
 
-Premiere also ships Italian and Russian, which we don't (6–10 h each).
+Premiere's tenth language, Italian, ships at menu level, as does Turkish (which Premiere does not
+offer). Simplified Chinese, Spanish, Japanese and French cover the whole interface; German, Russian,
+Vietnamese, Portuguese (Brazil) and Ukrainian cover the menus.
 
 **Localization dimension:** 5 of the 12 key languages near-complete (English, Spanish, Japanese,
-Simplified Chinese, French), 1 menus-only, 6 none; against Premiere's 10 languages we cover 5 well
-and 1 partly. **~35%, 150–230 h** for all twelve to `full` plus Italian and Russian, of which the script
+Simplified Chinese, French), 3 menus-only (German, Vietnamese, Portuguese (Brazil)), 4 none (Hindi,
+Arabic, Indonesian, Korean); against Premiere's 10 languages we ship 9 (all but Korean), 5 of them
+whole-interface. **~35%, 150–230 h** for all twelve to `full` plus Italian and Russian, of which the script
 work (RTL and complex shaping in the egui interface) is the largest and least parallel part.
-Every language needs native-speaker review (human).
+Every language needs native-speaker review (human); none of the twelve catalogs has one recorded.
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | major | Turkish, Italian and Vietnamese menus shipped (371 entries each, measured by parsing the catalogs); the table corrected for German and Russian, which shipped on 10-10 but were still listed as 0% / not shipped |
 | 2026-10-10 | major | Created from ROADMAP.md's "Interface localization" section; catalog coverage measured (es 3,496, ja 3,487, zh-cn 3,485, pt-br 348, uk 351 of 3,498); the 12-language table and script-support gaps added |

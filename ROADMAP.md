@@ -85,11 +85,15 @@ Premiere ships 10 interface languages. Measured from our catalogs (3,498 strings
 | Portuguese (Brazil) | menus only | 9.9% |
 | Indonesian | none | 0% |
 | Japanese | partial (whole interface) | 99.7% |
-| German | none | 0% |
+| German | menus only | 10.6% |
+| Russian | menus only | 10.1% |
+| Vietnamese | menus only | 10.6% |
 | Korean | none | 0% |
-| Vietnamese | none | 0% |
 
-Also shipped: Ukrainian (menus only, 10%). Detail: [docs/localization-parity.md](docs/localization-parity.md).
+Also shipped: Ukrainian (menus only, 10%), Italian (menus only, 10.6%) and Turkish (menus only,
+10.6%) — the last two are languages outside the twelve tracked here, Turkish one Premiere does not
+offer. Nine of Premiere's ten languages now ship; Korean still needs Hangul fonts. Detail:
+[docs/localization-parity.md](docs/localization-parity.md).
 
 ## Upcoming
 

@@ -27,7 +27,7 @@ platforms** G4, G9, G17; **performance** G16; **ecosystem** G11; **measurement**
 | G11 | No plugin hosting | ecosystem | no | 200–400 h |
 | G12 | AI features | AI | no | 150–300 h |
 | G13 | Delivery formats | file format | no | 60–110 h |
-| G14 | Localization: 8 of the 12 key languages missing | localization | no | 150–230 h |
+| G14 | Localization: 4 of the 12 key languages missing | localization | no | 150–230 h |
 | G15 | Interchange never validated in Avid / Pro Tools; slow XML import | file format | partly | 20–40 h |
 | G16 | Performance reports on 0.5.0 | performance | partly | 30–60 h |
 | G17 | Audio device and playback reliability | stability | partly | 20–40 h |
@@ -199,13 +199,14 @@ platforms** G4, G9, G17; **performance** G16; **ecosystem** G11; **measurement**
   `.aac`; #814); ProRes 4444 / 4444 XQ in the export UI (#342).
 - **Estimate:** 60–110 h. Doc: [file-format-parity.md](file-format-parity.md).
 
-## G14. Localization: 8 of the 12 key languages missing
+## G14. Localization: 4 of the 12 key languages missing
 
 - **Have:** Spanish, Japanese, Simplified Chinese and French (#498) catalogs cover ~99.6–100% of
-  the ~3,500 cataloged strings; Portuguese (Brazil) and Ukrainian ~10% (menus).
+  the ~3,500 cataloged strings; German, Russian, Portuguese (Brazil), Ukrainian, Vietnamese, Italian
+  and Turkish ~10% (menus).
 - **Missing:** Hindi, Arabic (no RTL interface layout; Arabic titles reported broken, #395),
-  Indonesian, German beyond menus (#490), Korean (#508; needs Hangul fonts in craft-fonts),
-  Vietnamese, Portuguese beyond menus; Premiere also ships Italian and Russian. Engine errors,
+  Indonesian, Korean (#508; needs Hangul fonts in craft-fonts), and everything past the menus for the
+  seven menu-level catalogs. Engine errors,
   CLI and MCP stay English. No language has a recorded native-speaker review.
 - **Estimate:** 150–230 h. Doc: [localization-parity.md](localization-parity.md).
 
