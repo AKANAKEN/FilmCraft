@@ -60,7 +60,8 @@ pub fn import(s: &mut Session, path: &str, bytes: &[u8], format: Format) -> Resu
         proj.resolve_placed_auto_points(|seq| !before.contains(&seq), |source| !is_file_media(source));
         Ok(seqs)
     })?;
-    // Link media: probe each new file-backed item that exists.
+    // Link media: probe each new file-backed item that exists, through the host's reader as a
+    // direct import does (only the container index is read now, not the whole file: #461).
     let new_media: Vec<(ItemId, String)> = s
         .project
         .items
@@ -77,10 +78,7 @@ pub fn import(s: &mut Session, path: &str, bytes: &[u8], format: Format) -> Resu
     let mut linked = 0;
     let mut offline = Vec::new();
     for (id, mpath) in new_media {
-        // Stream through the host's reader (as File ▸ Import does): reading every file whole here
-        // runs out of memory on a project with thousands of clips.
-        let opened = s.media.open_file(&mpath, &*s.services).ok();
-        match opened {
+        match s.media.open_file(&mpath, &*s.services).ok() {
             Some(src) => {
                 let info = src.info().clone();
                 let identity = crate::relink::identity_of(&*s.services, &mpath).ok();
