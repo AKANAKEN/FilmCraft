@@ -192,6 +192,12 @@ pub fn timeline_extent(sequence_seconds: f64) -> f64 {
     sequence_seconds.max(0.0) + 600.0
 }
 
+/// Whether a sequence `sequence_seconds` long is wider at `pps` points a second than a view `width`
+/// points wide: part of it is out of view, and the wheel moves through time.
+pub fn zoomed_in(sequence_seconds: f64, width: f32, pps: f64) -> bool {
+    sequence_seconds.is_finite() && pps.is_finite() && sequence_seconds * pps > f64::from(width)
+}
+
 /// The latest time the left edge of a view `width` points wide can show at `pps` points a second.
 pub fn max_scroll(sequence_seconds: f64, width: f32, pps: f64) -> f64 {
     if pps <= 0.0 || !pps.is_finite() {
@@ -1805,6 +1811,9 @@ fn interact(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence, layout: &
     //   Option + wheel   zoom about the pointer
     // Settings ▸ Timeline ▸ Timeline Mouse Scrolling "Horizontal" swaps the first two. A sideways
     // gesture (trackpad swipe, tilt wheel, Shift + wheel) always scrolls sideways; a pinch zooms.
+    // Zoomed in (the sequence is wider than the view), the wheel moves through time and Cmd + wheel
+    // moves the tracks, as with "Horizontal": a zoomed-in Timeline is looked through with the wheel
+    // without playing it. Zoomed out, the wheel moves the tracks, as above.
     if ui.rect_contains_pointer(rect)
         && let Some(p) = ctx.pointer_hover_pos()
     {
@@ -1816,7 +1825,8 @@ fn interact(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence, layout: &
             v.target_pps = (v.target_pps * f).clamp(0.05, 24_000.0);
             app.tl.zoom_anchor = Some((anchor_t, p.x));
         } else if w.delta != egui::Vec2::ZERO {
-            let wheel_sideways = (app.session.prefs.timeline.mouse_scrolling == "horizontal") != w.command;
+            let zoomed_in = zoomed_in(seq.duration().seconds(), layout.content.width(), app.ui.timeline.pps);
+            let wheel_sideways = (app.session.prefs.timeline.mouse_scrolling == "horizontal" || zoomed_in) != w.command;
             let sideways = if w.delta.x.abs() > w.delta.y.abs() {
                 Some(w.delta.x)
             } else if wheel_sideways || w.shift {
@@ -1957,16 +1967,17 @@ fn interact(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence, layout: &
             (Tool::Slip, Grab::Other(Hit::Clip { clip, .. })) => Some(Drag::Slip { clip, delta: Tick::ZERO }),
             (Tool::Slide, Grab::Other(Hit::Clip { clip, .. })) => Some(Drag::Slide { clip, delta: Tick::ZERO }),
             (_, Grab::Other(Hit::Clip { clip, track, .. })) => {
-                // select (shift toggles; alt selects one side of a link)
+                // select (shift toggles; alt selects one part of a linked clip, also out of a
+                // selection that holds the whole clip, so Delete removes that part only)
                 let sel = &app.session.state.selection;
                 if mods.shift {
-                    let _ = app.session.execute("timeline.select", json!({"clips": [clip.0], "toggle": true}));
-                } else if !sel.contains(&clip) {
-                    if mods.alt {
-                        app.session.state.selection = vec![clip];
-                    } else {
-                        let _ = app.session.execute("timeline.select", json!({"clips": [clip.0]}));
+                    let _ = app.session.execute("timeline.select", json!({"clips": [clip.0], "toggle": true, "linked": !mods.alt}));
+                } else if mods.alt {
+                    if sel.as_slice() != [clip] {
+                        let _ = app.session.execute("timeline.select", json!({"clips": [clip.0], "linked": false}));
                     }
+                } else if !sel.contains(&clip) {
+                    let _ = app.session.execute("timeline.select", json!({"clips": [clip.0]}));
                 }
                 if resp.drag_started() {
                     let clips = app.session.state.selection.clone();

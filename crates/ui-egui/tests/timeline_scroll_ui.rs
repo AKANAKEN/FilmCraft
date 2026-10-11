@@ -1,7 +1,8 @@
 //! Headless UI tests of scrolling the Timeline: what the wheel does with each modifier, how far
 //! the view can go, and the zoom scroll bar. Premiere Pro 26.5.2 on macOS, checked in the app: the
 //! wheel moves the tracks up and down, Cmd + wheel moves the Timeline sideways, Option + wheel
-//! zooms, and the view stops ten minutes past the end of the sequence.
+//! zooms, and the view stops ten minutes past the end of the sequence. Zoomed in, so that the
+//! sequence is wider than the view, the wheel moves through time and Cmd + wheel the tracks.
 
 use std::sync::mpsc::{Sender, channel};
 
@@ -104,6 +105,17 @@ impl Driver {
         d
     }
 
+    /// [`Driver::tall`] zoomed out: the whole sequence fits in the view.
+    fn overview() -> Driver {
+        let mut d = Driver::tall();
+        d.ok("ui.set", json!({"timeline": {"pps": 10.0, "scroll": 4.0}}));
+        d.frames(4);
+        assert_eq!(d.view(), (4.0, 10.0, 0.0, 0.0));
+        let (seconds, width) = (d.seconds(), d.rect("timeline.tracks")[2]);
+        assert!(!filmcraft_ui_egui::panels::timeline::zoomed_in(seconds, width, 10.0), "{seconds} s in {width} points");
+        d
+    }
+
     fn seconds(&mut self) -> f64 {
         self.app().session.active_sequence().unwrap().duration().seconds()
     }
@@ -114,69 +126,93 @@ fn none() -> Value {
 }
 
 #[test]
-fn the_wheel_moves_the_tracks_up_and_down() {
-    let mut d = Driver::tall();
+fn zoomed_out_the_wheel_moves_the_tracks_up_and_down() {
+    let mut d = Driver::overview();
     // over the video tracks: wheeling up brings the higher tracks in (Video 1 is at the bottom)
     d.wheel(0.2, 0.0, 40.0, none());
-    assert_eq!(d.view(), (4.0, 50.0, 40.0, 0.0), "the video tracks moved, nothing else");
+    assert_eq!(d.view(), (4.0, 10.0, 40.0, 0.0), "the video tracks moved, nothing else");
     d.wheel(0.2, 0.0, -25.0, none());
-    assert_eq!(d.view(), (4.0, 50.0, 15.0, 0.0));
+    assert_eq!(d.view(), (4.0, 10.0, 15.0, 0.0));
     // over the audio tracks: wheeling down brings the lower tracks in
     d.wheel(0.8, 0.0, -30.0, none());
-    assert_eq!(d.view(), (4.0, 50.0, 15.0, 30.0));
+    assert_eq!(d.view(), (4.0, 10.0, 15.0, 30.0));
     // neither half goes past its first or last track
     d.wheel(0.2, 0.0, -1e6, none());
     d.wheel(0.8, 0.0, 1e6, none());
-    assert_eq!(d.view(), (4.0, 50.0, 0.0, 0.0));
+    assert_eq!(d.view(), (4.0, 10.0, 0.0, 0.0));
     d.wheel(0.8, 0.0, -1e6, none());
     let (_, _, _, lowest) = d.view();
     assert!(lowest > 100.0 && lowest < 15.0 * 200.0, "{lowest}");
 }
 
 #[test]
-fn cmd_wheel_moves_the_timeline_sideways_and_option_wheel_zooms() {
-    let mut d = Driver::tall();
+fn zoomed_out_cmd_wheel_moves_the_timeline_sideways_and_option_wheel_zooms() {
+    let mut d = Driver::overview();
     // Cmd + wheel: sideways, a point of wheel for a point of Timeline; the tracks stay
     d.wheel(0.2, 0.0, -100.0, json!({"command": true}));
-    assert_eq!(d.view(), (6.0, 50.0, 0.0, 0.0), "100 points at 50 points a second: 2 s later");
-    d.wheel(0.8, 0.0, 250.0, json!({"command": true}));
-    assert_eq!(d.view(), (1.0, 50.0, 0.0, 0.0));
+    assert_eq!(d.view(), (14.0, 10.0, 0.0, 0.0), "100 points at 10 points a second: 10 s later");
+    d.wheel(0.8, 0.0, 50.0, json!({"command": true}));
+    assert_eq!(d.view(), (9.0, 10.0, 0.0, 0.0));
     d.wheel(0.8, 0.0, 1e5, json!({"command": true}));
     assert_eq!(d.view().0, 0.0, "not before the start");
     // Option + wheel: zoom about the pointer; it is not what Cmd + wheel does
     d.ok("ui.set", json!({"timeline": {"scroll": 4.0}}));
     d.frames(3);
     let tracks = d.rect("timeline.tracks");
-    let under_pointer = 4.0 + (tracks[2] as f64 * 0.5) / 50.0;
+    let under_pointer = 4.0 + (tracks[2] as f64 * 0.5) / 10.0;
     d.wheel(0.2, 0.0, 20.0, json!({"alt": true}));
     let (scroll, pps, v, a) = d.view();
-    assert!((pps - 60.0).abs() < 1e-6, "zoomed in by a fifth: {pps}");
+    assert!((pps - 12.0).abs() < 1e-6, "zoomed in by a fifth: {pps}");
     assert!((scroll + (tracks[2] as f64 * 0.5) / pps - under_pointer).abs() < 0.02, "the time under the pointer stays there: {scroll}");
     assert_eq!((v, a), (0.0, 0.0));
     d.wheel(0.2, 0.0, -20.0, json!({"alt": true}));
-    assert!((d.view().1 - 48.0).abs() < 1e-6, "and out again");
+    assert!((d.view().1 - 9.6).abs() < 1e-6, "and out again");
     // a sideways gesture (trackpad swipe, tilt wheel) is sideways whatever is held; so is Shift
-    d.ok("ui.set", json!({"timeline": {"pps": 50.0, "scroll": 4.0}}));
+    d.ok("ui.set", json!({"timeline": {"pps": 10.0, "scroll": 4.0}}));
     d.frames(3);
     d.wheel(0.2, -50.0, 5.0, none());
-    assert_eq!(d.view(), (5.0, 50.0, 0.0, 0.0));
+    assert_eq!(d.view(), (9.0, 10.0, 0.0, 0.0));
     d.wheel(0.2, 0.0, -50.0, json!({"shift": true}));
-    assert_eq!(d.view(), (6.0, 50.0, 0.0, 0.0));
+    assert_eq!(d.view(), (14.0, 10.0, 0.0, 0.0));
 }
 
-/// Settings ▸ Timeline ▸ Timeline Mouse Scrolling "Horizontal": the wheel moves the Timeline
-/// sideways and Cmd + wheel moves the tracks.
+/// Zoomed in (the sequence is wider than the view), the wheel moves through time, up and down as
+/// well as sideways, over the video tracks and over the audio tracks: a zoomed-in Timeline is looked
+/// through without playing it. Cmd + wheel then moves the tracks; Option + wheel still zooms.
+#[test]
+fn zoomed_in_the_wheel_moves_through_time() {
+    let mut d = Driver::tall();
+    // wheel down: later
+    d.wheel(0.2, 0.0, -100.0, none());
+    assert_eq!(d.view(), (6.0, 50.0, 0.0, 0.0), "100 points at 50 points a second: 2 s later");
+    d.wheel(0.8, 0.0, -50.0, none());
+    assert_eq!(d.view(), (7.0, 50.0, 0.0, 0.0));
+    // wheel up: earlier
+    d.wheel(0.8, 0.0, 150.0, none());
+    assert_eq!(d.view(), (4.0, 50.0, 0.0, 0.0));
+    // a sideways swipe: sideways
+    d.wheel(0.2, -50.0, 0.0, none());
+    assert_eq!(d.view(), (5.0, 50.0, 0.0, 0.0));
+    // Cmd + wheel: the tracks
+    d.wheel(0.2, 0.0, 40.0, json!({"command": true}));
+    assert_eq!(d.view(), (5.0, 50.0, 40.0, 0.0));
+    d.wheel(0.2, 0.0, 20.0, json!({"alt": true}));
+    assert!((d.view().1 - 60.0).abs() < 1e-6, "Option + wheel zooms");
+}
+
+/// Settings ▸ Timeline ▸ Timeline Mouse Scrolling "Horizontal": zoomed out too, the wheel moves the
+/// Timeline sideways and Cmd + wheel moves the tracks.
 #[test]
 fn the_mouse_scrolling_setting_swaps_wheel_and_cmd_wheel() {
-    let mut d = Driver::tall();
+    let mut d = Driver::overview();
     assert_eq!(d.app().session.prefs.timeline.mouse_scrolling, "vertical", "Premiere's default on macOS");
     d.app().session.prefs.timeline.mouse_scrolling = "horizontal".into();
     d.wheel(0.2, 0.0, -100.0, none());
-    assert_eq!(d.view(), (6.0, 50.0, 0.0, 0.0));
+    assert_eq!(d.view(), (14.0, 10.0, 0.0, 0.0));
     d.wheel(0.2, 0.0, 40.0, json!({"command": true}));
-    assert_eq!(d.view(), (6.0, 50.0, 40.0, 0.0));
+    assert_eq!(d.view(), (14.0, 10.0, 40.0, 0.0));
     d.wheel(0.2, 0.0, 20.0, json!({"alt": true}));
-    assert!((d.view().1 - 60.0).abs() < 1e-6, "Option + wheel zooms either way");
+    assert!((d.view().1 - 12.0).abs() < 1e-6, "Option + wheel zooms either way");
 }
 
 /// The view cannot leave the Timeline: scrolled 39 minutes past a 26 second sequence, nothing was
@@ -189,10 +225,10 @@ fn the_view_stops_ten_minutes_past_the_end_of_the_sequence() {
     assert_eq!(timeline_extent(seconds), seconds + 600.0);
     let limit = max_scroll(seconds, width, 50.0);
     assert!((limit - (seconds + 600.0 - width as f64 / 50.0)).abs() < 1e-9);
-    // by the wheel
-    d.wheel(0.2, 0.0, -1e7, json!({"command": true}));
+    // by the wheel (zoomed in, it moves through time)
+    d.wheel(0.2, 0.0, -1e7, none());
     assert!((d.view().0 - limit).abs() < 1e-6, "{} vs {limit}", d.view().0);
-    d.wheel(0.2, 0.0, -500.0, json!({"command": true}));
+    d.wheel(0.2, 0.0, -500.0, none());
     assert!((d.view().0 - limit).abs() < 1e-6);
     // by anything else that moves the view (a script here: the state that was reported stuck)
     d.ok("ui.set", json!({"timeline": {"pps": 2.9863201066269047, "scroll": 2325.538505030118}}));

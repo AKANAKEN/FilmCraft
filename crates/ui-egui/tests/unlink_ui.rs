@@ -1,5 +1,6 @@
 //! Headless UI test of Unlink from the timeline clip menu (#220): after unlinking, the clip that
 //! was right-clicked is the only one selected, so a drag moves it away from its former partner.
+//! And Alt-click: one part of a linked clip selected alone, deleted alone with Delete / Backspace.
 
 use std::sync::mpsc::{Sender, channel};
 
@@ -111,4 +112,24 @@ fn unlinking_from_the_sound_keeps_the_sound_selected_and_link_keeps_both() {
     let mut both = vec![v, a];
     both.sort_by_key(|c| c.0);
     assert_eq!(d.selection(), both);
+}
+
+/// Alt-click on the sound of a linked clip selects only the sound, also when the whole clip was
+/// selected already; Delete or Backspace then removes the sound and keeps the picture (Premiere).
+#[test]
+fn alt_click_and_delete_removes_only_that_part() {
+    for key in ["Delete", "Backspace"] {
+        let mut d = Driver::new();
+        let (v, a) = d.linked_pair();
+        // a plain click first: the whole linked clip is selected
+        d.ok("ui.click", json!({"id": format!("timeline.clip.{}", v.0)}));
+        assert_eq!(d.selection().len(), 2, "a click selects picture and sound");
+        let r = d.ok("ui.click", json!({"id": format!("timeline.clip.{}", a.0), "modifiers": {"alt": true}}));
+        assert_eq!(d.selection(), vec![a], "Alt-click keeps only the sound: {r}");
+        d.ok("ui.key", json!({"key": key}));
+        d.frames(2);
+        let seq = d.app().session.active_sequence().unwrap().clone();
+        assert!(seq.find_item(a).is_none(), "{key} removed the sound");
+        assert!(seq.find_item(v).is_some(), "{key} kept the picture");
+    }
 }

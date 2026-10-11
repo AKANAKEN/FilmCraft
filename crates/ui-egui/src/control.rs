@@ -85,6 +85,22 @@ fn as_pressed(mut m: egui::Modifiers) -> egui::Modifiers {
     m
 }
 
+/// Hold modifier keys down for a synthetic click or drag, as a keyboard does: egui's
+/// `input.modifiers` (what the timeline reads for Alt-click, Cmd-drag…) follows
+/// `ModifiersChanged`, not the modifiers a pointer event carries.
+fn hold_modifiers(app: &mut FilmcraftApp, m: egui::Modifiers) {
+    if !m.is_none() {
+        app.synthetic.push(egui::Event::ModifiersChanged(m));
+    }
+}
+
+/// Let go of the keys [`hold_modifiers`] held.
+fn release_modifiers(app: &mut FilmcraftApp, m: egui::Modifiers) {
+    if !m.is_none() {
+        app.synthetic.push(egui::Event::ModifiersChanged(egui::Modifiers::default()));
+    }
+}
+
 /// Resolve a point from `{id}` (element centre) or `{x, y}`.
 fn point(app: &FilmcraftApp, p: &Value) -> Result<egui::Pos2, String> {
     if let Some(id) = p.get("id").and_then(Value::as_str) {
@@ -350,6 +366,7 @@ pub fn handle(app: &mut FilmcraftApp, ctx: &egui::Context, req: &ControlRequest)
                 Err(e) => return err(e),
             };
             let m = modifiers(p);
+            hold_modifiers(app, m);
             app.synthetic.push(egui::Event::PointerMoved(pos));
             if req.method == "ui.click" {
                 let button = match s("button") {
@@ -363,6 +380,7 @@ pub fn handle(app: &mut FilmcraftApp, ctx: &egui::Context, req: &ControlRequest)
                     app.synthetic.push(egui::Event::PointerButton { pos, button, pressed: false, modifiers: m });
                 }
             }
+            release_modifiers(app, m);
             Outcome::AfterInput
         }
         "ui.drag" => {
@@ -375,6 +393,7 @@ pub fn handle(app: &mut FilmcraftApp, ctx: &egui::Context, req: &ControlRequest)
             };
             let steps = p.get("steps").and_then(Value::as_u64).unwrap_or(12).max(2);
             let m = modifiers(p);
+            hold_modifiers(app, m);
             app.synthetic.push(egui::Event::PointerMoved(a));
             app.synthetic.push(egui::Event::PointerButton { pos: a, button: egui::PointerButton::Primary, pressed: true, modifiers: m });
             for i in 1..=steps {
@@ -382,6 +401,7 @@ pub fn handle(app: &mut FilmcraftApp, ctx: &egui::Context, req: &ControlRequest)
                 app.synthetic.push(egui::Event::PointerMoved(a + (b - a) * f));
             }
             app.synthetic.push(egui::Event::PointerButton { pos: b, button: egui::PointerButton::Primary, pressed: false, modifiers: m });
+            release_modifiers(app, m);
             Outcome::AfterInput
         }
         "ui.scroll" => {

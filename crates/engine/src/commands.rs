@@ -236,6 +236,19 @@ fn resolve_effect_name(s: &Session, p: &Value, name: &str) -> Option<&'static fi
     cands.iter().find(|d| !d.intrinsic && d.kind == want).or_else(|| cands.iter().find(|d| !d.intrinsic)).or(cands.first()).copied()
 }
 
+/// The clips an edit of the selection acts on (Clear, Ripple Delete, Cut, Copy, Enable). Named
+/// ones (`clips` / `clip`) take their linked partners along while Linked Selection is on, as a click
+/// on them would (`linked: false`: just those). Without names it is exactly the selection, which
+/// already holds what the click took along: Alt-clicking one part of a linked clip (its music on A2)
+/// selects only that part, and Delete then removes only that part, as in Premiere.
+pub(crate) fn edit_targets(s: &Session, p: &Value) -> Vec<ClipId> {
+    if p.get("clips").is_none() && p.get("clip").is_none() {
+        return s.state.selection.clone();
+    }
+    let named = clips_p(s, p);
+    if bool_p(p, "linked") == Some(false) { named } else { with_links(s, &named) }
+}
+
 pub(crate) fn clips_p(s: &Session, p: &Value) -> Vec<ClipId> {
     match p.get("clips").and_then(Value::as_array) {
         Some(a) => a.iter().filter_map(|v| v.as_u64().map(ClipId)).collect(),
@@ -1208,7 +1221,7 @@ fn build() -> Vec<CommandSpec> {
         cmd!("edit.redo", "Redo", ["Edit"], Some("Cmd+Shift+Z"), "{}", can_redo, |s, _| Ok(json!({"redone": s.redo()}))),
         cmd!("edit.cut", "Cut", ["Edit"], Some("Cmd+X"), "{}", has_selection, |s, _| {
             copy_selection(s);
-            let sel = with_links(s, &s.state.selection.clone());
+            let sel = s.state.selection.clone();
             s.edit_sequence("Cut", |q, _, st| {
                 edit::delete_items(q, &sel);
                 st.selection.clear();
@@ -1222,7 +1235,7 @@ fn build() -> Vec<CommandSpec> {
         }),
         cmd!("edit.paste", "Paste", ["Edit"], Some("Cmd+V"), "{}", has_clipboard, |s, _| paste(s, false)),
         cmd!("edit.pasteInsert", "Paste Insert", ["Edit"], Some("Cmd+Shift+V"), "{}", has_clipboard, |s, _| paste(s, true)),
-        cmd!("edit.clear", "Clear", ["Edit"], Some("Backspace"), r#"{"clips":[id]?}"#, has_any_selection, |s, p| {
+        cmd!("edit.clear", "Clear", ["Edit"], Some("Backspace"), r#"{"clips":[id]?,"linked":bool?}"#, has_any_selection, |s, p| {
             if p.get("clips").is_none() && p.get("clip").is_none() && s.state.selection.is_empty() {
                 if let Some(v) = close_selected_gap(s)? {
                     return Ok(v);
@@ -1230,7 +1243,7 @@ fn build() -> Vec<CommandSpec> {
                 let caps = s.state.caption_selection.clone();
                 return crate::captions::delete(s, &caps, false);
             }
-            let sel = with_links(s, &clips_p(s, p));
+            let sel = edit_targets(s, p);
             s.edit_sequence("Clear", |q, _, st| {
                 edit::delete_items(q, &sel);
                 st.selection.clear();
@@ -1238,7 +1251,7 @@ fn build() -> Vec<CommandSpec> {
             })?;
             Ok(Value::Null)
         }),
-        cmd!("edit.rippleDelete", "Ripple Delete", ["Edit"], Some("Shift+Delete"), r#"{"clips":[id]?}"#, has_any_selection, |s, p| {
+        cmd!("edit.rippleDelete", "Ripple Delete", ["Edit"], Some("Shift+Delete"), r#"{"clips":[id]?,"linked":bool?}"#, has_any_selection, |s, p| {
             if p.get("clips").is_none() && p.get("clip").is_none() && s.state.selection.is_empty() {
                 if let Some(v) = close_selected_gap(s)? {
                     return Ok(v);
@@ -1246,7 +1259,7 @@ fn build() -> Vec<CommandSpec> {
                 let caps = s.state.caption_selection.clone();
                 return crate::captions::delete(s, &caps, true);
             }
-            let sel = with_links(s, &clips_p(s, p));
+            let sel = edit_targets(s, p);
             s.edit_sequence("Ripple Delete", |q, _, st| {
                 let spans = edit::ripple_delete_items(q, &sel)?;
                 if st.ripple_sequence_markers {
@@ -1371,8 +1384,8 @@ fn build() -> Vec<CommandSpec> {
         ),
         // Each clip flips on its own, as in Premiere (#484): with one enabled and one disabled clip
         // selected, Enable swaps them rather than first making both the same.
-        cmd!("clip.enable", "Enable", ["Clip"], Some("Shift+E"), r#"{"clips":[id]?}"#, has_selection, |s, p| {
-            let mut sel = with_links(s, &clips_p(s, p));
+        cmd!("clip.enable", "Enable", ["Clip"], Some("Shift+E"), r#"{"clips":[id]?,"linked":bool?}"#, has_selection, |s, p| {
+            let mut sel = edit_targets(s, p);
             // a clip named twice must still flip once
             sel.sort();
             sel.dedup();
@@ -2080,10 +2093,11 @@ fn build() -> Vec<CommandSpec> {
                 Ok(json!({"clips": ids.iter().map(|c| c.0).collect::<Vec<_>>()}))
             }
         ),
-        cmd!("timeline.select", "Select Clips", [], None, r#"{"clips":[id],"add":bool,"toggle":bool}"#, has_seq, |s, p| {
+        cmd!("timeline.select", "Select Clips", [], None, r#"{"clips":[id],"add":bool,"toggle":bool,"linked":bool?}"#, has_seq, |s, p| {
             let clips: Vec<ClipId> =
                 p.get("clips").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_u64().map(ClipId)).collect()).unwrap_or_default();
-            let clips = with_links(s, &clips);
+            // `linked: false` (Alt-click): just these clips, not their linked partners
+            let clips = if bool_p(p, "linked") == Some(false) { clips } else { with_links(s, &clips) };
             // selecting clips leaves trim mode (Premiere: clip and edit point selections are exclusive)
             s.state.edit_points.clear();
             s.state.trim_shift = Default::default();
@@ -3063,7 +3077,8 @@ pub(crate) fn json_to_param(template: &ParamValue, v: &Value) -> Option<ParamVal
 
 fn copy_selection(s: &mut Session) {
     let Some(q) = s.active_sequence() else { return };
-    let sel = with_links(s, &s.state.selection);
+    // what is selected: a click selected linked partners already, an Alt-click one part only
+    let sel = s.state.selection.clone();
     let min = sel.iter().filter_map(|c| q.find_item(*c).map(|(_, i)| i.start)).min().unwrap_or_default();
     let max = sel.iter().filter_map(|c| q.find_item(*c).map(|(_, i)| i.end())).max().unwrap_or_default();
     // Copy Paste Includes Sequence Markers: the markers inside the copied span go along
