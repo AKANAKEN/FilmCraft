@@ -202,13 +202,20 @@ fn trim_all_raw(s: &mut Session, delta_for: &dyn Fn(&Sequence, &EditPoint) -> Op
     }
     let pts = s.state.edit_points.clone();
     let mut applied = Vec::new();
+    let mut rolled = std::collections::BTreeSet::new();
     for ep in &pts {
         let seq = s.active_sequence().ok_or(EngineError::NoSequence)?;
         let Some(delta) = delta_for(seq, ep) else { continue };
         let r = match ep.kind {
             TrimKind::Roll => {
                 let Some((l, r)) = roll_pair(seq, ep) else { continue };
-                s.execute("timeline.roll", json!({"left": l.0, "right": r.0, "delta": delta.0}))?
+                if rolled.contains(&(l, r)) {
+                    continue; // This linked pair already moved with an earlier selected point.
+                }
+                let pairs = crate::commands::linked_roll_pairs(seq, l, r, s.state.linked_selection);
+                let result = s.execute("timeline.roll", json!({"left": l.0, "right": r.0, "delta": delta.0}))?;
+                rolled.extend(pairs);
+                result
             }
             k => s.execute(
                 "timeline.trim",

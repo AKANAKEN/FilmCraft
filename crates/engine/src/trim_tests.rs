@@ -254,3 +254,45 @@ fn trim_delta_stops_at_the_end_of_the_media() {
     let back = commands::trim_delta(&s, clip, filmcraft_edit::Edge::Out, filmcraft_edit::TrimMode::Regular, -small).unwrap();
     assert_eq!(back, -small, "a trim within the media is not clamped");
 }
+
+/// The linked-roll support (#855) must not apply the same group once per selected track.
+#[test]
+fn linked_roll_selection_moves_each_linked_cut_only_once() {
+    let mut s = demo();
+    let rate = s.sequence_rate();
+    let cut = v1(&s)[0].2;
+    s.execute("playhead.set", json!({"time":(cut + rate.tick_of(2)).0})).unwrap();
+    let selected = s.execute("trim.selectNearest", json!({"kind":"roll"})).unwrap();
+    assert_eq!(selected["editPoints"].as_array().unwrap().len(), 2, "the picture and linked sound cuts are selected");
+    let before = serde_json::to_value(&*s.project).unwrap();
+    let undo = s.history.undo.len();
+    let result = s.execute("trim.nudge", json!({"frames":5})).unwrap();
+    assert_eq!(result["applied"].as_array().unwrap().len(), 1, "one linked group is rolled once");
+    let q = s.active_sequence().unwrap();
+    assert_eq!(q.video_tracks[0].items[0].end(), cut + rate.tick_of(5));
+    assert_eq!(q.audio_tracks[0].items[0].end(), cut + rate.tick_of(5));
+    assert_eq!(s.history.undo.len(), undo + 1);
+    let monitor = s.execute("trim.monitor", json!({})).unwrap();
+    assert_eq!(monitor["inShift"], 5);
+    assert_eq!(monitor["outShift"], 5);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(serde_json::to_value(&*s.project).unwrap(), before);
+}
+
+#[test]
+fn linked_roll_selection_off_keeps_independent_selected_cuts() {
+    let mut s = demo();
+    s.execute("sequence.linkedSelection", json!({"on":false})).unwrap();
+    let q = s.active_sequence().unwrap();
+    let video = q.video_tracks[0].items[0].id;
+    let audio = q.audio_tracks[0].items[0].id;
+    let cut = q.video_tracks[0].items[0].end();
+    let rate = s.sequence_rate();
+    s.execute("trim.selectEditPoint", json!({"clip":video.0,"edge":"out","kind":"roll"})).unwrap();
+    s.execute("trim.selectEditPoint", json!({"clip":audio.0,"edge":"out","kind":"roll","add":true})).unwrap();
+    let result = s.execute("trim.nudge", json!({"frames":2})).unwrap();
+    assert_eq!(result["applied"].as_array().unwrap().len(), 2, "separately selected cuts still both move when Linked Selection is off");
+    let q = s.active_sequence().unwrap();
+    assert_eq!(q.video_tracks[0].items[0].end(), cut + rate.tick_of(2));
+    assert_eq!(q.audio_tracks[0].items[0].end(), cut + rate.tick_of(2));
+}
