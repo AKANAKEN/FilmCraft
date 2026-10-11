@@ -411,18 +411,21 @@ fn sequence(p: &Project, ids: &BTreeMap<[u8; 32], ItemId>, m: &Value, nodes: &mu
             }
             Some(3 | 4) => continue, // auxiliary timecode and edgecode are retained as evidence
             Some(7) => {
-                // Corpus auxiliary track: accept only the observed complete all-filler form.
-                let children = list(c, "components", 1)?;
-                let child = children.first().ok_or_else(|| bad("empty auxiliary component list"))?;
-                if c["class"] != "SEQU"
-                    || child["class"] != "FILL"
-                    || child["media_kind"] != 7
-                    || clock.rate(c)? != r
-                    || clock.rate(child)? != r
-                    || clock.ticks(c, "length")? != duration
-                    || clock.ticks(child, "length")? != duration
-                    || [c, child].iter().any(|v| v.get("unsupported").is_some() || v.get("truncated").is_some_and(|x| x != &Value::Bool(false)))
-                {
+                // Corpus auxiliary track: accept only the observed complete all-filler form. Any
+                // other shape, including an absent, empty or multi-component list, is decided
+                // here; it must never escape to the caller and placeholder the whole composition.
+                let child = c["components"].as_array().filter(|a| a.len() == 1).and_then(|a| a.first());
+                let supported = child.is_some_and(|child| {
+                    c["class"] == "SEQU"
+                        && child["class"] == "FILL"
+                        && child["media_kind"] == 7
+                        && clock.rate(c).ok() == Some(r)
+                        && clock.rate(child).ok() == Some(r)
+                        && clock.ticks(c, "length").ok() == Some(duration)
+                        && clock.ticks(child, "length").ok() == Some(duration)
+                        && ![c, child].iter().any(|v| v.get("unsupported").is_some() || v.get("truncated").is_some_and(|x| x != &Value::Bool(false)))
+                });
+                if !supported {
                     if best_effort {
                         warnings.push(format!("Auxiliary track {index} was not converted; source evidence retained."));
                         continue;

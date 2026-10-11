@@ -233,6 +233,36 @@ mod tests {
         assert_eq!(q.start_timecode, 107892);
     }
     #[test]
+    fn a_multi_component_auxiliary_track_warns_without_placeholdering_the_sequence() {
+        // Feature-film bins carry kind-7 auxiliary tracks holding more than the single filler
+        // component this reader accepts. That decision belongs to the track, so the real edits
+        // and timing survive instead of collapsing into one whole-sequence placeholder.
+        let mut v = fixture();
+        let r = json!({"numerator":24,"denominator":1});
+        let filler = |n| json!({"class":"FILL","length":n,"rate":r,"media_kind":7});
+        v["bins"][0]["mobs"][1]["tracks"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"index":4,"component":{"class":"SEQU","media_kind":7,"length":96,"rate":r,"components":[filler(48),filler(48)]}}));
+        let (mut s, bin) = session(&v);
+        let plan = adapter::plan_best_effort(&s.project, &serde_json::to_vec(&v).unwrap(), bin).unwrap();
+        assert!(plan.warnings.iter().any(|w| w.contains("Auxiliary track 4 was not converted")));
+        assert!(!plan.warnings.iter().any(|w| w.contains("Entire sequence represented by an offline placeholder")));
+        let (ids, rejected) = adapter::apply_supported(Arc::make_mut(&mut s.project), plan).unwrap();
+        assert!(rejected.is_empty());
+        let q = s.project.sequence(ids[0]).unwrap();
+        assert_eq!(q.duration(), FrameRate::FPS_24.tick_of(96));
+        assert_eq!(q.start_timecode, 86400);
+        let clip = &q.audio_tracks[0].items[0];
+        assert_eq!(clip.start, FrameRate::FPS_24.tick_of(24));
+        assert_eq!(clip.duration, FrameRate::FPS_24.tick_of(48));
+        // Strict conversion still refuses the unrecognized auxiliary shape, naming the track
+        // rather than the component list it was read from.
+        let strict = serde_json::to_value(adapter::plan(&s.project, &serde_json::to_vec(&v).unwrap(), bin).unwrap()).unwrap();
+        assert!(strict["sequences"].as_array().unwrap().is_empty());
+        assert!(strict["rejected"][0].as_str().unwrap().contains("auxiliary kind-7 track"), "{strict:?}");
+    }
+    #[test]
     fn best_effort_placeholders_keep_fractional_clock_and_known_raster() {
         let mut v = fixture();
         let seq = &mut v["bins"][0]["mobs"][1];
