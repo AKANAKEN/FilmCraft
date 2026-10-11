@@ -300,7 +300,8 @@ const LABEL_W: f32 = 132.0;
 /// A labelled settings row.
 fn row<R>(ui: &mut egui::Ui, t: &Tokens, label: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     ui.horizontal(|ui| {
-        ui.add_sized(vec2(LABEL_W, 20.0), egui::Label::new(egui::RichText::new(label).color(t.text_dim).size(12.0)).truncate());
+        let width = if crate::i18n::current() == crate::i18n::Language::Ru { 180.0 } else { LABEL_W };
+        ui.add_sized(vec2(width, 20.0), egui::Label::new(egui::RichText::new(label).color(t.text_dim).size(12.0)).truncate()).on_hover_text(label);
         add(ui)
     })
     .inner
@@ -704,9 +705,9 @@ fn video_section(ui: &mut egui::Ui, reg: &mut Reg, s: &mut ExportSettings, t: &T
             // every machine without one keeps the built-in encoder.
             // H.265 and AV1 have only hardware encoders: choosing the format is the opt-in.
             if !hevc {
-                row(ui, t, "Hardware Encoding", |ui| {
+                row(ui, t, crate::i18n::t("Hardware Encoding"), |ui| {
                     let mut on = s.hardware_encoding == HardwareEncoding::Auto;
-                    if check(ui, reg, "export.video.hardwareEncoding", &mut on, "Use the hardware encoder when available") {
+                    if check(ui, reg, "export.video.hardwareEncoding", &mut on, crate::i18n::t("Use the hardware encoder when available")) {
                         s.hardware_encoding = if on { HardwareEncoding::Auto } else { HardwareEncoding::Off };
                     }
                 });
@@ -985,9 +986,9 @@ fn preview_column(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, seq_id:
                     ui.end_row();
                 };
                 line(ui, "Output", &output_path(ex));
-                line(ui, "", &sum.format);
-                line(ui, "", &sum.video);
-                line(ui, "", &sum.audio);
+                line(ui, "", &localized_summary(&sum.format));
+                line(ui, "", &localized_summary(&sum.video));
+                line(ui, "", &localized_summary(&sum.audio));
                 line(
                     ui,
                     "Source",
@@ -1011,7 +1012,7 @@ fn preview_column(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, seq_id:
             });
         })
         .response;
-    reg.add("export.summary", resp.rect, sum.video.clone());
+    reg.add("export.summary", resp.rect, localized_summary(&sum.video));
     child.add_space(4.0);
     let est = child.label(egui::RichText::new(tlf!("Estimated file size: {size}", size = format_bytes(sum.estimated_bytes))).color(t.text_dim));
     reg.add("export.estimate", est.rect, sum.estimated_size.clone());
@@ -1045,6 +1046,46 @@ fn preview_column(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, seq_id:
             Err(e) => app.ui.status = e.to_string(),
         }
     }
+}
+
+/// Translate presentation-only summary terms, preserving paths, codecs and settings.
+fn localized_summary(text: &str) -> String {
+    if crate::i18n::current() != crate::i18n::Language::Ru {
+        return text.to_string();
+    }
+    let mut shown = text.to_string();
+    for term in [
+        "No video",
+        "No audio",
+        "Image sequence",
+        "Uncompressed",
+        "hardware encoder",
+        "auto level",
+        "keyframe every",
+        "Progressive",
+        "High",
+        "Main",
+        "Baseline",
+        "Upper First",
+        "Lower First",
+        "Target",
+        "Max",
+        "quality",
+        "frames",
+        "Stereo",
+        "Mono",
+        "fps",
+        "Mbps",
+        "kbps",
+        "Hz",
+        "pass",
+    ] {
+        let translated = crate::i18n::t(term);
+        if translated != term {
+            shown = shown.replace(term, translated);
+        }
+    }
+    shown
 }
 
 /// The export range in sequence ticks (for the summary).

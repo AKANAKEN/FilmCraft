@@ -983,21 +983,44 @@ mod tests {
     }
 
     #[test]
-    fn russian_entries_cover_the_original_menu_catalog() {
+    fn russian_catalog_covers_the_complete_interface() {
+        let (source, _) = catalog::parse_entries(include_str!("es.tsv"));
+        for (_, en, _) in source {
+            assert!(Language::Ru.has(&en), "missing Russian translation: {en}");
+        }
+        for (_, text) in sources() {
+            for literal in tl_literals(&text) {
+                assert!(Language::Ru.has(&literal), "missing Russian literal: {literal}");
+            }
+        }
+        for name in dynamic_names() {
+            assert!(Language::Ru.has(&name), "missing Russian registry name: {name}");
+        }
         let app = crate::FilmcraftApp::new(filmcraft_engine::Session::default());
-        let items = crate::menus::menu_items(&app);
-        let known = |text: &str| crate::menus::MENUS.contains(&text) || items.iter().any(|it| it.label == text || it.path.iter().any(|p| p == text));
+        for item in crate::menus::menu_items(&app) {
+            for label in std::iter::once(&item.label).chain(item.path.iter()) {
+                assert!(!translatable(label) || Language::Ru.has(label), "missing Russian menu: {label}");
+            }
+        }
+        assert_eq!(Language::Ru.tr("File"), "Файл");
+        assert_eq!(Language::Ru.tr("my-video.mp4"), "my-video.mp4");
+        assert_eq!(Language::from_locales(&["ru-RU".into()]), Language::Ru);
+        assert_eq!(Language::from_locales(&["ru_RU.UTF-8".into()]), Language::Ru);
+        let mut app = crate::FilmcraftApp::new(filmcraft_engine::Session::default());
+        let ctx = egui::Context::default();
+        crate::menus::invoke(&mut app, &ctx, "app.language.russian", serde_json::json!({})).unwrap();
+        assert_eq!(app.session.prefs.general.interface_language, "ru");
+        app.apply_prefs(&ctx);
+        assert_eq!(app.ui.language, Language::Ru);
+        set_current(Language::En);
+    }
+
+    #[test]
+    fn russian_renders_with_bundled_fonts() {
         let (entries, _) = catalog::parse_entries(include_str!("ru.tsv"));
-        for (_, en, _) in entries {
-            assert!(known(&en) || en == "Settings", "not a menu label: {en}");
-        }
-        let (portuguese, _) = catalog::parse_entries(include_str!("pt-br.tsv"));
-        for (_, en, _) in portuguese {
-            assert!(Language::Ru.has(&en), "missing Russian menu label: {en}");
-        }
-        for en in crate::menus::MENUS.into_iter().chain(["Audio", "Settings"]) {
-            assert_ne!(Language::Ru.tr(en), en, "untranslated Russian menu: {en}");
-        }
+        let alphabet = "АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдеёжзийклмнопрстуфхцчшщъыьэюя";
+        let letters = entries.iter().flat_map(|(_, _, ru)| ru.chars()).filter(|ch| ch.is_alphabetic());
+        assert_bundled_fonts_cover(alphabet.chars().chain(Language::Ru.name().chars()).chain(letters));
     }
 
     /// Every non-ASCII character of `text` renders with the bundled interface fonts, in every family.

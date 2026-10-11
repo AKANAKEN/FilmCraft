@@ -27,12 +27,16 @@ otherwise English.
 The `app.language.*` UI commands and `prefs.set` reach it through the control channel.
 Japanese requires a craft-fonts build or a suitable installed font.
 
+The Russian catalog covers the complete Spanish source catalog, menus, translated literals and
+registered names. It also covers frame export and hardware encoding controls. Engine diagnostics,
+CLI and MCP responses remain English; project content and filenames retain their values.
+
 English source strings are lookup keys in `src/i18n/<code>.tsv`. `tl!` translates literals, `tlf!`
 fills translated templates, and `i18n::t` translates names from registries. Placeholder values
 (including user filenames containing braces) are inserted literally. Catalog translations are
 original work using ordinary language, without proprietary localisation resources.
 
-Spanish, Japanese, Simplified Chinese and French cover menus, panels, dialogs, settings and registry labels. Searches accept both the
+Spanish, Japanese, Russian, Simplified Chinese and French cover menus, panels, dialogs, settings and registry labels. Searches accept both the
 translated label and its English source, including Unicode capitals. Project content, command ids
 and preference values retain their original values. Engine errors, CLI and MCP messages remain
 English. Brazilian Portuguese and Ukrainian currently cover the core menus, German every menu; they
