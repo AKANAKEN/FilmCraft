@@ -4,7 +4,9 @@
 //! (an HTTP request line from a browser's cross-origin `fetch`, a stray `nc`, binary junk) gets
 //! one error reply and the connection is closed, so nothing after it is executed. Lines are
 //! bounded ([`MAX_LINE`]) and so is the number of open connections ([`MAX_CONNECTIONS`]); junk
-//! never reaches the UI thread. See `docs/control-protocol.md`.
+//! never reaches the UI thread. Every connection must open with the control token (see
+//! [`Token`]) before any request runs, so another local process — or a web page smuggling a
+//! line through a browser — cannot run commands without it. See `docs/control-protocol.md`.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -22,7 +24,66 @@ pub const MAX_LINE: usize = 4 * 1024 * 1024;
 /// Connections served at once; further ones get an error line and are closed.
 pub const MAX_CONNECTIONS: usize = 16;
 
-pub fn start(port: u16, ctx: egui::Context) -> Receiver<ControlRequest> {
+/// The control-channel token: required as the first line of every connection
+/// (`{"token": "..."}`), so only a client that can read it (the CLI bridge, via the token file
+/// or `FILMCRAFT_CONTROL_TOKEN`) may run requests.
+#[derive(Clone)]
+pub struct Token(String);
+
+impl Token {
+    /// The token from `FILMCRAFT_CONTROL_TOKEN` if set, otherwise a fresh random one (32 hex
+    /// chars). Random generation cannot fail here: `getrandom` fills a fixed 16-byte buffer.
+    pub fn new() -> Self {
+        Self::from_env(std::env::var("FILMCRAFT_CONTROL_TOKEN").ok().as_deref())
+    }
+
+    /// `new` with the environment value passed in, so it is testable without touching the
+    /// process environment (which is `unsafe` to mutate in parallel tests).
+    fn from_env(env: Option<&str>) -> Self {
+        if let Some(t) = env.map(str::trim).filter(|t| !t.is_empty()) {
+            return Self(t.to_string());
+        }
+        let mut bytes = [0u8; 16];
+        match getrandom::fill(&mut bytes) {
+            Ok(()) => Self(bytes.iter().map(|b| format!("{b:02x}")).collect()),
+            Err(e) => {
+                // No OS randomness: refuse to run without a token rather than invent a weak one.
+                eprintln!("filmcraft: control server could not generate a token ({e}); set FILMCRAFT_CONTROL_TOKEN");
+                Self(String::new())
+            }
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Constant-time compare: the reply does not leak how much of a guess was right.
+    fn matches(&self, guess: &str) -> bool {
+        let (a, b) = (self.0.as_bytes(), guess.as_bytes());
+        if a.len() != b.len() {
+            return false;
+        }
+        let mut diff = 0u8;
+        for (x, y) in a.iter().zip(b) {
+            diff |= x ^ y;
+        }
+        diff == 0
+    }
+}
+
+/// Write the token to `path` (owner-only, mode 0600) so the CLI bridge can pick it up.
+/// Failure is reported, not fatal: a client can still use `FILMCRAFT_CONTROL_TOKEN`.
+pub fn write_token_file(path: &std::path::Path, token: &Token) {
+    use std::fs::OpenOptions;
+    use std::os::unix::fs::OpenOptionsExt;
+    let result = OpenOptions::new().create(true).write(true).truncate(true).mode(0o600).open(path).and_then(|mut f| f.write_all(token.as_str().as_bytes()));
+    if let Err(e) = result {
+        eprintln!("filmcraft: control token could not be written to {}: {e}", path.display());
+    }
+}
+
+pub fn start(port: u16, token: Token, ctx: egui::Context) -> Receiver<ControlRequest> {
     let (tx, rx) = channel::<ControlRequest>();
     let listener = match TcpListener::bind(("127.0.0.1", port)) {
         Ok(l) => l,
@@ -31,12 +92,12 @@ pub fn start(port: u16, ctx: egui::Context) -> Receiver<ControlRequest> {
             return rx;
         }
     };
-    eprintln!("filmcraft: control server listening on 127.0.0.1:{port}");
-    std::thread::spawn(move || accept_loop(listener, tx, ctx));
+    eprintln!("filmcraft: control server listening on 127.0.0.1:{port} (token required)");
+    std::thread::spawn(move || accept_loop(listener, tx, token, ctx));
     rx
 }
 
-fn accept_loop(listener: TcpListener, tx: Sender<ControlRequest>, ctx: egui::Context) {
+fn accept_loop(listener: TcpListener, tx: Sender<ControlRequest>, token: Token, ctx: egui::Context) {
     let open = Arc::new(AtomicUsize::new(0));
     for mut stream in listener.incoming().flatten() {
         if open.fetch_add(1, Ordering::SeqCst) >= MAX_CONNECTIONS {
@@ -46,12 +107,13 @@ fn accept_loop(listener: TcpListener, tx: Sender<ControlRequest>, ctx: egui::Con
         }
         let tx = tx.clone();
         let ctx = ctx.clone();
+        let token = token.clone();
         // The slot is given back when the guard drops: after `serve` returns, if it panics, or if
         // the thread can't be started (the closure, and with it the guard, is dropped).
         let slot = Slot(Arc::clone(&open));
         let spawned = std::thread::Builder::new().name("control-conn".into()).spawn(move || {
             let _slot = slot;
-            serve(stream, &tx, &ctx);
+            serve(stream, &token, &tx, &ctx);
         });
         if let Err(e) = spawned {
             eprintln!("filmcraft: control server could not start a connection thread: {e}");
@@ -68,9 +130,9 @@ impl Drop for Slot {
     }
 }
 
-fn serve(stream: TcpStream, tx: &Sender<ControlRequest>, ctx: &egui::Context) {
+fn serve(stream: TcpStream, token: &Token, tx: &Sender<ControlRequest>, ctx: &egui::Context) {
     let Ok(read) = stream.try_clone() else { return };
-    serve_lines(read, stream, |method, params| {
+    serve_lines_gated(read, stream, Some(token), |method, params| {
         let (req, rrx) = ControlRequest::new(method, params);
         tx.send(req).ok()?;
         ctx.request_repaint();
@@ -138,31 +200,87 @@ fn read_bounded_line(reader: &mut impl BufRead, buf: &mut Vec<u8>, max: usize) -
 /// Serve requests from `read`, answering on `out`, until the peer closes, sends something that is
 /// not a request, or `handle` returns `None` (app gone). `handle` gets `(method, params)` and
 /// returns the reply object (the request's `id` is added here).
-fn serve_lines<R: Read, W: Write>(read: R, mut out: W, mut handle: impl FnMut(String, Value) -> Option<Value>) {
+fn serve_lines<R: Read, W: Write>(read: R, out: W, handle: impl FnMut(String, Value) -> Option<Value>) {
+    serve_lines_gated(read, out, None, handle);
+}
+
+/// `serve_lines` with the token gate (#163): when `token` is `Some`, the first line must be
+/// `{"token": "..."}` matching it (constant-time) before any request runs; a wrong or missing
+/// token gets one error reply and the connection closes. Blank lines before the token are
+/// tolerated; anything that is not the token line is rejected like any non-request.
+fn serve_lines_gated<R: Read, W: Write>(read: R, mut out: W, token: Option<&Token>, mut handle: impl FnMut(String, Value) -> Option<Value>) {
     let mut reader = BufReader::new(read);
     let mut buf = Vec::new();
+    let mut awaiting_token = token.is_some();
     loop {
         let reject = match read_bounded_line(&mut reader, &mut buf, MAX_LINE) {
             Ok(false) => return,
             Err(e) => e,
-            Ok(true) => match parse_line(&buf) {
-                Line::Blank => continue,
-                Line::Reject(e) => e,
-                Line::Request { id, method, params } => {
-                    let Some(mut r) = handle(method, params) else { return };
-                    if let Some(o) = r.as_object_mut() {
-                        o.insert("id".into(), id);
+            Ok(true) => {
+                if awaiting_token {
+                    // The token line has no `method`, so it never reaches parse_line's Request
+                    // arm; it is checked here, before request parsing, and closes the connection
+                    // on any mismatch.
+                    match token_line_matches(&buf, token) {
+                        Ok(true) => {
+                            awaiting_token = false;
+                            if writeln!(out, "{}", json!({"ok": true, "token": "accepted"})).and_then(|()| out.flush()).is_err() {
+                                return;
+                            }
+                            continue;
+                        }
+                        Ok(false) => {
+                            let _ = writeln!(out, "{}", json!({"ok": false, "error": "control token missing or wrong; closing the connection"}))
+                                .and_then(|()| out.flush());
+                            return;
+                        }
+                        Err(e) => {
+                            let _ = writeln!(out, "{}", json!({"ok": false, "error": e})).and_then(|()| out.flush());
+                            return;
+                        }
                     }
-                    if writeln!(out, "{r}").and_then(|()| out.flush()).is_err() {
-                        return;
-                    }
-                    continue;
                 }
-            },
+                match parse_line(&buf) {
+                    Line::Blank => continue,
+                    Line::Reject(e) => e,
+                    Line::Request { id, method, params } => {
+                        let Some(mut r) = handle(method, params) else { return };
+                        if let Some(o) = r.as_object_mut() {
+                            o.insert("id".into(), id);
+                        }
+                        if writeln!(out, "{r}").and_then(|()| out.flush()).is_err() {
+                            return;
+                        }
+                        continue;
+                    }
+                }
+            }
         };
         let _ = writeln!(out, "{}", json!({"ok": false, "error": reject})).and_then(|()| out.flush());
         return;
     }
+}
+
+/// Is `bytes` a valid token line (`{"token": "..."}`) matching the expected token?
+/// `Ok(true)`/`Ok(false)` to accept/reject the connection; `Err` (reject + close) for junk.
+fn token_line_matches(bytes: &[u8], token: Option<&Token>) -> Result<bool, String> {
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return Err("not a control request (invalid UTF-8); closing the connection".into());
+    };
+    let Ok(msg) = serde_json::from_str::<Value>(text.trim()) else {
+        return Err("bad JSON; expected one JSON request object per line; closing the connection".into());
+    };
+    let Some(obj) = msg.as_object() else {
+        return Err("not a control request (expected a JSON object); closing the connection".into());
+    };
+    // A first line that carries `method` is a request without a token: reject it whole.
+    if obj.contains_key("method") {
+        return Ok(false);
+    }
+    let Some(guess) = obj.get("token").and_then(Value::as_str) else {
+        return Ok(false);
+    };
+    Ok(token.is_some_and(|t| t.matches(guess)))
 }
 
 #[cfg(test)]
@@ -237,6 +355,78 @@ mod tests {
         assert!(r[0]["error"].as_str().unwrap().contains("longer than"));
     }
 
+    /// Same as `run` but with the token gate active.
+    fn run_gated(input: &[u8], token: &str) -> (Vec<Value>, Vec<String>) {
+        let mut out = Vec::new();
+        let mut calls = Vec::new();
+        serve_lines_gated(input, &mut out, Some(&Token(token.into())), |m, _p| {
+            calls.push(m);
+            Some(json!({"ok": true, "result": null}))
+        });
+        let replies = String::from_utf8(out).unwrap().lines().map(|l| serde_json::from_str::<Value>(l).unwrap()).collect();
+        (replies, calls)
+    }
+
+    #[test]
+    fn gated_connection_requires_the_token_first() {
+        // A request without a token line: nothing runs, one error reply, connection closed.
+        let (r, calls) = run_gated(b"{\"id\":1,\"method\":\"a\"}\n{\"id\":2,\"method\":\"b\"}\n", "s3cret");
+        assert!(calls.is_empty(), "nothing may run without the token: {calls:?}");
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0]["ok"], false);
+        assert!(r[0]["error"].as_str().unwrap().contains("token"));
+    }
+
+    #[test]
+    fn gated_connection_rejects_a_wrong_token() {
+        let (r, calls) = run_gated(b"{\"token\":\"wrong\"}\n{\"id\":1,\"method\":\"a\"}\n", "s3cret");
+        assert!(calls.is_empty(), "nothing may run with a wrong token: {calls:?}");
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0]["ok"], false);
+        // The reply must not echo the expected token.
+        assert!(!r[0]["error"].as_str().unwrap().contains("s3cret"));
+    }
+
+    #[test]
+    fn gated_connection_runs_requests_after_the_right_token() {
+        let (r, calls) = run_gated(b"{\"token\":\"s3cret\"}\n{\"id\":1,\"method\":\"a\"}\n{\"id\":2,\"method\":\"b\"}\n", "s3cret");
+        assert_eq!(calls, ["a", "b"]);
+        assert_eq!(r.len(), 3);
+        assert_eq!(r[0]["ok"], true);
+        assert_eq!(r[1]["id"], 1);
+        assert_eq!(r[2]["id"], 2);
+    }
+
+    #[test]
+    fn gated_http_probe_is_rejected_like_any_non_token() {
+        // The issue #119 probe still cannot run anything once the gate is up.
+        let http = b"POST / HTTP/1.1\r\nHost: 127.0.0.1:9876\r\n\r\n{\"method\":\"engine.execute\"}\n";
+        let (r, calls) = run_gated(http, "s3cret");
+        assert!(calls.is_empty(), "nothing may run: {calls:?}");
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0]["ok"], false);
+    }
+
+    #[test]
+    fn token_prefers_the_env_value() {
+        let t = Token::from_env(Some(" from-env "));
+        assert_eq!(t.as_str(), "from-env");
+        assert!(t.matches("from-env"));
+        assert!(!t.matches("from-en"));
+        assert!(!t.matches("from-envx"));
+        // Blank/whitespace env falls through to a random token.
+        assert_ne!(Token::from_env(Some("   ")).as_str().len(), 0);
+    }
+
+    #[test]
+    fn token_without_env_generates_a_random_hex_token() {
+        let a = Token::from_env(None);
+        let b = Token::from_env(None);
+        assert_eq!(a.as_str().len(), 32);
+        assert!(a.as_str().bytes().all(|c| c.is_ascii_hexdigit()));
+        assert_ne!(a.as_str(), b.as_str(), "two runs must not share a token");
+    }
+
     #[test]
     fn line_at_the_limit_is_accepted() {
         let mut buf = Vec::new();
@@ -275,7 +465,7 @@ mod tests {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let addr = listener.local_addr().unwrap();
         let (tx, _rx) = channel::<ControlRequest>();
-        std::thread::spawn(move || accept_loop(listener, tx, egui::Context::default()));
+        std::thread::spawn(move || accept_loop(listener, tx, Token("t".into()), egui::Context::default()));
         // Idle connections are accepted in order and held open.
         let held: Vec<TcpStream> = (0..16).map(|_| TcpStream::connect(addr).unwrap()).collect();
         let mut extra = TcpStream::connect(addr).unwrap();

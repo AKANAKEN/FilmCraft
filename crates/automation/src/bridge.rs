@@ -13,23 +13,47 @@ use crate::AutomationError;
 /// How often a blocking export's app job is polled.
 const JOB_POLL: Duration = Duration::from_millis(250);
 
+/// Name of the file (in the app's data directory) holding the control token.
+pub const TOKEN_FILE: &str = "control.token";
+
+/// The control token the bridge should present: `FILMCRAFT_CONTROL_TOKEN`, else the
+/// `control.token` file next to the app's other data (#163). `None` when neither exists.
+pub fn default_token() -> Option<String> {
+    if let Some(t) = std::env::var("FILMCRAFT_CONTROL_TOKEN").ok().map(|t| t.trim().to_string()).filter(|t| !t.is_empty()) {
+        return Some(t);
+    }
+    let dir = filmcraft_engine::autosave::default_data_dir()?;
+    let text = std::fs::read_to_string(dir.join(TOKEN_FILE)).ok()?;
+    let t = text.trim().to_string();
+    (!t.is_empty()).then_some(t)
+}
+
 type Conn = (BufReader<tokio::net::tcp::OwnedReadHalf>, tokio::net::tcp::OwnedWriteHalf);
 
 pub struct BridgeClient {
     addr: String,
+    /// Control token sent as the first line of every new connection (#163). `None` means the
+    /// server must be running without a token gate; its first request gets a clear error.
+    token: Option<String>,
     conn: Mutex<Option<Conn>>,
     next_id: AtomicU64,
 }
 
 impl BridgeClient {
-    /// `addr` such as `127.0.0.1:9876` (loopback only).
+    /// `addr` such as `127.0.0.1:9876` (loopback only). The token comes from
+    /// `FILMCRAFT_CONTROL_TOKEN`, else the `control.token` file in the app's data directory.
     pub fn new(addr: impl Into<String>) -> Result<Self, AutomationError> {
+        Self::with_token(addr, default_token())
+    }
+
+    /// `new` with an explicit token (used by tests and by callers that already resolved one).
+    pub fn with_token(addr: impl Into<String>, token: Option<String>) -> Result<Self, AutomationError> {
         let addr = addr.into();
         let host = addr.rsplit_once(':').map(|(h, _)| h).unwrap_or(&addr);
         if !matches!(host, "127.0.0.1" | "localhost" | "[::1]" | "::1") {
             return Err(AutomationError::BadRequest(format!("bridge address must be loopback, got `{addr}`")));
         }
-        Ok(Self { addr, conn: Mutex::new(None), next_id: AtomicU64::new(1) })
+        Ok(Self { addr, token, conn: Mutex::new(None), next_id: AtomicU64::new(1) })
     }
 
     /// Run engine command `id` in the app. A blocking export (`file.exportMedia` with
@@ -75,8 +99,27 @@ impl BridgeClient {
                     .await
                     .map_err(|_| AutomationError::Bridge(format!("timed out connecting to {}", self.addr)))?
                     .map_err(|e| AutomationError::Bridge(format!("cannot connect to {} ({e}); start the app with `filmcraft --control <port>`", self.addr)))?;
-                let (r, w) = s.into_split();
-                *guard = Some((BufReader::new(r), w));
+                let (r, mut w) = s.into_split();
+                let mut r = BufReader::new(r);
+                // The server gates every connection on the token line (#163): send it and wait
+                // for its ack before any request goes out.
+                if let Some(token) = &self.token {
+                    let line = format!("{}\n", json!({"token": token}));
+                    w.write_all(line.as_bytes()).await.map_err(|e| AutomationError::Bridge(e.to_string()))?;
+                    let mut ack = String::new();
+                    tokio::time::timeout(Duration::from_secs(5), r.read_line(&mut ack))
+                        .await
+                        .map_err(|_| AutomationError::Bridge("timed out waiting for the control token reply".into()))?
+                        .map_err(|e| AutomationError::Bridge(e.to_string()))?;
+                    let ok = serde_json::from_str::<Value>(ack.trim()).ok().filter(|v| v["ok"] == json!(true)).is_some();
+                    if !ok {
+                        return Err(AutomationError::Bridge(format!(
+                            "{} rejected the control token; set FILMCRAFT_CONTROL_TOKEN to the app's token",
+                            self.addr
+                        )));
+                    }
+                }
+                *guard = Some((r, w));
             }
             let id = self.next_id.fetch_add(1, Ordering::Relaxed);
             let Some(conn) = guard.as_mut() else {
@@ -118,8 +161,9 @@ mod tests {
     use std::sync::Arc;
     use tokio::net::TcpListener;
 
-    /// A stand-in for the app's control server: the export starts job 7, which `jobs.list` reports
-    /// running twice and then finished with `result`. Every request is recorded.
+    /// A stand-in for the app's control server: it requires the token line first (#163), then the
+    /// export starts job 7, which `jobs.list` reports running twice and then finished with
+    /// `result`. Every request is recorded.
     async fn fake_app(result: Value) -> (String, Arc<Mutex<Vec<Value>>>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap().to_string();
@@ -130,6 +174,10 @@ mod tests {
             let (r, mut w) = s.into_split();
             let mut lines = BufReader::new(r).lines();
             let mut polls = 0;
+            let Some(first) = lines.next_line().await.unwrap() else { return };
+            let first: Value = serde_json::from_str(&first).unwrap();
+            assert_eq!(first["token"], "test-token", "the bridge must open with the token line");
+            w.write_all(b"{\"ok\": true, \"token\": \"accepted\"}\n").await.unwrap();
             while let Ok(Some(line)) = lines.next_line().await {
                 let req: Value = serde_json::from_str(&line).unwrap();
                 log.lock().await.push(req.clone());
@@ -155,7 +203,7 @@ mod tests {
     #[tokio::test]
     async fn a_blocking_export_is_polled_as_a_job() {
         let (addr, seen) = fake_app(json!({"frames": 642})).await;
-        let b = BridgeClient::new(addr).unwrap();
+        let b = BridgeClient::with_token(addr, Some("test-token".into())).unwrap();
         let r = b.execute("file.exportMedia", json!({"path": "/tmp/out.mov", "wait": true})).await.unwrap();
         assert_eq!(r, json!({"job": 7, "path": "/tmp/out.mov", "result": {"frames": 642}}));
         let seen = seen.lock().await;
@@ -168,7 +216,7 @@ mod tests {
     #[tokio::test]
     async fn a_failed_blocking_export_is_an_error() {
         let (addr, _) = fake_app(json!({"error": "encode: disk full"})).await;
-        let b = BridgeClient::new(addr).unwrap();
+        let b = BridgeClient::with_token(addr, Some("test-token".into())).unwrap();
         let e = b.execute("file.exportMedia", json!({"path": "/tmp/out.mov", "wait": true})).await.unwrap_err();
         assert!(e.to_string().contains("export failed: encode: disk full"), "{e}");
     }
@@ -177,7 +225,7 @@ mod tests {
     #[tokio::test]
     async fn other_commands_are_forwarded() {
         let (addr, seen) = fake_app(Value::Null).await;
-        let b = BridgeClient::new(addr).unwrap();
+        let b = BridgeClient::with_token(addr, Some("test-token".into())).unwrap();
         b.execute("file.exportMedia", json!({"path": "/tmp/out.mov"})).await.unwrap();
         b.execute("sequence.inspect", json!({})).await.unwrap();
         let seen = seen.lock().await;
