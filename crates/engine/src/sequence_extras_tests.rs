@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use filmcraft_project::{ItemKind, MarkerKind, Transcript, Word};
+use filmcraft_project::{ItemKind, Label, MarkerKind, Transcript, Word};
 use filmcraft_speech::FixedTranscriber;
 use filmcraft_time::Tick;
 use serde_json::json;
@@ -312,4 +312,13 @@ fn cmd_d_on_an_adjustment_layer_fades_its_effects_in_and_out() {
         let k = (mf - m0) / (m1 - m0);
         assert!((0.25..0.75).contains(&k), "halfway through the dissolve the grade is about half on: {k:.3}");
     }
+}
+
+#[test]
+fn flash_cue_colour_maps_premiere_names() {
+    let mut s = demo();
+    let r = s.execute("markers.addFlashCue", json!({"color": "Red"})).unwrap();
+    let id = r["marker"].as_u64().unwrap();
+    assert_eq!(s.active_sequence().unwrap().markers.iter().find(|m| m.id.0 == id).unwrap().color, Label::Rose);
+    assert!(s.execute("markers.addFlashCue", json!({"color": "NotAColor"})).is_err());
 }

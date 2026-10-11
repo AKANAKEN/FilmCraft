@@ -1010,11 +1010,13 @@ fn filter_colors(s: &mut Session, p: &Value) -> Result<Value> {
         let mut v = Vec::new();
         for x in a {
             let n = x.as_str().unwrap_or_default();
-            v.push(Label::from_name(n).ok_or_else(|| bad("markers.filterColors", format!("unknown colour `{n}`")))?);
+            v.push(
+                Label::from_marker_name(n).ok_or_else(|| bad("markers.filterColors", format!("unknown colour `{n}` ({})", Label::accepted_colour_names())))?,
+            );
         }
         s.state.hidden_marker_colors = v;
     } else if let Some(n) = str_p(p, "color") {
-        let c = Label::from_name(n).ok_or_else(|| bad("markers.filterColors", format!("unknown colour `{n}`")))?;
+        let c = Label::from_marker_name(n).ok_or_else(|| bad("markers.filterColors", format!("unknown colour `{n}` ({})", Label::accepted_colour_names())))?;
         let hidden = s.state.hidden_marker_colors.contains(&c);
         let visible = bool_p(p, "visible").unwrap_or(hidden);
         s.state.hidden_marker_colors.retain(|x| *x != c);
