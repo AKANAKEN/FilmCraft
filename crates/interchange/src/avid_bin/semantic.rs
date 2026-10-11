@@ -303,7 +303,12 @@ impl<'a> Bin<'a> {
             d.attributes()?
         } else {
             if !matches!(&object.class, b"CMPO" | b"SEQU" | b"SCLP" | b"FILL" | b"TCCP" | b"TKFX" | b"SPED" | b"MASK" | b"ECCP" | b"TRKR") {
-                return Err(bad("unsupported semantic class"));
+                // Name the class and object so an unsupported bin is actionable evidence.
+                return Err(bad(format!(
+                    "unsupported semantic class {} at object {reference} (byte {})",
+                    String::from_utf8_lossy(&object.class),
+                    object.offset
+                )));
             }
             let common = d.common()?;
             match &object.class {

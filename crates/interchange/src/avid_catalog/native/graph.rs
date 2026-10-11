@@ -160,6 +160,12 @@ fn descriptor_value(bin: &Bin<'_>, d: &Descriptor<'_>, class: [u8; 4]) -> Result
     v["native_fields"] = serde_json::to_value(d).map_err(|e| bad(e.to_string()))?;
     if d.locator != 0 {
         let object = bin.object(d.locator)?.ok_or_else(|| bad("null locator"))?;
+        // A locator this reader does not decode is optional evidence, not a reason to lose the
+        // whole bin. Record the class so binding treats the descriptor as unverified.
+        if !matches!(&object.class, b"FILE" | b"MSML" | b"URLL") {
+            v["locator"] = json!({"class_raw":object.class,"object_index":d.locator,"unsupported":"native_locator"});
+            return Ok(v);
+        }
         let Decoded::Locator(l) = bin.decode(d.locator)? else {
             return Err(bad("unsupported descriptor locator"));
         };
@@ -356,6 +362,42 @@ mod tests {
         assert_eq!(graph.component(1, 0).unwrap()["properties"]["name"], "x".repeat(1024));
         // The same object is copied on each reference; only the first expansion fits.
         assert!(graph.component(1, 0).unwrap_err().to_string().contains("byte budget"));
+    }
+    #[test]
+    fn an_undecodable_descriptor_locator_is_recorded_instead_of_failing_the_bin() {
+        // Windows-authored library bins carry locator classes this reader does not decode. The
+        // locator is optional evidence for binding, so an unknown class must not lose the bin.
+        let payload = [0x11, 0x22];
+        let bin = Bin {
+            byte_order: avid_bin::ByteOrder::Little,
+            root_index: 1,
+            saved_at_raw: &[],
+            creator_raw: &[],
+            save_fields_raw: &[],
+            reserved_raw: &[],
+            objects: vec![avid_bin::Object { index: 1, class: *b"WINF", offset: 119, payload: &payload }],
+        };
+        let d = Descriptor {
+            mob_kind: 1,
+            locator: 1,
+            intermediate: false,
+            physical_media: 0,
+            uuid: None,
+            plugin_raw: None,
+            attributes: None,
+            file: None,
+            pcm: None,
+            picture: None,
+        };
+        let v = descriptor_value(&bin, &d, *b"MDES").unwrap();
+        assert_eq!(v["locator"]["class_raw"], json!(*b"WINF"));
+        assert_eq!(v["locator"]["object_index"], json!(1));
+        assert_eq!(v["locator"]["unsupported"], "native_locator");
+        // Nothing is invented: no decoded path or identity is reported for it.
+        assert!(v["locator"]["properties"].is_null());
+        // A null locator reference stays absent rather than becoming unsupported evidence.
+        let none = Descriptor { locator: 0, ..d };
+        assert!(descriptor_value(&bin, &none, *b"MDES").unwrap().get("locator").is_none());
     }
     #[test]
     fn cyclic_components_and_expansion_budgets_fail_without_panics() {

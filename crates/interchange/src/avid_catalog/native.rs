@@ -16,6 +16,12 @@ impl Evidence<'_, '_> {
         if id == 0 {
             return Ok(json!({}));
         }
+        // Optional metadata must never abort a bin. A reference to an object this reader does not
+        // decode is recorded as evidence, exactly as a nested attribute reference already is.
+        let object = self.bin.object(id)?.ok_or_else(|| bad("null attribute object"))?;
+        if object.class != *b"ATTR" {
+            return Ok(json!({"object_index":id,"class_raw":object.class,"unsupported":"native_attributes"}));
+        }
         if depth > 16 || !self.visiting.insert(id) {
             return Err(bad("cyclic or excessively nested attributes"));
         }
@@ -142,6 +148,29 @@ pub fn plan_native(bytes: &[u8], path: &str) -> Result<Plan> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_non_attribute_metadata_reference_is_recorded_instead_of_failing_the_bin() {
+        // Optional metadata referencing a class this reader does not decode is evidence, matching
+        // how a nested attribute reference to another class is already reported.
+        let bin = Bin {
+            byte_order: avid_bin::ByteOrder::Little,
+            root_index: 1,
+            saved_at_raw: &[],
+            creator_raw: &[],
+            save_fields_raw: &[],
+            reserved_raw: &[],
+            objects: vec![avid_bin::Object { index: 1, class: *b"WINF", offset: 7, payload: &[0, 1] }],
+        };
+        let mut evidence = Evidence { bin: &bin, remaining: 8, bytes_left: 1024, visiting: BTreeSet::new() };
+        let v = evidence.attributes(1, 0).unwrap();
+        assert_eq!(v["class_raw"], json!(*b"WINF"));
+        assert_eq!(v["object_index"], json!(1));
+        assert_eq!(v["unsupported"], "native_attributes");
+        // No user metadata is invented for it, and an absent reference stays absent.
+        assert!(v.get("_USER").is_none());
+        assert_eq!(evidence.attributes(0, 0).unwrap(), json!({}));
+        assert!(evidence.attributes(2, 0).is_err());
+    }
     #[test]
     #[ignore = "set FILMCRAFT_AVB_SEMANTIC_ORACLE and FILMCRAFT_AVB_CORPUS_MANIFEST to private evidence"]
     fn native_metadata_matches_oracle_and_transfers() {
