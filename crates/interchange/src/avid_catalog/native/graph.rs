@@ -162,7 +162,7 @@ fn descriptor_value(bin: &Bin<'_>, d: &Descriptor<'_>, class: [u8; 4]) -> Result
         let object = bin.object(d.locator)?.ok_or_else(|| bad("null locator"))?;
         // A locator this reader does not decode is optional evidence, not a reason to lose the
         // whole bin. Record the class so binding treats the descriptor as unverified.
-        if !matches!(&object.class, b"FILE" | b"MSML" | b"URLL") {
+        if !matches!(&object.class, b"FILE" | b"MSML" | b"URLL" | b"WINF") {
             v["locator"] = json!({"class_raw":object.class,"object_index":d.locator,"unsupported":"native_locator"});
             return Ok(v);
         }
@@ -365,8 +365,9 @@ mod tests {
     }
     #[test]
     fn an_undecodable_descriptor_locator_is_recorded_instead_of_failing_the_bin() {
-        // Windows-authored library bins carry locator classes this reader does not decode. The
-        // locator is optional evidence for binding, so an unknown class must not lose the bin.
+        // Bins carry locator classes this reader does not decode; PVOL is the most common one in
+        // the corpus. The locator is optional evidence for binding, so an unknown class must not
+        // lose the bin.
         let payload = [0x11, 0x22];
         let bin = Bin {
             byte_order: avid_bin::ByteOrder::Little,
@@ -375,7 +376,7 @@ mod tests {
             creator_raw: &[],
             save_fields_raw: &[],
             reserved_raw: &[],
-            objects: vec![avid_bin::Object { index: 1, class: *b"WINF", offset: 119, payload: &payload }],
+            objects: vec![avid_bin::Object { index: 1, class: *b"PVOL", offset: 119, payload: &payload }],
         };
         let d = Descriptor {
             mob_kind: 1,
@@ -390,7 +391,7 @@ mod tests {
             picture: None,
         };
         let v = descriptor_value(&bin, &d, *b"MDES").unwrap();
-        assert_eq!(v["locator"]["class_raw"], json!(*b"WINF"));
+        assert_eq!(v["locator"]["class_raw"], json!(*b"PVOL"));
         assert_eq!(v["locator"]["object_index"], json!(1));
         assert_eq!(v["locator"]["unsupported"], "native_locator");
         // Nothing is invented: no decoded path or identity is reported for it.

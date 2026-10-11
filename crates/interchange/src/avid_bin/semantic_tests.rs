@@ -355,6 +355,49 @@ fn location_corpus_matches_every_supported_property() {
     eprintln!("{count} location/descriptor objects match every exported property");
 }
 
+#[test]
+fn a_windows_source_locator_carries_both_forms_of_its_path_and_nothing_assumed() {
+    // WINF records where a bin's media was originally imported from, in FILE's path shape. Every
+    // one observed in the corpus carries a MacRoman path and a UTF-8 form of it, and no other
+    // field, so FILE's POSIX and alternate extensions must stay refused here rather than guessed.
+    for order in [ByteOrder::Little, ByteOrder::Big] {
+        let text = "/Volumes/LIBRARY/SOUND EFFECTS/caf\u{00e9}.wav";
+        let mac = b"/Volumes/LIBRARY/SOUND EFFECTS/caf\x8e.wav";
+        let mut b = vec![2, 2];
+        n(&mut b, mac.len() as u64, 2, order);
+        b.extend_from_slice(mac);
+        b.extend_from_slice(&[1, 2, 0x4c]);
+        n(&mut b, (text.len() + 2) as u64, 2, order);
+        b.extend_from_slice(&[0, 0]);
+        b.extend_from_slice(text.as_bytes());
+        b.push(3);
+        let Decoded::Locator(l) = bin(*b"WINF", &b, order).decode(1).unwrap() else { panic!("WINF must decode as a locator") };
+        assert_eq!(l.path.unwrap().value, "/Volumes/LIBRARY/SOUND EFFECTS/caf\u{00e9}.wav");
+        assert_eq!(l.utf8.unwrap().value, text);
+        assert!(l.posix.is_none() && l.alternate_utf8.is_none() && l.id.is_none() && l.volume.is_none());
+        // An extension FILE supports but WINF has never been seen to use is not assumed.
+        let mut unobserved = b.clone();
+        unobserved.pop();
+        unobserved.extend_from_slice(&[1, 3, 0x4c]);
+        n(&mut unobserved, 2, 2, order);
+        unobserved.extend_from_slice(&[0, 0, 3]);
+        assert!(bin(*b"WINF", &unobserved, order).decode(1).is_err());
+        // Truncation and single-bit damage stay errors, never panics.
+        for end in 0..b.len() {
+            assert!(std::panic::catch_unwind(|| bin(*b"WINF", &b[..end], order).decode(1)).unwrap().is_err());
+        }
+        for at in 0..b.len() {
+            for bit in 0..8 {
+                let mut mutant = b.clone();
+                mutant[at] ^= 1 << bit;
+                std::panic::catch_unwind(|| {
+                    let _ = bin(*b"WINF", &mutant, order).decode(1);
+                })
+                .unwrap();
+            }
+        }
+    }
+}
 fn n(out: &mut Vec<u8>, value: u64, width: usize, order: ByteOrder) {
     match order {
         ByteOrder::Little => out.extend_from_slice(&value.to_le_bytes()[..width]),

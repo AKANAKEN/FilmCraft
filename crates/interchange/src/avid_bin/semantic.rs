@@ -293,7 +293,7 @@ impl<'a> Bin<'a> {
     pub fn decode(&self, reference: u32) -> Result<Decoded<'a>> {
         let object = self.object(reference)?.ok_or_else(|| bad("cannot decode a null object"))?;
         let mut d = Decode { c: Cursor { bytes: object.payload, at: 0, order: self.byte_order }, bin: self };
-        let out = if matches!(&object.class, b"FILE" | b"MSML" | b"URLL") {
+        let out = if matches!(&object.class, b"FILE" | b"MSML" | b"URLL" | b"WINF") {
             Decoded::Locator(d.locator(object.class)?)
         } else if object.class == *b"MCBR" {
             Decoded::BinReference(d.bin_reference()?)

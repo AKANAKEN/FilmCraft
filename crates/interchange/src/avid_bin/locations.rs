@@ -114,7 +114,10 @@ impl<'a> Decode<'a, '_> {
                     self.expect(&[0x4c])?;
                     out.posix = self.text()?;
                 }
-                (c, 2) if c == *b"FILE" => out.utf8 = Some(self.utf8()?),
+                // WINF records the original imported source file, in the same shape as FILE's
+                // own path fields. Only this UTF-8 extension is observed on it; FILE's POSIX and
+                // alternate paths stay FILE-only rather than being assumed.
+                (c, 2) if c == *b"FILE" || c == *b"WINF" => out.utf8 = Some(self.utf8()?),
                 (c, 3) if c == *b"FILE" => out.alternate_utf8 = Some(self.utf8()?),
                 (c, 1) if c == *b"MSML" => {
                     self.expect(&[0x47])?;
