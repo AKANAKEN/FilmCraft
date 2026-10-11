@@ -2,7 +2,7 @@
 //! Reads only the catalog contract and native project model; no binary decoding or I/O.
 use std::collections::{BTreeMap, BTreeSet};
 
-use filmcraft_project::{AudioChannels, BinEntry, BinId, ItemId, MediaRef, Project, SequenceSettings, TrackKind};
+use filmcraft_project::{AudioChannels, BinId, ItemId, MediaRef, Project, SequenceSettings, TrackKind};
 use filmcraft_time::{FrameRate, TICKS_PER_SECOND, Tick, TimeRange};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -94,16 +94,16 @@ fn flag(v: &Value, key: &str) -> Result<bool> {
     }
 }
 
-/// Resolve only direct members of the explicitly selected imported bin. Repeated imports in
-/// other bins cannot accidentally authorize a source; aliases within this bin are ambiguous.
+/// Resolve only masters imported for the explicitly selected bin: its own members and the
+/// referenced sources imported alongside them. Repeated imports in other bins cannot accidentally
+/// authorize a source; aliases within this bin are ambiguous.
 fn sources(p: &Project, bin: BinId) -> Result<(String, BTreeMap<[u8; 32], ItemId>)> {
     avid_catalog::validate_project(p, Some(bin))?;
-    let b = p.root.find_bin(bin).ok_or_else(|| bad("missing destination bin"))?;
     let mut uid = None;
     let mut ids = BTreeMap::new();
-    for child in &b.children {
-        let BinEntry::Item(id) = child else { continue };
-        let it = p.item(*id).ok_or_else(|| bad("missing bin item"))?;
+    let (placed, referenced) = avid_catalog::imported_items(p, bin)?;
+    for id in placed.into_iter().chain(referenced) {
+        let it = p.item(id).ok_or_else(|| bad("missing bin item"))?;
         if it.as_media().is_none() {
             continue;
         }
@@ -120,7 +120,7 @@ fn sources(p: &Project, bin: BinId) -> Result<(String, BTreeMap<[u8; 32], ItemId
             return Err(bad("mixed source bin identities"));
         }
         uid = Some(u);
-        if ids.insert(avid_catalog::full_identity(&e["clip"]["id"])?, *id).is_some() {
+        if ids.insert(avid_catalog::full_identity(&e["clip"]["id"])?, id).is_some() {
             return Err(bad("ambiguous master identity in selected bin"));
         }
     }

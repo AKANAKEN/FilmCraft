@@ -34,6 +34,7 @@ pub fn import(s: &mut Session, p: &Value) -> Result<Value> {
 mod tests {
     use super::*;
     use crate::Services;
+    use filmcraft_interchange::avid_catalog as adapter_catalog;
     use filmcraft_project::{AudioChannels, AudioComponent, MediaRef};
     use filmcraft_time::{FrameRate, Tick};
     use std::sync::Arc;
@@ -231,6 +232,61 @@ mod tests {
         assert_eq!(q.audio_tracks[0].items[0].start, FrameRate::FPS_29_97.tick_of(lead));
         assert_eq!(q.duration(), FrameRate::FPS_29_97.tick_of(lead + 48));
         assert_eq!(q.start_timecode, 107892);
+    }
+    #[test]
+    fn a_sequence_resolves_sources_its_bin_references_without_placing() {
+        // Avid keeps a cut bin's masters in the file without placing them in the bin, so a
+        // sequence-only bin must still produce items: media binds to an item, never to a
+        // timeline clip, and an unbound clip could never be relinked.
+        let mut v = fixture();
+        for pointer in ["/bins/0/catalog/clips/0/user_placed", "/bins/0/mobs/0/user_placed"] {
+            *v.pointer_mut(pointer).unwrap() = json!(false);
+        }
+        let bytes = serde_json::to_vec(&v).unwrap();
+        let mut s = Session::new(Arc::new(Report(bytes.clone())));
+        let plan = adapter_catalog::plan_scoped(&bytes, adapter_catalog::TransferMode::Sequences).unwrap();
+        assert!(plan.warnings.iter().any(|w| w.contains("referenced by this bin's sequences")));
+        let bins = adapter_catalog::apply(Arc::make_mut(&mut s.project), plan, None).unwrap();
+        assert_eq!((bins[0].clips, bins[0].referenced, bins[0].compositions), (0, 1, 1));
+
+        // The bin still lists what Avid showed; the source lives in the referenced sub-bin.
+        let bin = s.project.root.find_bin(bins[0].bin).unwrap();
+        assert_eq!(bin.children.iter().filter(|c| matches!(c, filmcraft_project::BinEntry::Item(_))).count(), 0);
+        let filmcraft_project::BinEntry::Bin(sub) = &bin.children[0] else { panic!("referenced sub-bin missing") };
+        assert_eq!(sub.name, adapter_catalog::REFERENCED_BIN);
+        assert_eq!(sub.children.len(), 1);
+        let filmcraft_project::BinEntry::Item(source) = sub.children[0] else { panic!("referenced source missing") };
+        let provenance: Value = serde_json::from_str(&s.project.item(source).unwrap().metadata[adapter_catalog::SOURCE_KEY]).unwrap();
+        assert_eq!(provenance["placed"], json!(false), "a referenced source is never reported as bin contents");
+
+        // Bound like any imported master, it carries a real edit instead of a placeholder.
+        let m = Arc::make_mut(&mut s.project).item_mut(source).unwrap().as_media_mut().unwrap();
+        let duration = m.info.duration;
+        m.media = MediaRef::Components {
+            picture: None,
+            channels: (1..=2)
+                .map(|track| AudioComponent {
+                    track,
+                    file_package: [track as u8; 32],
+                    path: None,
+                    stream: 0,
+                    channel: 0,
+                    source_start: Tick::ZERO,
+                    length: duration,
+                })
+                .collect(),
+        };
+        m.offline = false;
+        let plan = adapter::plan_best_effort(&s.project, &bytes, bins[0].bin).unwrap();
+        assert!(!plan.warnings.iter().any(|w| w.contains("source master is missing from selected bin")));
+        let (ids, rejected) = adapter::apply_supported(Arc::make_mut(&mut s.project), plan).unwrap();
+        assert!(rejected.is_empty());
+        let q = s.project.sequence(ids[0]).unwrap();
+        let clip = &q.audio_tracks[0].items[0];
+        assert_eq!(clip.item, source);
+        assert_eq!(clip.start, FrameRate::FPS_24.tick_of(24));
+        assert_eq!(clip.duration, FrameRate::FPS_24.tick_of(48));
+        assert!(!s.project.item(clip.item).unwrap().as_media().unwrap().offline);
     }
     #[test]
     fn a_multi_component_auxiliary_track_warns_without_placeholdering_the_sequence() {

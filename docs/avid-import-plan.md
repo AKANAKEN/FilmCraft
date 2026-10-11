@@ -26,6 +26,13 @@ Each AVB creates a bin named from its filename. Name collisions use the first fr
 suffix: `Sound Effects`, `Sound Effects_2`, `Sound Effects_3`. Existing bins are never merged or
 overwritten implicitly. Multiple-AVB selection is not yet available in this dialog.
 
+Avid cut bins routinely hold a sequence whose master clips live in other bins. The AVB still
+contains those masters, unplaced, so a sequence transfer imports them into a **Referenced
+Sources** sub-bin of the new bin and reports how many. The bin itself keeps listing only what
+Avid placed in it. FilmCraft binds media to an item rather than to a timeline clip, so without
+those items a converted timeline could neither play nor be relinked. Metadata and media
+transfers are unchanged: they import placed bin contents only.
+
 Imported sources use FilmCraft's **Link Media…** dialog when components need reconnecting.
 Search only finds candidates. Choose **Link N files** to apply the selected replacement and,
 when enabled, other unique matches. Duplicate copies require an explicit choice. Leaving A1

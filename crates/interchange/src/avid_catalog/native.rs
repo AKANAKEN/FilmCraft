@@ -106,7 +106,7 @@ pub fn plan_native(bytes: &[u8], path: &str) -> Result<Plan> {
     let membership = bin.membership()?;
     let name = bin_name(path)?;
     let mut evidence = Evidence { bin: &bin, remaining: 1_000_000, bytes_left: 64 * 1024 * 1024, visiting: BTreeSet::new() };
-    let mut out = BinPlan { name: name.clone(), uid: format!("{:016x}", membership.uid), clips: Vec::new(), compositions: 0 };
+    let mut out = BinPlan { name: name.clone(), uid: format!("{:016x}", membership.uid), clips: Vec::new(), referenced: Vec::new(), compositions: 0 };
     let mut warnings = vec!["Native AVB metadata import: source locations are not resolved, media remains offline, and sequences are not imported.".into()];
     let mut references = BTreeSet::new();
     let mut identities = BTreeSet::new();

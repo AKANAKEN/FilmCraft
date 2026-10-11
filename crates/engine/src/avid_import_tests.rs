@@ -76,6 +76,39 @@ fn params(mode: &str) -> Value {
 }
 
 #[test]
+fn an_unbindable_referenced_source_never_fails_a_strict_import() {
+    // A cut bin's referenced masters are not its contents. One whose media cannot be bound costs
+    // its own sequence clip a placeholder; it must not fail an import the bin's own contents
+    // satisfy, including in strict mode, where nothing previously reached binding at all.
+    let (mut v, media) = fixture();
+    let mut orphan = v["bins"][0]["catalog"]["clips"][0].clone();
+    orphan["name"] = json!("Referenced without descriptors");
+    orphan["id"]["raw"] = json!("07".repeat(32));
+    orphan["user_placed"] = json!(false);
+    orphan.as_object_mut().unwrap().remove("workflow_evidence");
+    v["bins"][0]["catalog"]["clips"].as_array_mut().unwrap().push(orphan.clone());
+    v["bins"][0]["catalog"]["summary"]["master_count"] = json!(2);
+    v["bins"][0]["mobs"].as_array_mut().unwrap().push(orphan);
+    let (s, _) = session(&v, media);
+    let prepared = crate::avid_catalog::prepare_document(
+        &s.project,
+        &*s.services,
+        &serde_json::to_vec(&v).unwrap(),
+        crate::avid_catalog::ImportOptions { mode: filmcraft_interchange::avid_catalog::TransferMode::Sequences, allow_missing: true, best_effort: false },
+        None,
+        &|| Ok(()),
+    )
+    .expect("an unbindable referenced source must not fail the import");
+    // The bin's own content still bound and its sequence still converted.
+    assert_eq!(prepared.result["bins"][0]["clips"], json!(1));
+    assert_eq!(prepared.result["bins"][0]["referenced"], json!(1));
+    assert_eq!(prepared.result["sequences"].as_array().unwrap().len(), 1);
+    // The source that could not be bound is reported by name and stays offline.
+    assert!(prepared.result["errors"].to_string().contains("Referenced without descriptors"), "{}", prepared.result["errors"]);
+    assert_eq!(prepared.result["mediaBinding"], "offline_components");
+}
+
+#[test]
 fn avid_import_combined_preview_commit_undo_and_reopen() {
     let (v, media) = fixture();
     let (mut s, input) = session(&v, media);

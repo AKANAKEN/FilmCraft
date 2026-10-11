@@ -3,7 +3,7 @@ use filmcraft_interchange::{
     avid_catalog::{self as adapter, TransferMode},
     avid_sequence,
 };
-use filmcraft_project::{BinEntry, BinId, ItemId, Project};
+use filmcraft_project::{BinId, ItemId, Project};
 use serde_json::{Value, json};
 
 use crate::{EngineError, Result, Session};
@@ -81,31 +81,29 @@ pub(crate) fn prepare_document_with_index(
     for b in &bins {
         checkpoint()?;
         if mode != TransferMode::Metadata {
-            let bin = project.root.find_bin(b.bin).ok_or_else(|| failure("new bin missing"))?;
-            let items: Vec<_> = bin
-                .children
-                .iter()
-                .filter_map(|e| match e {
-                    BinEntry::Item(id) => Some(*id),
-                    _ => None,
-                })
-                .collect();
-            // Keep decoder work sequential and bounded, without a session/history snapshot per batch.
-            for chunk in items.chunks(if best_effort { 1 } else { 64 }) {
-                checkpoint()?;
-                let binding = match crate::avid_audio::prepare_binding_with_index(&project, services, chunk, true, allow_missing, index) {
-                    Ok(v) => v,
-                    Err(e) if best_effort => {
-                        let item = project.item_mut(chunk[0]).ok_or_else(|| failure("imported item disappeared"))?;
-                        let message = format!("{}: media remains offline: {e}", item.name);
-                        item.metadata.insert("filmcraft:avid-import-error".into(), message.clone());
-                        errors.push(message);
-                        continue;
-                    }
-                    Err(e) => return Err(e),
-                };
-                bound.extend(binding.reports.iter().cloned());
-                binding.apply(&mut project)?;
+            // Referenced sequence sources bind too: a converted timeline must not hold clips
+            // whose media can never be found. An unbindable one is not an import failure
+            // though, even in strict mode: it is not bin contents, and it costs only its own
+            // sequence clip a placeholder, which the sequence converter reports by name.
+            let (placed, referenced) = adapter::imported_items(&project, b.bin).map_err(failure)?;
+            for (items, tolerate) in [(placed, best_effort), (referenced, true)] {
+                // Keep decoder work sequential and bounded, without a session/history snapshot per batch.
+                for chunk in items.chunks(if tolerate { 1 } else { 64 }) {
+                    checkpoint()?;
+                    let binding = match crate::avid_audio::prepare_binding_with_index(&project, services, chunk, true, allow_missing, index) {
+                        Ok(v) => v,
+                        Err(e) if tolerate => {
+                            let item = project.item_mut(chunk[0]).ok_or_else(|| failure("imported item disappeared"))?;
+                            let message = format!("{}: media remains offline: {e}", item.name);
+                            item.metadata.insert("filmcraft:avid-import-error".into(), message.clone());
+                            errors.push(message);
+                            continue;
+                        }
+                        Err(e) => return Err(e),
+                    };
+                    bound.extend(binding.reports.iter().cloned());
+                    binding.apply(&mut project)?;
+                }
             }
         }
         if mode == TransferMode::Sequences && b.compositions > 0 {

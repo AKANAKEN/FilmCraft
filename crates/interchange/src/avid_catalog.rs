@@ -22,6 +22,9 @@ const MAX_MOBS: usize = 200_000;
 const MAX_TEXT: usize = 4096;
 /// All supported source fields are copied here, not linked to the AVB/report.
 pub const SOURCE_KEY: &str = "filmcraft:avid-source";
+/// Sub-bin holding masters an imported bin's sequences reference without placing them. Kept out
+/// of the bin's own listing so it still reflects what Avid shows.
+pub const REFERENCED_BIN: &str = "Referenced Sources";
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Plan {
@@ -33,6 +36,10 @@ struct BinPlan {
     pub name: String,
     pub uid: String,
     pub clips: Vec<ClipPlan>,
+    /// Masters the bin's sequences reference without placing them in the bin. Not bin contents;
+    /// FilmCraft still needs them as items because media binds to an item, never to a timeline
+    /// clip. Populated for sequence transfers only.
+    pub referenced: Vec<ClipPlan>,
     pub compositions: usize,
 }
 #[derive(Clone, Debug, Serialize)]
@@ -48,6 +55,8 @@ pub struct ImportedBin {
     pub bin: BinId,
     pub name: String,
     pub clips: usize,
+    /// Sequence sources imported into the sub-bin, not part of the Avid bin's own contents.
+    pub referenced: usize,
     pub compositions: usize,
 }
 
@@ -198,7 +207,7 @@ pub fn plan_scoped(bytes: &[u8], mode: TransferMode) -> Result<Plan> {
         if catalog.get("summary").and_then(|s| s.get("master_count")).and_then(Value::as_u64) != Some(clips.len() as u64) {
             return Err(bad("incomplete master catalog"));
         }
-        let mut out = BinPlan { name, uid, clips: Vec::new(), compositions: 0 };
+        let mut out = BinPlan { name, uid, clips: Vec::new(), referenced: Vec::new(), compositions: 0 };
         // Cross-check the derived catalog against independently exported decoded mobs.
         // Its own master_count cannot prove that no master was omitted during assembly.
         let mobs = array(b, "mobs")?;
@@ -273,8 +282,10 @@ pub fn plan_scoped(bytes: &[u8], mode: TransferMode) -> Result<Plan> {
             if quantized {
                 quantized_count = quantized_count.saturating_add(1);
             }
-            // Only placed masters are bin contents; referenced masters remain source evidence.
-            if placed {
+            // Only placed masters are bin contents. A sequence transfer additionally needs the
+            // masters its compositions reference, which Avid keeps in the file without placing
+            // them; they are kept apart from the bin's own contents.
+            if placed || mode == TransferMode::Sequences {
                 let mut source_descriptors = Vec::new();
                 let mut descriptor_ids = BTreeSet::new();
                 for r in tracks.iter().filter_map(|t| t["references"].as_array()).flatten() {
@@ -291,10 +302,18 @@ pub fn plan_scoped(bytes: &[u8], mode: TransferMode) -> Result<Plan> {
                     }
                 }
                 let picture_rate_evidence = full_identity(&c["id"]).ok().and_then(|id| rate_evidence.get(&id)).cloned().flatten();
-                out.clips.push(ClipPlan { name, duration, evidence: c.clone(), source_descriptors, picture_rate_evidence });
+                let clip = ClipPlan { name, duration, evidence: c.clone(), source_descriptors, picture_rate_evidence };
+                if placed { out.clips.push(clip) } else { out.referenced.push(clip) }
             } else {
                 result.warnings.push(format!("{}: referenced master {name} was not imported as a bin item", out.name));
             }
+        }
+        if !out.referenced.is_empty() {
+            result.warnings.push(format!(
+                "{}: {} masters referenced by this bin's sequences, but not placed in it, were imported into a \"{REFERENCED_BIN}\" sub-bin so those sequences can resolve and relink their sources.",
+                out.name,
+                out.referenced.len()
+            ));
         }
         if !decoded_masters.is_empty() {
             return Err(bad("catalog omitted decoded masters"));
@@ -346,6 +365,27 @@ pub(crate) fn validate_project(project: &Project, parent: Option<BinId>) -> Resu
     }
     Ok(())
 }
+/// The masters imported for one Avid bin, as `(placed contents, referenced sequence sources)`.
+/// Media binding and sequence conversion must agree on the whole set, or a converted timeline
+/// would hold clips that can never be relinked. They are returned apart because the two carry
+/// different promises: the bin's own contents are what an import is accountable for, while a
+/// referenced source that cannot be bound only costs its sequence clip a placeholder. Other
+/// sub-bins are the user's and are never treated as sources.
+pub fn imported_items(project: &Project, bin: BinId) -> Result<(Vec<filmcraft_project::ItemId>, Vec<filmcraft_project::ItemId>)> {
+    let b = project.root.find_bin(bin).ok_or_else(|| bad("missing imported bin"))?;
+    let mut placed = Vec::new();
+    let mut referenced = Vec::new();
+    for child in &b.children {
+        match child {
+            BinEntry::Item(id) => placed.push(*id),
+            BinEntry::Bin(sub) if sub.name == REFERENCED_BIN => {
+                referenced.extend(sub.children.iter().filter_map(|e| if let BinEntry::Item(id) = e { Some(*id) } else { None }));
+            }
+            BinEntry::Bin(_) => {}
+        }
+    }
+    Ok((placed, referenced))
+}
 fn allocate_name(names: &mut BTreeSet<String>, base: &str) -> Result<String> {
     if names.insert(base.into()) {
         return Ok(base.into());
@@ -362,18 +402,72 @@ fn allocate_name(names: &mut BTreeSet<String>, base: &str) -> Result<String> {
 pub struct PreviewBin {
     pub name: String,
     pub clips: usize,
+    pub referenced: usize,
 }
 /// Resolve all names together, accounting for other bins in this import without editing a project.
 pub fn preview(project: &Project, plan: &Plan, parent: Option<BinId>) -> Result<Vec<PreviewBin>> {
     validate_project(project, parent)?;
-    let required = plan.bins.iter().try_fold(0u64, |n, b| n.checked_add(1)?.checked_add(b.clips.len() as u64)).ok_or_else(|| bad("too many items"))?;
+    // One ID per bin and item, plus one for a referenced-sources sub-bin where it is needed.
+    let required = plan
+        .bins
+        .iter()
+        .try_fold(0u64, |n, b| {
+            n.checked_add(1)?.checked_add(b.clips.len() as u64)?.checked_add(b.referenced.len() as u64)?.checked_add(u64::from(!b.referenced.is_empty()))
+        })
+        .ok_or_else(|| bad("too many items"))?;
     project.next_id.checked_add(required).ok_or_else(|| bad("project ID space exhausted"))?;
     let bin = match parent {
         Some(id) => project.root.find_bin(id).ok_or_else(|| bad("destination parent does not exist"))?,
         None => &project.root,
     };
     let mut names: BTreeSet<String> = bin.children.iter().filter_map(|x| if let BinEntry::Bin(b) = x { Some(b.name.clone()) } else { None }).collect();
-    plan.bins.iter().map(|b| Ok(PreviewBin { name: allocate_name(&mut names, &b.name)?, clips: b.clips.len() })).collect()
+    plan.bins.iter().map(|b| Ok(PreviewBin { name: allocate_name(&mut names, &b.name)?, clips: b.clips.len(), referenced: b.referenced.len() })).collect()
+}
+/// Add one offline master as an item of `bin`. `placed` records whether the Avid bin itself
+/// listed it, so a referenced-only source is never reported as bin contents.
+fn add_master(project: &mut Project, bin: BinId, bin_name: &str, bin_uid: &str, c: ClipPlan, placed: bool) -> Result<()> {
+    // Deliberately no guessed file path: multi-component sources need a media binding.
+    let has_video = c
+        .evidence
+        .get("tracks")
+        .and_then(Value::as_array)
+        .is_some_and(|ts| ts.iter().any(|t| t.pointer("/component/media_kind").and_then(Value::as_u64) == Some(1)));
+    let info = MediaInfo {
+        name: c.name.clone(),
+        kind: if has_video { MediaKind::Movie } else { MediaKind::AudioOnly },
+        duration: c.duration,
+        video: None,
+        audio_streams: Vec::new(),
+        container: "Avid metadata (unbound)".into(),
+        start_timecode: None,
+        file_size: None,
+    };
+    let mid = project.add_item(
+        &c.name,
+        if placed { Label::Lavender } else { Label::Tan },
+        ItemKind::Media(MediaClip {
+            media: MediaRef::File { path: String::new() },
+            info,
+            interpret: Interpretation::default(),
+            mark_in: None,
+            mark_out: None,
+            markers: Vec::new(),
+            offline: true,
+            proxy: None,
+            identity: None,
+        }),
+        Some(bin),
+    );
+    let item = project.item_mut(mid).ok_or_else(|| bad("new item missing"))?;
+    if let Some(user) = c.evidence.get("user").and_then(Value::as_object) {
+        for (k, v) in user {
+            item.metadata.insert(k.clone(), v.as_str().map(str::to_owned).unwrap_or_else(|| v.to_string()));
+        }
+    }
+    let provenance = serde_json::json!({"version":1,"bin_name":bin_name,"bin_uid":bin_uid,"clip":c.evidence,"source_descriptors":c.source_descriptors,
+        "picture_rate_evidence":c.picture_rate_evidence,"binding":"unbound","placed":placed});
+    item.metadata.insert(SOURCE_KEY.into(), provenance.to_string());
+    Ok(())
 }
 /// Apply a validated plan to a transaction-local project copy; no I/O or AVB dependency remains.
 pub fn apply(project: &mut Project, plan: Plan, parent: Option<BinId>) -> Result<Vec<ImportedBin>> {
@@ -383,49 +477,18 @@ pub fn apply(project: &mut Project, plan: Plan, parent: Option<BinId>) -> Result
         let name = destination.name;
         let id = project.add_bin(&name, parent);
         let count = b.clips.len();
+        let referenced = b.referenced.len();
         for c in b.clips {
-            // Deliberately no guessed file path: multi-component sources need a media binding.
-            let has_video = c
-                .evidence
-                .get("tracks")
-                .and_then(Value::as_array)
-                .is_some_and(|ts| ts.iter().any(|t| t.pointer("/component/media_kind").and_then(Value::as_u64) == Some(1)));
-            let info = MediaInfo {
-                name: c.name.clone(),
-                kind: if has_video { MediaKind::Movie } else { MediaKind::AudioOnly },
-                duration: c.duration,
-                video: None,
-                audio_streams: Vec::new(),
-                container: "Avid metadata (unbound)".into(),
-                start_timecode: None,
-                file_size: None,
-            };
-            let mid = project.add_item(
-                &c.name,
-                Label::Lavender,
-                ItemKind::Media(MediaClip {
-                    media: MediaRef::File { path: String::new() },
-                    info,
-                    interpret: Interpretation::default(),
-                    mark_in: None,
-                    mark_out: None,
-                    markers: Vec::new(),
-                    offline: true,
-                    proxy: None,
-                    identity: None,
-                }),
-                Some(id),
-            );
-            let item = project.item_mut(mid).ok_or_else(|| bad("new item missing"))?;
-            if let Some(user) = c.evidence.get("user").and_then(Value::as_object) {
-                for (k, v) in user {
-                    item.metadata.insert(k.clone(), v.as_str().map(str::to_owned).unwrap_or_else(|| v.to_string()));
-                }
-            }
-            let provenance = serde_json::json!({"version":1,"bin_name":b.name,"bin_uid":b.uid,"clip":c.evidence,"source_descriptors":c.source_descriptors,"picture_rate_evidence":c.picture_rate_evidence,"binding":"unbound"});
-            item.metadata.insert(SOURCE_KEY.into(), provenance.to_string());
+            add_master(project, id, &b.name, &b.uid, c, true)?;
         }
-        imported.push(ImportedBin { bin: id, name, clips: count, compositions: b.compositions });
+        if !b.referenced.is_empty() {
+            // A separate sub-bin: these are sequence sources, not contents Avid showed in the bin.
+            let sources = project.add_bin(REFERENCED_BIN, Some(id));
+            for c in b.referenced {
+                add_master(project, sources, &b.name, &b.uid, c, false)?;
+            }
+        }
+        imported.push(ImportedBin { bin: id, name, clips: count, referenced, compositions: b.compositions });
     }
     Ok(imported)
 }
