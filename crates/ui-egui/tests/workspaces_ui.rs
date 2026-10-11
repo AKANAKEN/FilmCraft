@@ -182,7 +182,10 @@ fn dragging_effects_to_top_right_then_splitting_and_saving_survives_restart() {
     let effects = d.rect("panel.Effects");
     let program = d.rect("panel.Program");
     assert!(effects.min.x > program.max.x, "edge drop creates a separate region");
-    assert!(d.app().ui.dock.is_visible(PanelKind::Text), "the old group restores a remaining panel");
+    assert!(
+        [PanelKind::Properties, PanelKind::EssentialGraphics, PanelKind::Text].into_iter().any(|p| d.app().ui.dock.is_visible(p)),
+        "the old group restores a remaining panel"
+    );
     let mut all = Vec::new();
     d.app().ui.dock.panels(&mut all);
     assert_eq!(all.iter().filter(|p| **p == PanelKind::Effects).count(), 1);

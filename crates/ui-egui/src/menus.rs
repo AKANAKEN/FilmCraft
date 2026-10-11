@@ -22,6 +22,10 @@ macro_rules! uic {
 }
 
 pub const UI_COMMANDS: &[UiCommand] = &[
+    uic!("window.dockAction", "Docking Action", [], None),
+    uic!("window.dockPanel", "Dock Panel", [], None),
+    uic!("window.floatPanel", "Undock Panel", [], None),
+    uic!("window.closePanel", "Close Panel", [], None),
     uic!("app.language.english", "English", ["Edit", "Language"], None),
     uic!("app.language.japanese", "日本語", ["Edit", "Language"], None),
     uic!("app.language.spanish", "Español", ["Edit", "Language"], None),
@@ -250,11 +254,18 @@ pub fn invoke(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, mut params:
         let placement = params.get("placement").cloned().unwrap_or_else(|| json!("tab"));
         let placement: crate::dock::Placement =
             serde_json::from_value(placement).map_err(|_| "unknown panel placement (tab, before, after, left, right, top, bottom)")?;
-        let changed = app.ui.dock.move_panel(panel, target, placement)?;
+        let action = crate::dock_shared::move_action(&app.ui.dock, &app.ui.floating, panel, target, placement)?;
+        let changed = panel != target;
+        if changed {
+            app.apply_dock(action)?;
+        }
         app.ui.focused = panel;
         app.ui.keys.maximized = None;
         ctx.request_repaint();
         return Ok(json!({"moved": changed}));
+    }
+    if let Some(result) = crate::dock_ui::route(app, ctx, id, &params) {
+        return result;
     }
     if let Some(rest) = id.strip_prefix("window.panel.") {
         let p = PanelKind::from_name(rest).ok_or_else(|| format!("unknown panel `{rest}`"))?;
