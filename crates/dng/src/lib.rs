@@ -20,6 +20,8 @@ pub mod ljpeg;
 pub mod options;
 pub mod process;
 pub mod raw;
+#[cfg(any(test, feature = "writer"))]
+pub mod reference;
 pub mod tiff;
 #[cfg(any(test, feature = "writer"))]
 pub mod writer;
