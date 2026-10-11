@@ -271,7 +271,14 @@ fn main() -> eframe::Result {
                 app.ui.show_menu_bar = false;
             }
             if let Some(port) = control_port {
-                let rx = control_server::start(port, cc.egui_ctx.clone());
+                let token = control_server::Token::new();
+                // The CLI bridge picks the token up from here (or from FILMCRAFT_CONTROL_TOKEN).
+                if let Some(dir) = data_dir.clone().or_else(default_data_dir) {
+                    if std::fs::create_dir_all(&dir).is_ok() {
+                        control_server::write_token_file(&dir.join("control.token"), &token);
+                    }
+                }
+                let rx = control_server::start(port, token, cc.egui_ctx.clone());
                 app = if control_input_only { app.with_control_input_only(rx) } else { app.with_control(rx) };
             }
             Ok(Box::new(app))

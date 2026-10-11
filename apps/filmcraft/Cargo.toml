@@ -29,6 +29,8 @@ filmcraft-platform = { workspace = true }
 egui = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11"] }
 serde_json = { workspace = true }
+# Control-server token generation (#163); already in the lock via other crates.
+getrandom = "0.3"
 log = { workspace = true }
 rfd = { workspace = true }
 cpal = "0.16"

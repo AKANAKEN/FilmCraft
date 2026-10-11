@@ -130,8 +130,9 @@ progress and stop it:
 ## 2. Control channel
 
 `filmcraft --control 9876` (or `FILMCRAFT_CONTROL_PORT=9876`) listens on `127.0.0.1` only. Send one
-JSON request per line and get one JSON reply per line. Full method table:
-[control-protocol.md](control-protocol.md).
+JSON request per line and get one JSON reply per line. The first line of every connection must be the
+control token (`{"token": "…"}` — see `FILMCRAFT_CONTROL_TOKEN` or `control.token` in the data
+directory). Full method table: [control-protocol.md](control-protocol.md).
 
 ```jsonc
 {"id":1,"method":"engine.commands"}
@@ -149,8 +150,10 @@ Replies look like `{"id":4,"ok":true,"result":{"cuts":2}}` or `{"id":7,"ok":fals
 Minimal client:
 
 ```python
-import json, socket
+import json, os, socket
 s = socket.create_connection(("127.0.0.1", 9876)); f = s.makefile("rw")
+token = os.environ.get("FILMCRAFT_CONTROL_TOKEN") or open(os.path.expanduser("~/.local/share/filmcraft/control.token")).read().strip()
+f.write(json.dumps({"token": token}) + "\n"); f.flush(); f.readline()  # {"ok": true, "token": "accepted"}
 def call(method, **params):
     f.write(json.dumps({"id": 1, "method": method, "params": params}) + "\n"); f.flush()
     return json.loads(f.readline())

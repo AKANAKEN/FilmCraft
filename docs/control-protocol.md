@@ -13,10 +13,18 @@ nothing sent after it on that connection runs. That covers text that isn't JSON,
 an object without `method`, invalid UTF-8, and a line longer than 4 MiB. An HTTP request (for example a
 web page's cross-origin `fetch` to `127.0.0.1:<port>`) therefore can't smuggle a command in its body:
 its request line is rejected first. At most 16 connections are served at once; further ones get an error
-line and are closed. Clients that get an error reply should reconnect. The port has no authentication,
-so only enable it while you use it. Transport: `apps/filmcraft/src/control_server.rs`.
+line and are closed. Clients that get an error reply should reconnect.
+**Every connection needs the control token.** The app generates one at startup (or uses
+`FILMCRAFT_CONTROL_TOKEN` if you set it) and writes it, owner-only (mode 0600), to
+`control.token` in its data directory. The first line of a connection must be
+`{"token": "…"}` matching it; anything else gets one error reply and the connection closes, so no
+request runs without the token. The CLI bridge (`crates/automation/src/bridge.rs`) reads the same
+env var / file and sends the line for you. The port is still loopback-only, so only enable it while
+you use it. Transport: `apps/filmcraft/src/control_server.rs`.
 
 ```json
+{"token": "…"}
+{"ok": true, "token": "accepted"}
 {"id": 1, "method": "engine.execute", "params": {"command": "sequence.addEdit", "params": {"seconds": 3}}}
 {"id": 1, "ok": true, "result": {"cuts": 2}}
 ```
