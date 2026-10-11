@@ -38,6 +38,8 @@ fn interface_language_persists_and_rejects_hostile_values() {
     assert_eq!(Preferences::load(&path).general.interface_language, "de");
     set(&mut s, "general.interfaceLanguage", json!("fr"));
     assert_eq!(Preferences::load(&path).general.interface_language, "fr");
+    set(&mut s, "general.interfaceLanguage", json!("cs"));
+    assert_eq!(Preferences::load(&path).general.interface_language, "cs");
     // back to following the operating system (#218)
     set(&mut s, "general.interfaceLanguage", json!("system"));
     assert_eq!(Preferences::load(&path).general.interface_language, "system");
