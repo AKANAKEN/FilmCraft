@@ -1397,7 +1397,7 @@ fn align_glyph(p: &egui::Painter, r: Rect, how: &str, c: Color32) {
 fn glyph_button(ui: &mut egui::Ui, how: &str, tip: &str, on: bool, t: &Tokens) -> egui::Response {
     let (r, resp) = ui.allocate_exact_size(vec2(24.0, 22.0), Sense::click());
     if on {
-        ui.painter().rect_filled(r, 3.0, Color32::from_rgb(0x4b, 0x4b, 0x4b));
+        ui.painter().rect_filled(r, 3.0, t.pressed);
     } else if resp.hovered() {
         ui.painter().rect_filled(r, 3.0, t.hover);
     }
@@ -1408,7 +1408,7 @@ fn glyph_button(ui: &mut egui::Ui, how: &str, tip: &str, on: bool, t: &Tokens) -
 fn letter_button(ui: &mut egui::Ui, text: &str, tip: &str, on: bool, t: &Tokens, font: egui::FontId) -> egui::Response {
     let (r, resp) = ui.allocate_exact_size(vec2(26.0, 22.0), Sense::click());
     if on {
-        ui.painter().rect_filled(r, 3.0, Color32::from_rgb(0x4b, 0x4b, 0x4b));
+        ui.painter().rect_filled(r, 3.0, t.pressed);
     } else if resp.hovered() {
         ui.painter().rect_filled(r, 3.0, t.hover);
     }
@@ -1491,7 +1491,7 @@ pub fn properties(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::click());
                 let on = sel == Some(li);
                 if on {
-                    ui.painter().rect_filled(r, 2.0, Color32::from_rgb(0x2e, 0x3d, 0x55));
+                    ui.painter().rect_filled(r, 2.0, t.row_selected);
                 } else if resp.hovered() {
                     ui.painter().rect_filled(r, 2.0, t.hover);
                 }

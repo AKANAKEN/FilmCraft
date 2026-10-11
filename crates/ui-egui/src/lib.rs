@@ -116,7 +116,7 @@ pub struct HostHooks {
     pub pick_open_project: Option<Box<dyn FnMut() -> Option<String>>>,
     /// Save dialog with a filter: (filter name, extensions, suggested file name) → path.
     pub pick_save_as: Option<Box<dyn FnMut(&str, &[&str], &str) -> Option<String>>>,
-    /// The active keyboard shortcuts changed: update native menu key equivalents.
+    /// Shortcuts, language or appearance changed: update native menu keys, labels and checks.
     pub shortcuts_changed: Option<Box<dyn FnMut(&[menus::MenuItem])>>,
     /// The user's preferred languages (locale tags, most preferred first) for Interface Language ▸
     /// System Language. Without it, System Language is English.
@@ -595,7 +595,7 @@ impl FilmcraftApp {
     fn apply_tooltips(&self, ctx: &egui::Context) {
         // Settings ▸ General ▸ Show Tool Tips
         let delay = if self.session.prefs.general.show_tool_tips { 0.5 } else { 1.0e9 };
-        ctx.global_style_mut(|s| s.interaction.tooltip_delay = delay);
+        ctx.all_styles_mut(|s| s.interaction.tooltip_delay = delay);
     }
 
     /// Settings ▸ Appearance ▸ UI Scale: a fixed scale makes a point that many physical pixels,
@@ -620,6 +620,9 @@ impl FilmcraftApp {
     /// play after rendering, audio device).
     pub fn apply_prefs(&mut self, ctx: &egui::Context) {
         self.apply_ui_scale(ctx);
+        // Keep native events available in manual modes too, and clear restored egui pins.
+        // FilmCraft's resolved palette lives in both styles independently of this preference.
+        ctx.set_theme(egui::ThemePreference::System);
         // Appearance Mode ▸ Sync with system: follow the system while running. The host reports
         // changes as they happen (no polling) and wakes the UI only when the value changes.
         if self.applied_prefs.is_some() {
@@ -636,6 +639,12 @@ impl FilmcraftApp {
         if prev.as_ref().is_none_or(|q| q.appearance != p.appearance || q.general.show_tool_tips != p.general.show_tool_tips) {
             let k = self.appearance_kind(ctx);
             self.set_theme(ctx, k);
+        }
+        if prev.as_ref().is_none_or(|q| q.appearance != p.appearance) {
+            let items = menus::menu_items(self);
+            if let Some(hook) = self.hooks.shortcuts_changed.as_mut() {
+                hook(&items);
+            }
         }
         if prev.as_ref().is_none_or(|q| q.general.interface_language != p.general.interface_language) {
             let language = match i18n::Language::parse(&p.general.interface_language) {

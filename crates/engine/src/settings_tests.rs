@@ -675,3 +675,22 @@ fn appearance_choices_validate_and_legacy_theme_still_selects() {
     }
     assert_eq!(seen, ["auto", "light", "dark", "auto"]);
 }
+
+#[test]
+fn auto_survives_legacy_normalization_save_and_reload() {
+    let dir = tmp_dir("prefs-auto-roundtrip");
+    let path = dir.join("preferences.json");
+    for legacy in ["darkest", "dark", "light", "neon"] {
+        let prefs = Preferences::from_value(json!({"version": 2, "appearance": {
+            "colorTheme": legacy, "appearanceMode": "auto", "darkTheme": "dark", "lightTheme": "light"
+        }}));
+        assert_eq!(prefs.appearance.appearance_mode, "auto");
+        assert_eq!(prefs.appearance.color_theme, "dark", "legacy output follows the dark slot, never selects a fixed mode");
+        for system in [Some(true), Some(false), None] {
+            assert_eq!(prefs.appearance.shown_theme(system), if system == Some(true) { "light" } else { "dark" });
+            prefs.save(&path).unwrap();
+            assert_eq!(Preferences::load(&path).appearance, prefs.appearance);
+        }
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}

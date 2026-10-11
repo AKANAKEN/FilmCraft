@@ -127,7 +127,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
             let mut ch: usize = ui.data(|d| d.get_temp(key)).unwrap_or(0);
             ui.horizontal(|ui| {
                 for (i, c) in
-                    [Color32::WHITE, Color32::from_rgb(230, 70, 70), Color32::from_rgb(80, 200, 90), Color32::from_rgb(80, 130, 250)].iter().enumerate()
+                    [t.plot_handle, Color32::from_rgb(230, 70, 70), Color32::from_rgb(80, 200, 90), Color32::from_rgb(80, 130, 250)].iter().enumerate()
                 {
                     let (r, resp) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
                     ui.painter().circle_filled(r.center(), 6.0, *c);
@@ -141,7 +141,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
             });
             ui.data_mut(|d| d.insert_temp(key, ch));
             let (id, col) = [
-                ("curve_luma", Color32::WHITE),
+                ("curve_luma", t.plot_handle),
                 ("curve_red", Color32::from_rgb(230, 70, 70)),
                 ("curve_green", Color32::from_rgb(80, 200, 90)),
                 ("curve_blue", Color32::from_rgb(80, 130, 250)),
@@ -160,7 +160,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 ("sat_vs_sat", tl!("Sat vs Sat")),
             ] {
                 ui.label(egui::RichText::new(label).color(t.text_dim));
-                curve_editor(ui, &e, id, true, Color32::WHITE, &t, &mut actions, clip, idx);
+                curve_editor(ui, &e, id, true, t.plot_handle, &t, &mut actions, clip, idx);
             }
         }
         if open_section(ui, app, &e, "Color Wheels & Match", "wheels_on", "wheels", &mut sections) {
@@ -339,8 +339,8 @@ fn section(ui: &mut egui::Ui, app: &mut FilmcraftApp, name: &str, on: bool) -> (
     // enable switch (section bypass)
     let sw = Rect::from_center_size(pos2(r.max.x - 18.0, r.center().y), vec2(26.0, 14.0));
     let sw_resp = ui.interact(sw.expand(3.0), egui::Id::new(("lumetri-switch", name)), Sense::click());
-    ui.painter().rect_filled(sw, 7.0, if on { t.accent } else { Color32::from_rgb(0x55, 0x55, 0x55) });
-    ui.painter().circle_filled(pos2(if on { sw.max.x - 7.0 } else { sw.min.x + 7.0 }, sw.center().y), 5.0, Color32::WHITE);
+    ui.painter().rect_filled(sw, 7.0, if on { t.accent } else { t.control_border });
+    ui.painter().circle_filled(pos2(if on { sw.max.x - 7.0 } else { sw.min.x + 7.0 }, sw.center().y), 5.0, if on { Color32::WHITE } else { t.control_handle });
     app.auto.add(&format!("lumetri.switch.{name}"), sw.expand(3.0), &format!("{name} on/off"));
     app.auto.add(&format!("lumetri.section.{name}"), r, name);
     if sw_resp.clicked() {
@@ -408,7 +408,7 @@ fn slider(
             }
         }
         None => {
-            ui.painter().rect_filled(track, 0.0, Color32::from_rgb(0x6e, 0x6e, 0x6e));
+            ui.painter().rect_filled(track, 0.0, t.text_faint);
         }
     }
     let f = ((v - soft_min) / (soft_max - soft_min)).clamp(0.0, 1.0) as f32;
@@ -416,11 +416,7 @@ fn slider(
     let hit = Rect::from_min_max(pos2(track.min.x - 6.0, row.min.y), pos2(track.max.x + 6.0, row.max.y));
     let resp = ui.interact(hit, egui::Id::new(("lslider", clip.0, id)), Sense::click_and_drag());
     ui.painter().circle_filled(pos2(kx, track.center().y), 5.0, t.panel_bg);
-    ui.painter().circle_stroke(
-        pos2(kx, track.center().y),
-        5.0,
-        Stroke::new(1.5, if resp.dragged() { t.hot_text } else { Color32::from_rgb(0xb0, 0xb0, 0xb0) }),
-    );
+    ui.painter().circle_stroke(pos2(kx, track.center().y), 5.0, Stroke::new(1.5, if resp.dragged() { t.hot_text } else { t.text_dim }));
     let mut out = None;
     if (resp.dragged() || resp.clicked())
         && let Some(p) = resp.interact_pointer_pos()
@@ -457,17 +453,11 @@ fn curve_editor(ui: &mut egui::Ui, e: &EffectInstance, id: &str, hue: bool, col:
     let h = if hue { w * 0.45 } else { w };
     let (area, resp) = ui.allocate_exact_size(vec2(w, h), Sense::click_and_drag());
     let p = ui.painter();
-    p.rect_filled(area, 2.0, Color32::from_rgb(0x16, 0x16, 0x16));
+    p.rect_filled(area, 2.0, t.plot_bg);
     for i in 1..4 {
         let f = i as f32 / 4.0;
-        p.line_segment(
-            [pos2(area.min.x + area.width() * f, area.min.y), pos2(area.min.x + area.width() * f, area.max.y)],
-            Stroke::new(1.0, Color32::from_rgb(0x2a, 0x2a, 0x2a)),
-        );
-        p.line_segment(
-            [pos2(area.min.x, area.min.y + area.height() * f), pos2(area.max.x, area.min.y + area.height() * f)],
-            Stroke::new(1.0, Color32::from_rgb(0x2a, 0x2a, 0x2a)),
-        );
+        p.line_segment([pos2(area.min.x + area.width() * f, area.min.y), pos2(area.min.x + area.width() * f, area.max.y)], Stroke::new(1.0, t.plot_grid));
+        p.line_segment([pos2(area.min.x, area.min.y + area.height() * f), pos2(area.max.x, area.min.y + area.height() * f)], Stroke::new(1.0, t.plot_grid));
     }
     if hue {
         let n = 36;
@@ -583,11 +573,11 @@ fn color_wheel(ui: &mut egui::Ui, e: &EffectInstance, mt: Tick, id: &str, lid: &
         mesh.add_triangle(base, base + 2, base + 3);
     }
     p.add(mesh);
-    p.circle_filled(c, r_in - 1.0, Color32::from_rgb(0x16, 0x16, 0x16));
+    p.circle_filled(c, r_in - 1.0, t.plot_bg);
     p.line_segment([c - vec2(6.0, 0.0), c + vec2(6.0, 0.0)], Stroke::new(1.0, t.text_faint));
     p.line_segment([c - vec2(0.0, 6.0), c + vec2(0.0, 6.0)], Stroke::new(1.0, t.text_faint));
     let puck = c + vec2(v.x as f32, -v.y as f32) * (r_in - 4.0);
-    p.circle_stroke(puck, 5.0, Stroke::new(1.5, Color32::WHITE));
+    p.circle_stroke(puck, 5.0, Stroke::new(1.5, t.plot_handle));
     if (resp.dragged() || resp.clicked())
         && let Some(pos) = resp.interact_pointer_pos()
     {
@@ -602,9 +592,9 @@ fn color_wheel(ui: &mut egui::Ui, e: &EffectInstance, mt: Tick, id: &str, lid: &
     // lightness slider (vertical) at the wheel's left edge
     let l = e.param(lid).map(|p| p.f64_at(mt)).unwrap_or(0.0) as f32;
     let track = Rect::from_min_max(pos2(area.min.x, area.min.y + 8.0), pos2(area.min.x + 4.0, area.max.y - 8.0));
-    p.rect_filled(track, 2.0, Color32::from_rgb(0x4b, 0x4b, 0x4b));
+    p.rect_filled(track, 2.0, t.pressed);
     let ky = track.center().y - l / 100.0 * track.height() / 2.0;
-    p.circle_stroke(pos2(track.center().x, ky), 4.0, Stroke::new(1.5, Color32::from_rgb(0xb0, 0xb0, 0xb0)));
+    p.circle_stroke(pos2(track.center().x, ky), 4.0, Stroke::new(1.5, t.text_dim));
     let lr = ui.interact(track.expand2(vec2(6.0, 0.0)), egui::Id::new(("wl", clip.0, lid)), Sense::click_and_drag());
     if (lr.dragged() || lr.clicked())
         && let Some(pos) = lr.interact_pointer_pos()

@@ -428,6 +428,8 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
             if x1 > x0 {
                 let gap = Rect::from_min_max(pos2(x0, r.rect.min.y + 1.0), pos2(x1, r.rect.max.y - 1.0));
                 p.rect_filled(gap, 0.0, GAP_FILL);
+                // The light block needs a neutral boundary on Light's near-white rows.
+                p.rect_stroke(gap, 0.0, Stroke::new(1.0, t.icon_active), StrokeKind::Inside);
                 app.auto.add("timeline.gap", gap.intersect(content), "Selected gap");
             }
         }
@@ -560,10 +562,10 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     }
     // snap indicator
     if let Some(sx) = app.tl.snap_x.take() {
-        painter.line_segment([pos2(sx, ruler.max.y), pos2(sx, content.max.y)], Stroke::new(1.0, Color32::from_rgb(250, 250, 250)));
+        painter.line_segment([pos2(sx, ruler.max.y), pos2(sx, content.max.y)], Stroke::new(1.0, t.icon_active));
         for y in [ruler.max.y, content.max.y] {
             let d = if y == ruler.max.y { 1.0 } else { -1.0 };
-            painter.add(egui::Shape::convex_polygon(vec![pos2(sx - 4.0, y), pos2(sx + 4.0, y), pos2(sx, y + 5.0 * d)], Color32::WHITE, Stroke::NONE));
+            painter.add(egui::Shape::convex_polygon(vec![pos2(sx - 4.0, y), pos2(sx + 4.0, y), pos2(sx, y + 5.0 * d)], t.icon_active, Stroke::NONE));
         }
     }
 
@@ -1352,17 +1354,17 @@ fn draw_top(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, seq: &Sequenc
     if seq.mark_in.is_some() || seq.mark_out.is_some() {
         let a = layout.x_of(seq.mark_in.unwrap_or(Tick::ZERO));
         let b = layout.x_of(seq.mark_out.map(|o| o + rate.frame_duration()).unwrap_or(seq.duration()));
-        clip.rect_filled(Rect::from_min_max(pos2(a, label_y + 7.0), pos2(b, tick_base)), 0.0, Color32::from_rgb(0x5c, 0x5c, 0x5c));
+        clip.rect_filled(Rect::from_min_max(pos2(a, label_y + 7.0), pos2(b, tick_base)), 0.0, t.in_out_shade);
     }
     // split points: a short bracket with a V or A tag (video above, audio below)
     let sp = seq.split;
-    for (t, is_in, tag, low) in
+    for (split_tick, is_in, tag, low) in
         [(sp.video_in, true, "V", false), (sp.video_out, false, "V", false), (sp.audio_in, true, "A", true), (sp.audio_out, false, "A", true)]
     {
-        let Some(t) = t else { continue };
-        let x = layout.x_of(if is_in { t } else { t + rate.frame_duration() });
+        let Some(split_tick) = split_tick else { continue };
+        let x = layout.x_of(if is_in { split_tick } else { split_tick + rate.frame_duration() });
         let y0 = if low { tick_base - 7.0 } else { label_y + 7.0 };
-        let col = Color32::from_rgb(0xd0, 0xd0, 0xd0);
+        let col = t.icon_active;
         let dx = if is_in { 4.0 } else { -4.0 };
         clip.line_segment([pos2(x, y0), pos2(x, y0 + 7.0)], Stroke::new(1.5, col));
         clip.line_segment([pos2(x, y0), pos2(x + dx, y0)], Stroke::new(1.5, col));
@@ -2279,8 +2281,8 @@ fn interact(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence, layout: &
             Drag::Volume(v) => Some(Drag::Volume(super::timeline_volume::drag(app, ui, seq, layout, v, p.y))),
             Drag::Marquee { start } => {
                 let r = Rect::from_two_pos(start, p);
-                ui.painter().rect_filled(r, 0.0, Color32::from_white_alpha(18));
-                ui.painter().rect_stroke(r, 0.0, Stroke::new(1.0, Color32::from_white_alpha(140)), StrokeKind::Inside);
+                ui.painter().rect_filled(r, 0.0, app.tokens.icon_active.gamma_multiply(18.0 / 255.0));
+                ui.painter().rect_stroke(r, 0.0, Stroke::new(1.0, app.tokens.icon_active.gamma_multiply(140.0 / 255.0)), StrokeKind::Inside);
                 Some(Drag::Marquee { start })
             }
             other => Some(other),
@@ -2537,10 +2539,10 @@ fn interact(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence, layout: &
         );
         if let Some(band) = row.as_ref().map(|r| r.rect).or(new_track.map(|(_, band)| band)) {
             let r = Rect::from_min_max(pos2(layout.x_of(t), band.min.y + 1.0), pos2(layout.x_of(t + dur), band.max.y - 1.0));
-            ui.painter().rect_filled(r, 3.0, Color32::from_white_alpha(40));
-            ui.painter().rect_stroke(r, 3.0, Stroke::new(1.5, Color32::WHITE), StrokeKind::Inside);
+            ui.painter().rect_filled(r, 3.0, app.tokens.icon_active.gamma_multiply(40.0 / 255.0));
+            ui.painter().rect_stroke(r, 3.0, Stroke::new(1.5, app.tokens.icon_active), StrokeKind::Inside);
             if mods.command {
-                ui.painter().text(r.left_top() + vec2(4.0, -2.0), Align2::LEFT_BOTTOM, tl!("Insert"), Tokens::ui(10.0), Color32::WHITE);
+                ui.painter().text(r.left_top() + vec2(4.0, -2.0), Align2::LEFT_BOTTOM, tl!("Insert"), Tokens::ui(10.0), app.tokens.icon_active);
             }
         }
         let target = match (&row, new_track) {
@@ -2579,7 +2581,7 @@ fn interact(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence, layout: &
         let row = layout.row_at(p.y).cloned().filter(|r| r.kind == TrackKind::Video);
         if let Some(row) = &row {
             let r = Rect::from_min_max(pos2(layout.x_of(t), row.rect.min.y + 1.0), pos2(layout.x_of(t) + 60.0, row.rect.max.y - 1.0));
-            ui.painter().rect_stroke(r, 3.0, Stroke::new(1.5, Color32::WHITE), StrokeKind::Inside);
+            ui.painter().rect_stroke(r, 3.0, Stroke::new(1.5, app.tokens.icon_active), StrokeKind::Inside);
         }
         if ctx.input(|i| i.pointer.any_released()) {
             let mut q = json!({"template": template, "time": t.0});
@@ -2685,10 +2687,10 @@ fn interact(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence, layout: &
             let t = snap(app, seq, layout, rate.snap_nearest(layout.tick_at(p.x).max(Tick::ZERO)), &[]);
             let x = layout.x_of(t);
             let r = Rect::from_min_max(pos2(x, row.rect.min.y + 1.0), pos2((x + 120.0).min(layout.content.max.x), row.rect.max.y - 1.0));
-            ui.painter().rect_filled(r, 3.0, Color32::from_white_alpha(40));
-            ui.painter().rect_stroke(r, 3.0, Stroke::new(1.5, Color32::WHITE), StrokeKind::Inside);
+            ui.painter().rect_filled(r, 3.0, app.tokens.icon_active.gamma_multiply(40.0 / 255.0));
+            ui.painter().rect_stroke(r, 3.0, Stroke::new(1.5, app.tokens.icon_active), StrokeKind::Inside);
             let label = if count == 1 { tl!("1 file").to_string() } else { tlf!("{n} files", n = count) };
-            ui.painter().text(r.left_top() + vec2(4.0, 2.0), Align2::LEFT_TOP, label, Tokens::ui(10.0), Color32::WHITE);
+            ui.painter().text(r.left_top() + vec2(4.0, 2.0), Align2::LEFT_TOP, label, Tokens::ui(10.0), app.tokens.icon_active);
         }
     }
     app.auto.add("timeline.tracks", layout.content, "tracks");

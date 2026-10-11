@@ -457,9 +457,9 @@ fn add_craft_fonts(fonts: &mut FontDefinitions) {
 
 pub fn apply_visuals(ctx: &egui::Context, t: &Tokens) {
     let light = t.kind == ThemeKind::Light;
-    // FilmCraft decides between light and dark itself (Settings ▸ Appearance ▸ Appearance Mode), so
-    // egui must not switch to its other built-in style when the system appearance changes.
-    ctx.set_theme(if light { egui::Theme::Light } else { egui::Theme::Dark });
+    // Native windows must inherit OS appearance so ThemeChanged remains available. FilmCraft
+    // resolves its own palette, including manual modes, independently of egui's style branch.
+    ctx.set_theme(egui::ThemePreference::System);
     let mut v = if light { Visuals::light() } else { Visuals::dark() };
     v.panel_fill = t.panel_bg;
     v.window_fill = t.panel_bg;
@@ -507,6 +507,9 @@ pub fn apply_visuals(ctx: &egui::Context, t: &Tokens) {
         s.text_styles.insert(TextStyle::Monospace, FontId::new(12.0, FontFamily::Monospace));
         s.animation_time = 0.12;
     });
+    let style = ctx.global_style();
+    ctx.set_style_of(egui::Theme::Light, Arc::clone(&style));
+    ctx.set_style_of(egui::Theme::Dark, style);
 }
 
 #[cfg(test)]
@@ -514,6 +517,42 @@ mod tests {
     use super::*;
 
     const JAPANESE: &str = "日本語の文字";
+
+    #[test]
+    fn palettes_keep_native_tracking_and_both_style_branches() {
+        for kind in [ThemeKind::Dark, ThemeKind::Medium, ThemeKind::Light] {
+            let ctx = egui::Context::default();
+            assert!(ctx.options(|o| o.sync_window_theme));
+            let tokens = Tokens::for_kind(kind);
+            for system in [egui::Theme::Light, egui::Theme::Dark] {
+                let mut out = ctx.run_ui(egui::RawInput { system_theme: Some(system), ..Default::default() }, |_| {
+                    apply_visuals(&ctx, &tokens);
+                });
+                out.textures_delta.clear();
+                let commands: Vec<_> =
+                    out.viewport_output.values().flat_map(|v| &v.commands).filter(|c| matches!(c, egui::ViewportCommand::SetTheme(_))).collect();
+                println!("palette={kind:?} system={system:?} native={commands:?}");
+                assert_eq!(ctx.options(|o| o.theme_preference), egui::ThemePreference::System);
+                if system == egui::Theme::Light {
+                    assert!(commands.iter().any(|c| matches!(c, egui::ViewportCommand::SetTheme(egui::SystemTheme::SystemDefault))));
+                }
+                for style_theme in [egui::Theme::Light, egui::Theme::Dark] {
+                    let style = ctx.style_of(style_theme);
+                    assert_eq!(style.visuals.panel_fill, tokens.panel_bg);
+                    assert_eq!(style.visuals.override_text_color, Some(tokens.text));
+                    assert_eq!(style.visuals.dark_mode, kind != ThemeKind::Light);
+                    assert_eq!(style.spacing.interact_size.y, 24.0);
+                }
+                assert!(
+                    out.viewport_output
+                        .values()
+                        .flat_map(|v| &v.commands)
+                        .all(|c| !matches!(c, egui::ViewportCommand::SetTheme(egui::SystemTheme::Light | egui::SystemTheme::Dark))),
+                    "a native override would suppress macOS ThemeChanged"
+                );
+            }
+        }
+    }
 
     fn installed() -> egui::Context {
         let ctx = egui::Context::default();

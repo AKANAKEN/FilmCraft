@@ -100,6 +100,65 @@ fn compare(cpu: &[f32], gpu: &[f32]) -> (f32, f64) {
     (worst, flips as f64 / cpu.len() as f64)
 }
 
+/// Threshold exceptions count every value outside EXACT, not just large discontinuities.
+/// Keep `compare` unchanged for continuous effects and its other callers' separate policies.
+fn compare_threshold(cpu: &[f32], gpu: &[f32]) -> (f32, f64) {
+    assert_eq!(cpu.len(), gpu.len());
+    assert!(!cpu.is_empty());
+    let mut worst = 0f32;
+    let mut outside = 0usize;
+    for (a, b) in cpu.iter().zip(gpu) {
+        assert!(a.is_finite() && b.is_finite(), "non-finite parity value");
+        let d = (a - b).abs() / (1.0 + a.abs());
+        assert!(d.is_finite(), "non-finite parity discrepancy");
+        worst = worst.max(d);
+        outside += usize::from(d > EXACT);
+    }
+    (worst, outside as f64 / cpu.len() as f64)
+}
+
+#[test]
+fn threshold_exception_budget_covers_small_and_large_differences() {
+    let cpu = [0.0; 100];
+    let mut gpu = cpu;
+    gpu[3] = EXACT; // The alpha value at the exact boundary does not use an exception.
+    assert_eq!(compare_threshold(&cpu, &gpu), (EXACT, 0.0));
+    gpu[3] = EXACT * 1.33;
+    let (worst, outside) = compare_threshold(&cpu, &gpu);
+    assert!(worst > EXACT, "the small discrepancy is above the exact tolerance");
+    assert_eq!(outside, FLIPS, "one small threshold exception uses exactly the existing budget");
+    assert!(compare(&cpu, &gpu).0 > EXACT, "continuous effects still reject the same difference");
+    gpu[3] = 0.03;
+    let (worst, outside) = compare_threshold(&cpu, &gpu);
+    assert_eq!(worst, 0.03, "report the true maximum, including permitted exceptions");
+    assert_eq!(outside, FLIPS, "a larger exception uses the same fraction of the budget");
+    gpu[7] = EXACT * 1.33; // A second alpha value consumes a second exception.
+    assert!(compare_threshold(&cpu, &gpu).1 > FLIPS, "mixed exceptions cannot exceed the existing budget");
+}
+
+#[test]
+fn continuous_and_chain_comparison_policies_remain_strict() {
+    let cpu = [0.0; 100];
+    let mut gpu = cpu;
+    gpu[3] = EXACT * 1.5; // Includes an alpha-channel value in the unchanged all-value comparator.
+    let (worst, flips) = compare(&cpu, &gpu);
+    assert!(worst > EXACT, "continuous/alpha checks keep the exact tolerance");
+    assert!(worst < EXACT * 2.0 && flips == 0.0, "chains retain their separate two-times-exact policy");
+    gpu[3] = EXACT * 2.1;
+    assert!(compare(&cpu, &gpu).0 > EXACT * 2.0, "chains reject differences above their own limit");
+    gpu[3] = 0.03;
+    assert!(compare(&cpu, &gpu).1 > 0.0, "chains still require zero large flips");
+}
+
+#[test]
+fn threshold_comparison_rejects_nonfinite_values_and_discrepancies() {
+    for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        assert!(std::panic::catch_unwind(|| compare_threshold(&[0.0], &[bad])).is_err());
+        assert!(std::panic::catch_unwind(|| compare_threshold(&[bad], &[0.0])).is_err());
+    }
+    assert!(std::panic::catch_unwind(|| compare_threshold(&[f32::MAX], &[-f32::MAX])).is_err());
+}
+
 /// Effect cases: (effect id, parameters, whether a threshold may flip pixels).
 fn cases() -> Vec<(&'static str, Vec<(&'static str, ParamValue)>, bool)> {
     vec![
@@ -320,9 +379,9 @@ fn gpu_effects_match_cpu_exactly() {
         op.apply(&mut cpu);
         let fx = LayerFx { size: (w, h), decimation: 1, ops: vec![op] };
         let (_, _, gpu) = c.effect_image(&frame, &fx).expect("effect image");
-        let (worst, flips) = compare(&cpu.px, &gpu);
-        eprintln!("{id} {params:?}: max rel diff {worst:.2e}, {:.3}% flipped", flips * 100.0);
-        if worst > EXACT || flips > if steps { FLIPS } else { 0.0 } {
+        let (worst, flips) = if steps { compare_threshold(&cpu.px, &gpu) } else { compare(&cpu.px, &gpu) };
+        eprintln!("{id} {params:?}: max rel diff {worst:.2e}, {:.3}% {}", flips * 100.0, if steps { "above exact" } else { "flipped" });
+        if if steps { flips > FLIPS } else { worst > EXACT || flips > 0.0 } {
             failures.push(format!("{id} {params:?}: {worst:.2e}, flips {flips:.4}"));
         }
     }

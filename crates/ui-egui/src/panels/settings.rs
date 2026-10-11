@@ -860,11 +860,11 @@ mod tests {
         app.apply_prefs(&ctx);
         assert_eq!(app.tokens.kind, ThemeKind::Light);
         assert!(!app.ui.dark);
-        assert_eq!(ctx.theme(), egui::Theme::Light, "egui's style follows FilmCraft's choice");
+        assert!(!ctx.global_style().visuals.dark_mode, "egui's palette follows FilmCraft's choice independently of native tracking");
         system.store(1, Ordering::Relaxed);
         app.apply_prefs(&ctx);
         assert_eq!(app.tokens.kind, ThemeKind::Dark);
-        assert_eq!(ctx.theme(), egui::Theme::Dark);
+        assert!(ctx.global_style().visuals.dark_mode);
         system.store(2, Ordering::Relaxed);
         app.apply_prefs(&ctx);
         assert_eq!(app.tokens.kind, ThemeKind::Light);
@@ -876,6 +876,50 @@ mod tests {
         system.store(2, Ordering::Relaxed);
         app.apply_prefs(&ctx);
         assert_eq!(app.tokens.kind, ThemeKind::Dark);
+    }
+
+    /// Input injection exercises app resolution and native commands, not native OS delivery.
+    #[test]
+    fn appearance_frames_preserve_saved_modes_and_native_inheritance() {
+        let ctx = egui::Context::default();
+        let mut app = FilmcraftApp::new(filmcraft_engine::Session::default());
+        for (mode, dark, expected) in [
+            ("dark", "darkest", ThemeKind::Dark),
+            ("dark", "dark", ThemeKind::Medium),
+            ("light", "dark", ThemeKind::Light),
+            ("auto", "dark", ThemeKind::Medium),
+        ] {
+            app.session
+                .execute(
+                    "prefs.set",
+                    json!({"values": {
+                        "appearance.appearanceMode": mode, "appearance.darkTheme": dark, "general.showToolTips": false
+                    }}),
+                )
+                .unwrap();
+            let saved = app.session.prefs.to_value();
+            for system in [Some(egui::Theme::Light), Some(egui::Theme::Dark), None, Some(egui::Theme::Light)] {
+                // Simulate a persisted egui pin; even an unchanged palette must clear it.
+                ctx.set_theme(egui::Theme::Dark);
+                let mut out = ctx.run_ui(egui::RawInput { system_theme: system, ..Default::default() }, |_| app.apply_prefs(&ctx));
+                out.textures_delta.clear();
+                let shown = if mode == "auto" && ctx.system_theme() == Some(egui::Theme::Light) { ThemeKind::Light } else { expected };
+                assert_eq!(app.tokens.kind, shown);
+                assert_eq!(app.session.prefs.to_value(), saved);
+                assert_eq!(ctx.options(|o| o.theme_preference), egui::ThemePreference::System);
+                assert!(
+                    out.viewport_output
+                        .values()
+                        .flat_map(|v| &v.commands)
+                        .all(|c| !matches!(c, egui::ViewportCommand::SetTheme(egui::SystemTheme::Light | egui::SystemTheme::Dark)))
+                );
+                for theme in [egui::Theme::Light, egui::Theme::Dark] {
+                    let style = ctx.style_of(theme);
+                    assert_eq!(style.visuals.panel_fill, app.tokens.panel_bg);
+                    assert!(style.interaction.tooltip_delay > 1000.0);
+                }
+            }
+        }
     }
 
     #[test]

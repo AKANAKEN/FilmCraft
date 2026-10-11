@@ -18,6 +18,7 @@ struct Driver {
     harness: Harness<'static, FilmcraftApp>,
     tx: Sender<ControlRequest>,
     shots: Option<std::path::PathBuf>,
+    system_theme: Option<egui::Theme>,
 }
 
 impl Driver {
@@ -32,7 +33,7 @@ impl Driver {
             b = b.wgpu().with_pixels_per_point(1.0);
         }
         let harness = b.build_eframe(move |_cc| app);
-        let mut d = Driver { harness, tx, shots };
+        let mut d = Driver { harness, tx, shots, system_theme: None };
         d.frames(4);
         d
     }
@@ -40,6 +41,7 @@ impl Driver {
         for _ in 0..n {
             let ctx = self.harness.ctx.clone();
             let mut raw = std::mem::take(self.harness.input_mut());
+            raw.system_theme = self.system_theme;
             eframe::App::raw_input_hook(self.harness.state_mut(), &ctx, &mut raw);
             *self.harness.input_mut() = raw;
             self.harness.step();
@@ -260,6 +262,77 @@ fn view_menu_and_settings_name_each_color_theme_alike() {
         let found = d.ok("ui.elements", json!({"prefix": id}));
         let choice = found.as_array().unwrap().iter().find(|e| e["id"] == json!(id)).unwrap();
         assert_eq!(menu_label(menu_id), choice["label"].as_str().unwrap(), "{menu_id} and {id} name the same theme");
+    }
+}
+
+#[test]
+fn system_menu_selects_and_checks_the_saved_mode() {
+    let mut d = Driver::demo();
+    let native_updates = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let updates = native_updates.clone();
+    d.harness.state_mut().hooks.shortcuts_changed = Some(Box::new(move |items| {
+        assert_eq!(items.iter().filter(|it| it.id.starts_with("view.theme.") && it.checked == Some(true)).count(), 1);
+        updates.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }));
+    d.menu("view.theme.medium");
+    d.ok("ui.set", json!({"theme": "system"}));
+    d.frames(3);
+    assert_eq!(d.pref("appearance.appearanceMode"), "auto");
+    d.menu("view.theme.light");
+    d.menu("view.theme.system");
+    assert_eq!(d.pref("appearance.appearanceMode"), "auto");
+    let before = native_updates.load(std::sync::atomic::Ordering::Relaxed);
+    d.menu("view.theme.system");
+    assert!(native_updates.load(std::sync::atomic::Ordering::Relaxed) > before, "reselection restores a native check item's radio state");
+    assert_eq!(d.pref("appearance.darkTheme"), "dark");
+    let menu = d.ok("ui.menu.list", json!({}));
+    let selected: Vec<_> =
+        menu.as_array().unwrap().iter().filter(|m| m["id"].as_str().is_some_and(|id| id.starts_with("view.theme.")) && m["checked"] == true).collect();
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0]["id"], "view.theme.system");
+    d.menu("app.settings.appearance");
+    assert_eq!(d.draft()["values"]["appearance"]["appearanceMode"], "auto");
+    d.shot("system-appearance");
+    d.click("settings.cancel");
+    for (id, mode) in [("view.theme.dark", "dark"), ("view.theme.medium", "dark"), ("view.theme.light", "light")] {
+        d.menu(id);
+        assert_eq!(d.pref("appearance.appearanceMode"), mode);
+        let menu = d.ok("ui.menu.list", json!({}));
+        for item in menu.as_array().unwrap().iter().filter(|m| m["id"].as_str().is_some_and(|id| id.starts_with("view.theme."))) {
+            assert_eq!(item["checked"], item["id"] == id, "{item}");
+        }
+    }
+}
+
+#[test]
+fn system_frames_update_custom_chrome_without_editing_the_project() {
+    let mut d = Driver::demo();
+    d.menu("view.theme.medium");
+    d.menu("view.theme.system");
+    d.ok("ui.set", json!({"workspace": "Color"}));
+    let seq = d.exec("sequence.inspect", json!({}));
+    let clip = seq["video"][0]["items"][0]["clip"].as_u64().unwrap();
+    d.exec("timeline.select", json!({"clips": [clip]}));
+    d.exec("effects.apply", json!({"clips": [clip], "effect": "lumetri"}));
+    d.exec("markers.markIn", json!({"time": 0, "target": "program"}));
+    d.exec("markers.markOut", json!({"seconds": 2, "target": "program"}));
+    d.frames(3);
+    d.click("lumetri.section.Curves");
+    let project = serde_json::to_value(d.harness.state().session.project.as_ref()).unwrap();
+    let prefs = d.harness.state().session.prefs.to_value();
+    for (system, kind, name) in [
+        (Some(egui::Theme::Light), filmcraft_ui_egui::theme::ThemeKind::Light, "system-light"),
+        (Some(egui::Theme::Dark), filmcraft_ui_egui::theme::ThemeKind::Medium, "system-dark"),
+        (None, filmcraft_ui_egui::theme::ThemeKind::Medium, "system-unknown"),
+        (Some(egui::Theme::Light), filmcraft_ui_egui::theme::ThemeKind::Light, "system-light-again"),
+    ] {
+        d.system_theme = system;
+        d.frames(3);
+        assert_eq!(d.harness.state().tokens.kind, kind);
+        assert_eq!(d.harness.state().session.prefs.to_value(), prefs);
+        assert_eq!(serde_json::to_value(d.harness.state().session.project.as_ref()).unwrap(), project);
+        assert!(d.has("lumetri.section.Curves"));
+        d.shot(name);
     }
 }
 

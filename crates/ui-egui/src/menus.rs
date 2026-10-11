@@ -99,6 +99,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     uic!("view.theme.dark", "Darkest", ["View", "Appearance"], None),
     uic!("view.theme.medium", "Dark", ["View", "Appearance"], None),
     uic!("view.theme.light", "Light", ["View", "Appearance"], None),
+    uic!("view.theme.system", "Sync with system", ["View", "Appearance"], None),
     uic!("view.appearanceMode.next", "Next Appearance Mode", ["View", "Appearance"], None),
     uic!("window.workspace.editing", "Editing", ["Window", "Workspaces"], Some("Alt+Shift+1")),
     uic!("window.workspace.assembly", "Assembly", ["Window", "Workspaces"], Some("Alt+Shift+2")),
@@ -534,8 +535,19 @@ pub fn invoke(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, mut params:
         return Ok(json!({"appearanceMode": app.session.prefs.appearance.appearance_mode}));
     }
     if let Some(th) = id.strip_prefix("view.theme.") {
-        let k = crate::theme::ThemeKind::from_name(th).ok_or("unknown theme")?;
-        crate::panels::settings::set_theme(app, ctx, k);
+        if th == "system" {
+            app.session.execute("prefs.set", json!({"key": "appearance.appearanceMode", "value": "auto"})).map_err(|e| e.to_string())?;
+            app.apply_prefs(ctx);
+        } else {
+            let k = crate::theme::ThemeKind::from_name(th).ok_or("unknown theme")?;
+            crate::panels::settings::set_theme(app, ctx, k);
+        }
+        // Native check items toggle themselves on click. Restore the radio state even when the
+        // user reselects the current mode and no preferences changed.
+        let items = menu_items(app);
+        if let Some(hook) = app.hooks.shortcuts_changed.as_mut() {
+            hook(&items);
+        }
         return Ok(Value::Null);
     }
     // File dialogs for commands that need a path.
@@ -632,7 +644,16 @@ pub fn menu_items(app: &FilmcraftApp) -> Vec<MenuItem> {
             _ => {}
         }
         if it.id.starts_with("view.") {
-            it.checked = crate::panels::monitor_view::checked(app, &it.id).or(crate::panels::menu_dialogs::checked(app, &it.id));
+            let appearance = &app.session.prefs.appearance;
+            let theme_checked = match it.id.as_str() {
+                "view.theme.system" => Some(appearance.appearance_mode == "auto"),
+                "view.theme.dark" => Some(appearance.appearance_mode == "dark" && appearance.dark_theme == "darkest"),
+                "view.theme.medium" => Some(appearance.appearance_mode == "dark" && appearance.dark_theme == "dark"),
+                "view.theme.light" => Some(appearance.appearance_mode == "light"),
+                _ => None,
+            };
+            it.checked =
+                theme_checked.or_else(|| crate::panels::monitor_view::checked(app, &it.id)).or_else(|| crate::panels::menu_dialogs::checked(app, &it.id));
             it.enabled &= crate::panels::monitor_view::enabled(app, &it.id);
         }
     }

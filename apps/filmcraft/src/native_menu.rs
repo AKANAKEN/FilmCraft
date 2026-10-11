@@ -6,7 +6,7 @@ use std::sync::mpsc::{Receiver, channel};
 use filmcraft_ui_egui::FilmcraftApp;
 use filmcraft_ui_egui::menus::{MENUS, MenuItem as Item, menu_items};
 use muda::accelerator::Accelerator;
-use muda::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
+use muda::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 
 fn accel(s: &str) -> Option<Accelerator> {
     // Only shortcuts with a modifier become native key equivalents (single keys stay in-app so
@@ -19,12 +19,13 @@ fn accel(s: &str) -> Option<Accelerator> {
     mapped.parse().ok()
 }
 
-/// Updates native key equivalents when the active keyboard shortcuts change.
+/// Updates native key equivalents, translated labels and saved appearance checkmarks.
 pub type ShortcutUpdater = Box<dyn FnMut(&[Item])>;
 
 pub fn install(app: &FilmcraftApp, ctx: egui::Context) -> (Receiver<String>, ShortcutUpdater) {
     let items = menu_items(app);
     let mut native: Vec<(String, MenuItem)> = Vec::new();
+    let mut appearance_items: Vec<(String, CheckMenuItem)> = Vec::new();
     let mut titles: Vec<(String, Submenu)> = Vec::new();
     let bar = Menu::new();
     let app_menu = Submenu::new("FilmCraft", true);
@@ -57,8 +58,6 @@ pub fn install(app: &FilmcraftApp, ctx: egui::Context) -> (Receiver<String>, Sho
         // their first item appears
         let mut subs: Vec<(Vec<String>, Submenu)> = Vec::new();
         for it in mine {
-            let mi = MenuItem::with_id(it.id.clone(), &it.label, true, it.shortcut.as_deref().and_then(accel));
-            native.push((it.id.clone(), mi.clone()));
             let mut parent = sub.clone();
             for depth in 1..it.path.len() {
                 let key = it.path[..=depth].to_vec();
@@ -73,7 +72,15 @@ pub fn install(app: &FilmcraftApp, ctx: egui::Context) -> (Receiver<String>, Sho
                     }
                 };
             }
-            let _ = parent.append(&mi);
+            if it.id.starts_with("view.theme.") {
+                let mi = CheckMenuItem::with_id(it.id.clone(), &it.label, it.enabled, it.checked == Some(true), it.shortcut.as_deref().and_then(accel));
+                let _ = parent.append(&mi);
+                appearance_items.push((it.id.clone(), mi));
+            } else {
+                let mi = MenuItem::with_id(it.id.clone(), &it.label, true, it.shortcut.as_deref().and_then(accel));
+                let _ = parent.append(&mi);
+                native.push((it.id.clone(), mi));
+            }
         }
         let _ = bar.append(&sub);
     }
@@ -118,6 +125,13 @@ pub fn install(app: &FilmcraftApp, ctx: egui::Context) -> (Receiver<String>, Sho
         for (id, mi) in &native {
             if let Some(it) = items.iter().find(|i| &i.id == id) {
                 mi.set_text(&it.label);
+                let _ = mi.set_accelerator(it.shortcut.as_deref().and_then(accel));
+            }
+        }
+        for (id, mi) in &appearance_items {
+            if let Some(it) = items.iter().find(|i| &i.id == id) {
+                mi.set_text(&it.label);
+                mi.set_checked(it.checked == Some(true));
                 let _ = mi.set_accelerator(it.shortcut.as_deref().and_then(accel));
             }
         }

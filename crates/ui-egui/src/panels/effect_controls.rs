@@ -655,7 +655,7 @@ pub(crate) fn param_row(
                 app.ui.keyframe_selection = vec![KeyframeRef { clip: clip.0, effect: idx, param: pd.id.to_string(), mask, time: k.time }];
             }
             let sel = resp.dragged() || app.ui.keyframe_selection.iter().any(is_this);
-            let col = if sel { t.hot_text } else { Color32::from_rgb(0xb0, 0xb0, 0xb0) };
+            let col = if sel { t.hot_text } else { t.keyframe_handle };
             match k.interp {
                 filmcraft_project::Interpolation::Hold => {
                     ui.painter().rect_filled(Rect::from_center_size(kr.center(), vec2(9.0, 9.0)), 0.0, col);

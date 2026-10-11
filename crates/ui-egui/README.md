@@ -3,6 +3,27 @@
 The egui frontend draws panels and dialogs, and dispatches project changes through the engine.
 Interactive controls keep stable automation ids regardless of the interface language.
 
+## Interface appearance
+
+Settings > Appearance and View > Appearance > Sync with system select the saved Auto mode.
+The header cycles Auto, Light and Dark. Menu checkmarks reflect the saved mode, including when
+Auto displays a light or dark palette. Manual Darkest, Dark and Light choices ignore desktop
+changes, and new users keep Darkest. Legacy `colorTheme` files migrate to their fixed theme;
+files with an explicit `appearanceMode` retain it. Auto falls back to its saved dark theme when
+no system appearance is available. Appearance changes do not alter video or project colors.
+
+Native windows keep inherited appearance in every mode so macOS and Windows theme events remain
+available when returning to Auto. Both egui style branches contain FilmCraft's resolved palette,
+including custom panels, the timeline ruler and controls. Native window decorations may follow
+the desktop independently of a manual interface palette. Linux follows desktop portal signals;
+without a working portal, its one-shot `gsettings` fallback supplies only a startup reading.
+The web frontend uses the browser appearance report.
+
+`theme::tests::palettes_keep_native_tracking_and_both_style_branches` checks emitted native
+commands and both styles. Settings tests cover direct System selection and menu checks;
+appearance frame tests cover transitions, manual modes and preferences. Injected appearance
+inputs verify the resolver and command output, not native OS event delivery.
+
 ## Transition drop previews
 
 Dragging a video or audio transition over a compatible clip shows its actual time span, the
