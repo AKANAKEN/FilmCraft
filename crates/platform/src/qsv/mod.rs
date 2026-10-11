@@ -20,6 +20,16 @@ static HEVC_HDR_AVAILABLE: OnceLock<bool> = OnceLock::new();
 static AV1_AVAILABLE: OnceLock<bool> = OnceLock::new();
 static AV1_HDR_AVAILABLE: OnceLock<bool> = OnceLock::new();
 
+/// Whether an Intel GPU is physically present on this system.
+pub fn has_device() -> bool {
+    IntelGpu::probe().ok().flatten().is_some()
+}
+
+/// Whether Intel Quick Sync Video hardware encoding is available on this system.
+pub fn is_available() -> bool {
+    hevc_available() || av1_available()
+}
+
 /// Whether an Intel GPU is present and supports HEVC hardware export.
 pub fn hevc_available() -> bool {
     *HEVC_AVAILABLE.get_or_init(|| probe_codec(MFVideoFormat_HEVC, false))
