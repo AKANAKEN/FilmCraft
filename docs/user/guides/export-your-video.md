@@ -30,7 +30,7 @@ The header also has a **Quick Export** button. It opens a small popup with a fil
 - Apple ProRes 422 HQ and Motion JPEG in QuickTime.
 - MXF OP1a and Avid-style OP-Atom (DNxHR, ProRes or H.264 with PCM and start timecode).
 - PNG sequences, animated GIF and WAV.
-- H.265 only through a hardware encoder: NVIDIA on Windows or Linux, VideoToolbox on macOS. There is no AV1 export yet.
+- H.265 only through a hardware encoder: NVIDIA on Windows, VideoToolbox on macOS. There is no H.265 export on Linux, and no AV1 export yet.
 
 H.264 can also use a hardware encoder on macOS, and on Windows and Linux with an NVIDIA GPU. On Windows and Linux it is opt-in. In the **Video** section, the **Hardware Encoding** row has a **Use the hardware encoder when available** check box.
 

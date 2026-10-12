@@ -22,4 +22,4 @@ Choose **File ▸ Recover Unsaved Changes…**. The menu item works only while t
 
 ## How it works
 
-FilmCraft writes a crash-recovery journal about a second after each edit, so unsaved changes survive a crash or power cut. Saves are atomic, and auto-save keeps a rolling set of versions. Auto-save settings are under **Edit ▸ Preferences ▸ Auto Save…**.
+FilmCraft writes a crash-recovery journal about a second after each edit, so unsaved changes survive a crash or power cut. Saves are atomic, and auto-save keeps a rolling set of versions. Auto-save settings are under **Edit ▸ Preferences ▸ Auto Save…** (on macOS, **FilmCraft ▸ Settings ▸ Auto Save**).

@@ -5,7 +5,7 @@ order: 10
 verified: 0.6.0
 ---
 
-Update your graphics driver, then start FilmCraft once or twice more. If it still quits, start it from PowerShell with another graphics backend, as shown below.
+Update your graphics driver. If FilmCraft still quits, start it from PowerShell with another graphics backend, as shown below.
 
 ## Symptoms
 
@@ -15,16 +15,17 @@ Update your graphics driver, then start FilmCraft once or twice more. If it stil
 ## Fix
 
 1. Update your graphics driver from your GPU maker. This may not be enough: the Intel laptop in issue 1037 crashed the same way on the latest Intel driver.
-2. Start FilmCraft again, twice if needed. After two starts in a row that die before the window paints, FilmCraft moves on to a safer graphics mode by itself and keeps it. It shows a notice in the window, with a button to go back to the default.
-3. If it still does not open, set `WGPU_BACKEND` to pick the graphics backend. Open PowerShell, go to the folder that holds `filmcraft.exe`, and run:
+2. If it still does not open, set `WGPU_BACKEND` to pick the graphics backend. Open PowerShell, go to the folder that holds `filmcraft.exe`, and run:
 
         $env:WGPU_BACKEND = "dx12"
         & .\filmcraft.exe
 
    With `dx12`, FilmCraft may start but run some effects on the CPU instead of the GPU.
 
-4. If that does not work either, try `vulkan` instead of `dx12` in the same two lines.
-5. The setting applies to this PowerShell window only. To undo it, run `Remove-Item Env:WGPU_BACKEND`.
+3. If `dx12` does not start it either: on AMD or NVIDIA graphics, try `vulkan` in the same two lines. On Intel graphics skip `vulkan`, which is the driver that crashes there, and try `gl`.
+4. The setting applies to this PowerShell window only. To undo it, run `Remove-Item Env:WGPU_BACKEND`.
+
+Automatic switching to a safer graphics mode after a failed start was added after 0.6.0 and is not in a release yet ([issue 820](https://github.com/storytold/filmcraft/issues/820)).
 
 On one Intel UHD Graphics 620 laptop with Windows 11, Vulkan crashed at startup, `dx12` started but fell back to the CPU compositor, and `gl` started cleanly with GPU compositing. The workaround that user reported was `setx WGPU_BACKEND gl`, which keeps the setting for later launches. Try `gl` only after `dx12` and `vulkan` fail: on some AMD drivers an OpenGL start can bring the crash back.
 

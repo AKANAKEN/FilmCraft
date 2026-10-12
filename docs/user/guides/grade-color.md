@@ -9,7 +9,7 @@ Choose **Window ▸ Workspaces ▸ Color**, select a video clip in the timeline,
 
 ## Steps
 
-1. Choose **Window ▸ Workspaces ▸ Color** (`Alt+Shift+3`). The workspace has **Lumetri Scopes** beside the Program monitor and **Lumetri Color** on the right.
+1. Choose **Window ▸ Workspaces ▸ Color** (`Alt+Shift+3`, or `Option+Shift+3` on macOS). The workspace has **Lumetri Scopes** beside the Program monitor and **Lumetri Color** on the right.
 2. Click a video clip in the timeline. While nothing is selected, the panel shows **(no clip selected)**.
 3. If the panel shows **Add Lumetri Color to clip**, click it.
 4. Open a section and move its sliders. Each section has its own on/off switch, and the **fx** toggle at the top turns the whole effect on and off.
