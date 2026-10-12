@@ -53,11 +53,12 @@ pub struct EncoderConfig {
     pub rate_control: Option<RateControl>,
     pub preset: Preset,
     pub spatial_aq: bool,
+    pub enable_cdef: bool,
 }
 
 impl EncoderConfig {
     pub fn new(width: u32, height: u32, fps_num: u32, fps_den: u32) -> Self {
-        Self { width, height, fps_num, fps_den, qindex: 100, key_int: 30, rate_control: None, preset: Preset::Balanced, spatial_aq: false }
+        Self { width, height, fps_num, fps_den, qindex: 100, key_int: 30, rate_control: None, preset: Preset::Balanced, spatial_aq: false, enable_cdef: true }
     }
 }
 
@@ -160,7 +161,13 @@ impl Encoder {
     }
 
     pub fn sequence_header_obu(&self) -> Vec<u8> {
-        let seq_cfg = obu::SequenceConfig { width: self.config.width, height: self.config.height, bit_depth: 8, mono_chrome: false };
+        let seq_cfg = obu::SequenceConfig {
+            width: self.config.width,
+            height: self.config.height,
+            bit_depth: 8,
+            mono_chrome: false,
+            enable_cdef: self.config.enable_cdef,
+        };
         obu::write_sequence_header(&seq_cfg)
     }
 
@@ -168,7 +175,13 @@ impl Encoder {
         let is_key = self.frame_count == 0 || self.frame_count.is_multiple_of(u64::from(self.config.key_int));
         let frame_type = if is_key { frame_header::KEY_FRAME } else { frame_header::INTER_FRAME };
         let order_hint = (self.frame_count & 0x7f) as u32;
-        let seq_cfg = obu::SequenceConfig { width: self.config.width, height: self.config.height, bit_depth: 8, mono_chrome: false };
+        let seq_cfg = obu::SequenceConfig {
+            width: self.config.width,
+            height: self.config.height,
+            bit_depth: 8,
+            mono_chrome: false,
+            enable_cdef: self.config.enable_cdef,
+        };
 
         // Determine base quantization index for this frame
         let mut qindex = match self.config.rate_control {

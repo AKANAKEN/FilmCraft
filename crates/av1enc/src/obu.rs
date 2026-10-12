@@ -48,6 +48,7 @@ pub struct SequenceConfig {
     pub height: u32,
     pub bit_depth: u8,
     pub mono_chrome: bool,
+    pub enable_cdef: bool,
 }
 
 /// Write a Sequence Header OBU (spec 5.5).
@@ -114,8 +115,8 @@ pub fn write_sequence_header(cfg: &SequenceConfig) -> Vec<u8> {
     w.write_bits(6, 3);
     // enable_superres = 0
     w.write_bit(false);
-    // enable_cdef = 0 (disabled in baseline encoder for speed)
-    w.write_bit(false);
+    // enable_cdef
+    w.write_bit(cfg.enable_cdef);
     // enable_restoration = 0
     w.write_bit(false);
 

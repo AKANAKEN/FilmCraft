@@ -123,6 +123,22 @@ pub fn write_frame_header(cfg: &FrameHeaderConfig, seq: &SequenceConfig) -> Vec<
         w.write_bit(false);
     }
 
+    // CDEF params (spec 5.9.19)
+    if seq.enable_cdef && !coded_lossless {
+        // cdef_damping - 3 = 2 (damping = 5)
+        w.write_bits(2, 2);
+        // cdef_bits = 0 (1 preset, 0 bits per block in tile)
+        w.write_bits(0, 2);
+        let pri = u32::from((cfg.qindex / 16).clamp(1, 15));
+        let sec = (pri / 4).min(2);
+        w.write_bits(pri, 4);
+        w.write_bits(sec, 2);
+        if !seq.mono_chrome {
+            w.write_bits(pri, 4);
+            w.write_bits(sec, 2);
+        }
+    }
+
     // 13. TX mode:
     if !coded_lossless {
         // tx_mode_select = 0 (TX_MODE_LARGEST)
