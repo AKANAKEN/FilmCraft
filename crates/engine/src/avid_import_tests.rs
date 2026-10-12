@@ -76,6 +76,45 @@ fn params(mode: &str) -> Value {
 }
 
 #[test]
+fn an_imported_subclip_is_not_offered_to_media_binding() {
+    // A subclip has no media of its own: it binds through the master it restricts. Offering one
+    // to binding fails the item, and in strict mode would fail the whole import.
+    let (mut v, media) = fixture();
+    let master = v["bins"][0]["catalog"]["clips"][0].clone();
+    let sub = json!({"kind":"CompositionMob","name":"Trimmed.sub.01","live":true,"user_placed":true,
+        "id":{"raw":"05".repeat(32),"byte_order":"little"},"length":4800,"rate":master["rate"],"usage_code":2,
+        "attributes":{"_START":1200,"_END":2400},
+        "tracks":[{"index":1,"component":{"class":"SCLP","media_kind":2,"length":4800,"rate":master["rate"],
+            "source_id":master["id"],"source_track":1,"start":0}}]});
+    v["bins"][0]["mobs"].as_array_mut().unwrap().push(sub);
+    let (s, _) = session(&v, media);
+    let prepared = crate::avid_catalog::prepare_document(
+        &s.project,
+        &*s.services,
+        &serde_json::to_vec(&v).unwrap(),
+        crate::avid_catalog::ImportOptions { mode: filmcraft_interchange::avid_catalog::TransferMode::Sequences, allow_missing: true, best_effort: false },
+        None,
+        &|| Ok(()),
+    )
+    .expect("a subclip must not fail a strict import");
+    assert_eq!(prepared.result["bins"][0]["subclips"], json!(1));
+    assert!(!prepared.result["errors"].to_string().contains("not a media source"), "{}", prepared.result["errors"]);
+    // It carries the recorded range, and its master still bound.
+    let (parent, range) = prepared
+        .project
+        .items
+        .values()
+        .find_map(|i| match &i.kind {
+            filmcraft_project::ItemKind::Subclip { parent, range, .. } => Some((*parent, *range)),
+            _ => None,
+        })
+        .expect("a subclip item");
+    let master_item = prepared.project.item(parent).unwrap().as_media().unwrap();
+    assert!(range.duration > Tick::ZERO && range.end() <= master_item.info.duration);
+    assert!(!master_item.offline, "the master it restricts still bound its media");
+}
+
+#[test]
 fn an_unbindable_referenced_source_never_fails_a_strict_import() {
     // A cut bin's referenced masters are not its contents. One whose media cannot be bound costs
     // its own sequence clip a placeholder; it must not fail an import the bin's own contents

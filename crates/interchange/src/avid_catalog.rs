@@ -40,7 +40,19 @@ struct BinPlan {
     /// FilmCraft still needs them as items because media binds to an item, never to a timeline
     /// clip. Populated for sequence transfers only.
     pub referenced: Vec<ClipPlan>,
+    /// Placed subclips: bin contents in their own right, restricted to a range of a master this
+    /// bin also carries. Avid records that range in attributes, not in the component.
+    pub subclips: Vec<SubclipPlan>,
     pub compositions: usize,
+}
+#[derive(Clone, Debug, Serialize)]
+struct SubclipPlan {
+    pub name: String,
+    /// Identity of the master this subclip restricts. Must be imported for the bin.
+    pub parent: [u8; 32],
+    pub start: Tick,
+    pub duration: Tick,
+    pub evidence: Value,
 }
 #[derive(Clone, Debug, Serialize)]
 struct ClipPlan {
@@ -57,6 +69,8 @@ pub struct ImportedBin {
     pub clips: usize,
     /// Sequence sources imported into the sub-bin, not part of the Avid bin's own contents.
     pub referenced: usize,
+    /// Subclips imported as bin contents, each restricting one of this bin's masters.
+    pub subclips: usize,
     pub compositions: usize,
 }
 
@@ -107,6 +121,93 @@ fn identity_key(m: &Value) -> Result<Vec<u8>> {
         }
     }
     Ok(bytes)
+}
+/// The one source identity a subclip restricts, with the offset recorded on its component.
+/// More than one, or none, is not a plain subclip.
+fn single_source(m: &Value) -> Option<([u8; 32], i64)> {
+    fn walk(v: &Value, out: &mut Vec<([u8; 32], i64)>, depth: usize) {
+        if depth > 24 || out.len() > 256 {
+            return;
+        }
+        match v {
+            Value::Object(o) => {
+                if o.get("class").and_then(Value::as_str) == Some("SCLP")
+                    && let Some(id) = o.get("source_id").and_then(|i| full_identity(i).ok())
+                {
+                    out.push((id, o.get("start").and_then(Value::as_i64).unwrap_or(0)));
+                }
+                for x in o.values() {
+                    walk(x, out, depth + 1);
+                }
+            }
+            Value::Array(a) => {
+                for x in a {
+                    walk(x, out, depth + 1);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut found = Vec::new();
+    walk(m.get("tracks")?, &mut found, 0);
+    let (id, start) = *found.first()?;
+    // Every track must restrict the same master at the same offset for one range to describe it.
+    found.iter().all(|(i, s)| *i == id && *s == start).then_some((id, start))
+}
+
+/// Where a subclip's range actually lives. Avid writes it two ways, and reading either alone is
+/// wrong somewhere: with `_START`/`_END` present the component says "the whole master" and the
+/// mob's length is the master's, while elsewhere the offset is on the component and the duration
+/// is the mob's length. Measured against a fixture whose in and out points were set deliberately.
+fn subclip_range(m: &Value, component_start: i64) -> Result<(Tick, Tick)> {
+    let attrs = m.get("attributes");
+    let start_attr = attrs.and_then(|a| a.get("_START")).and_then(Value::as_i64).filter(|n| *n >= 0);
+    let end_attr = attrs.and_then(|a| a.get("_END")).and_then(Value::as_i64).filter(|n| *n >= 0);
+    let (offset, span) = match (start_attr, end_attr) {
+        // Attributes present: the offset is `_START` and the span `_END` - `_START`. A zero
+        // `_START` means the component carries the offset instead.
+        (Some(a), end) => (if a > 0 { a } else { component_start }, end.filter(|e| *e > a).map(|e| e - a)),
+        (None, _) => (component_start, None),
+    };
+    if offset < 0 {
+        return Err(bad("invalid subclip offset"));
+    }
+    let rate = m.get("rate").ok_or_else(|| bad("subclip has no rate"))?;
+    let to_tick = |frames: i64| -> Result<Tick> { Ok(duration(&serde_json::json!({"length":frames,"rate":rate}))?.0) };
+    let span = match span {
+        Some(n) if n > 0 => n,
+        // Without a usable span the mob's own length is the duration — but only where that length
+        // describes the subclip. In the attribute form it is the master's, so an offset with no
+        // span is refused rather than silently stretched to the end of the master.
+        _ if offset > 0 && start_attr.is_some_and(|a| a > 0) => return Err(bad("it records a start without a usable end")),
+        _ => m.get("length").and_then(Value::as_i64).filter(|n| *n > 0).ok_or_else(|| bad("it has no usable range"))?,
+    };
+    Ok((to_tick(offset)?, to_tick(span)?))
+}
+/// Decide one placed usage-2 composition. Anything that is not a plain range of one available
+/// master is reported by name rather than approximated.
+fn subclip(m: &Value, available: &BTreeMap<[u8; 32], Tick>) -> Result<(SubclipPlan, bool)> {
+    if m.get("live") == Some(&Value::Bool(false)) {
+        return Err(bad("the bin marks it inactive"));
+    }
+    let (parent, component_start) = single_source(m).ok_or_else(|| bad("it does not restrict exactly one master"))?;
+    let extent = *available.get(&parent).ok_or_else(|| bad("its master is not in this bin"))?;
+    let name = text(m, "name")?.to_owned();
+    let (start, mut duration) = subclip_range(m, component_start)?;
+    if duration <= Tick::ZERO {
+        return Err(bad("its range is empty"));
+    }
+    // A subclip cannot exceed what it restricts. Recorded ranges do run past a master's end, by a
+    // frame or by dozens, so bound it here rather than build an item reaching past its media.
+    let end = start.0.checked_add(duration.0).ok_or_else(|| bad("its range overflows"))?;
+    let clamped = end > extent.0;
+    if clamped {
+        if start >= extent {
+            return Err(bad("it starts after the end of its master"));
+        }
+        duration = Tick(extent.0 - start.0);
+    }
+    Ok((SubclipPlan { name, parent, start, duration, evidence: m.clone() }, clamped))
 }
 fn membership(m: &Value) -> Result<bool> {
     m.get("user_placed").and_then(Value::as_bool).ok_or_else(|| bad("missing master bin membership"))
@@ -207,7 +308,7 @@ pub fn plan_scoped(bytes: &[u8], mode: TransferMode) -> Result<Plan> {
         if catalog.get("summary").and_then(|s| s.get("master_count")).and_then(Value::as_u64) != Some(clips.len() as u64) {
             return Err(bad("incomplete master catalog"));
         }
-        let mut out = BinPlan { name, uid, clips: Vec::new(), referenced: Vec::new(), compositions: 0 };
+        let mut out = BinPlan { name, uid, clips: Vec::new(), referenced: Vec::new(), subclips: Vec::new(), compositions: 0 };
         // Cross-check the derived catalog against independently exported decoded mobs.
         // Its own master_count cannot prove that no master was omitted during assembly.
         let mobs = array(b, "mobs")?;
@@ -318,9 +419,28 @@ pub fn plan_scoped(bytes: &[u8], mode: TransferMode) -> Result<Plan> {
         if !decoded_masters.is_empty() {
             return Err(bad("catalog omitted decoded masters"));
         }
+        // Masters this bin carries, whether placed or referenced: a subclip may only restrict one
+        // of these, because its parent has to exist as an item for the range to mean anything.
+        let available: BTreeMap<[u8; 32], Tick> =
+            out.clips.iter().chain(out.referenced.iter()).filter_map(|c| Some((full_identity(&c.evidence["id"]).ok()?, c.duration))).collect();
+        let mut clamped = 0usize;
         for m in mobs {
             if m.get("user_placed") == Some(&Value::Bool(true)) && m.get("kind").and_then(Value::as_str) != Some("MasterMob") {
                 if m["kind"] == "CompositionMob" {
+                    // A subclip is bin contents in its own right, not a composition to convert.
+                    if m["usage_code"] == 2 {
+                        match subclip(m, &available) {
+                            Ok((plan, was_clamped)) => {
+                                clamped += usize::from(was_clamped);
+                                out.subclips.push(plan);
+                                continue;
+                            }
+                            Err(e) => {
+                                result.warnings.push(format!("{}: subclip {} was not imported: {e}", out.name, text(m, "name")?));
+                                continue;
+                            }
+                        }
+                    }
                     out.compositions += 1; // bounded by MAX_MOBS
                     if mode == TransferMode::Sequences {
                         continue;
@@ -328,6 +448,15 @@ pub fn plan_scoped(bytes: &[u8], mode: TransferMode) -> Result<Plan> {
                 }
                 result.warnings.push(format!("{}: unsupported bin item {} ({}) was not imported", out.name, text(m, "name")?, text(m, "kind")?));
             }
+        }
+        if out.subclips.len() > MAX_CLIPS {
+            return Err(bad("too many subclips"));
+        }
+        if clamped > 0 {
+            result.warnings.push(format!(
+                "{}: {clamped} subclips record a range reaching past the end of the master they restrict; each was shortened to its master's extent and the original range is retained in source metadata.",
+                out.name
+            ));
         }
         result.bins.push(out);
     }
@@ -373,13 +502,20 @@ pub(crate) fn validate_project(project: &Project, parent: Option<BinId>) -> Resu
 /// sub-bins are the user's and are never treated as sources.
 pub fn imported_items(project: &Project, bin: BinId) -> Result<(Vec<filmcraft_project::ItemId>, Vec<filmcraft_project::ItemId>)> {
     let b = project.root.find_bin(bin).ok_or_else(|| bad("missing imported bin"))?;
+    // Only masters. A subclip has no media of its own: it binds through the master it restricts,
+    // so offering one to media binding would fail the item and, strictly, the whole import.
+    let media = |id: &filmcraft_project::ItemId| project.item(*id).is_some_and(|i| i.as_media().is_some());
     let mut placed = Vec::new();
     let mut referenced = Vec::new();
     for child in &b.children {
         match child {
-            BinEntry::Item(id) => placed.push(*id),
+            BinEntry::Item(id) if media(id) => placed.push(*id),
+            BinEntry::Item(_) => {}
             BinEntry::Bin(sub) if sub.name == REFERENCED_BIN => {
-                referenced.extend(sub.children.iter().filter_map(|e| if let BinEntry::Item(id) = e { Some(*id) } else { None }));
+                referenced.extend(sub.children.iter().filter_map(|e| match e {
+                    BinEntry::Item(id) if media(id) => Some(*id),
+                    _ => None,
+                }));
             }
             BinEntry::Bin(_) => {}
         }
@@ -403,6 +539,7 @@ pub struct PreviewBin {
     pub name: String,
     pub clips: usize,
     pub referenced: usize,
+    pub subclips: usize,
 }
 /// Resolve all names together, accounting for other bins in this import without editing a project.
 pub fn preview(project: &Project, plan: &Plan, parent: Option<BinId>) -> Result<Vec<PreviewBin>> {
@@ -412,7 +549,11 @@ pub fn preview(project: &Project, plan: &Plan, parent: Option<BinId>) -> Result<
         .bins
         .iter()
         .try_fold(0u64, |n, b| {
-            n.checked_add(1)?.checked_add(b.clips.len() as u64)?.checked_add(b.referenced.len() as u64)?.checked_add(u64::from(!b.referenced.is_empty()))
+            n.checked_add(1)?
+                .checked_add(b.clips.len() as u64)?
+                .checked_add(b.referenced.len() as u64)?
+                .checked_add(b.subclips.len() as u64)?
+                .checked_add(u64::from(!b.referenced.is_empty()))
         })
         .ok_or_else(|| bad("too many items"))?;
     project.next_id.checked_add(required).ok_or_else(|| bad("project ID space exhausted"))?;
@@ -421,11 +562,14 @@ pub fn preview(project: &Project, plan: &Plan, parent: Option<BinId>) -> Result<
         None => &project.root,
     };
     let mut names: BTreeSet<String> = bin.children.iter().filter_map(|x| if let BinEntry::Bin(b) = x { Some(b.name.clone()) } else { None }).collect();
-    plan.bins.iter().map(|b| Ok(PreviewBin { name: allocate_name(&mut names, &b.name)?, clips: b.clips.len(), referenced: b.referenced.len() })).collect()
+    plan.bins
+        .iter()
+        .map(|b| Ok(PreviewBin { name: allocate_name(&mut names, &b.name)?, clips: b.clips.len(), referenced: b.referenced.len(), subclips: b.subclips.len() }))
+        .collect()
 }
 /// Add one offline master as an item of `bin`. `placed` records whether the Avid bin itself
 /// listed it, so a referenced-only source is never reported as bin contents.
-fn add_master(project: &mut Project, bin: BinId, bin_name: &str, bin_uid: &str, c: ClipPlan, placed: bool) -> Result<()> {
+fn add_master(project: &mut Project, bin: BinId, bin_name: &str, bin_uid: &str, c: ClipPlan, placed: bool) -> Result<filmcraft_project::ItemId> {
     // Deliberately no guessed file path: multi-component sources need a media binding.
     let has_video = c
         .evidence
@@ -467,7 +611,7 @@ fn add_master(project: &mut Project, bin: BinId, bin_name: &str, bin_uid: &str, 
     let provenance = serde_json::json!({"version":1,"bin_name":bin_name,"bin_uid":bin_uid,"clip":c.evidence,"source_descriptors":c.source_descriptors,
         "picture_rate_evidence":c.picture_rate_evidence,"binding":"unbound","placed":placed});
     item.metadata.insert(SOURCE_KEY.into(), provenance.to_string());
-    Ok(())
+    Ok(mid)
 }
 /// Apply a validated plan to a transaction-local project copy; no I/O or AVB dependency remains.
 pub fn apply(project: &mut Project, plan: Plan, parent: Option<BinId>) -> Result<Vec<ImportedBin>> {
@@ -478,17 +622,43 @@ pub fn apply(project: &mut Project, plan: Plan, parent: Option<BinId>) -> Result
         let id = project.add_bin(&name, parent);
         let count = b.clips.len();
         let referenced = b.referenced.len();
+        let subclips = b.subclips.len();
+        // Identity to item, so a subclip can find the master it restricts. Placed and referenced
+        // masters share one space: a subclip does not care which list its master came from.
+        let mut masters = BTreeMap::new();
         for c in b.clips {
-            add_master(project, id, &b.name, &b.uid, c, true)?;
+            let id_bytes = full_identity(&c.evidence["id"]).ok();
+            let item = add_master(project, id, &b.name, &b.uid, c, true)?;
+            if let Some(k) = id_bytes {
+                masters.insert(k, item);
+            }
         }
         if !b.referenced.is_empty() {
             // A separate sub-bin: these are sequence sources, not contents Avid showed in the bin.
             let sources = project.add_bin(REFERENCED_BIN, Some(id));
             for c in b.referenced {
-                add_master(project, sources, &b.name, &b.uid, c, false)?;
+                let id_bytes = full_identity(&c.evidence["id"]).ok();
+                let item = add_master(project, sources, &b.name, &b.uid, c, false)?;
+                if let Some(k) = id_bytes {
+                    masters.insert(k, item);
+                }
             }
         }
-        imported.push(ImportedBin { bin: id, name, clips: count, referenced, compositions: b.compositions });
+        // After their masters, so every parent already exists.
+        for sub in b.subclips {
+            let parent = *masters.get(&sub.parent).ok_or_else(|| bad("subclip master missing after import"))?;
+            let item = project.add_item(
+                &sub.name,
+                Label::Iris,
+                ItemKind::Subclip { parent, range: filmcraft_time::TimeRange::new(sub.start, sub.duration), restrict_trims: false },
+                Some(id),
+            );
+            let item = project.item_mut(item).ok_or_else(|| bad("new subclip missing"))?;
+            let provenance = serde_json::json!({"version":1,"bin_name":b.name,"bin_uid":b.uid,"clip":sub.evidence,
+                "source_descriptors":[],"picture_rate_evidence":Value::Null,"binding":"through_parent","placed":true,"subclip":true});
+            item.metadata.insert(SOURCE_KEY.into(), provenance.to_string());
+        }
+        imported.push(ImportedBin { bin: id, name, clips: count, referenced, subclips, compositions: b.compositions });
     }
     Ok(imported)
 }
@@ -496,6 +666,7 @@ pub fn apply(project: &mut Project, plan: Plan, parent: Option<BinId>) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+    use filmcraft_project::ItemKind;
     #[test]
     fn picture_rate_reconciliation_is_narrow_and_requires_actual_rate() {
         let actual = filmcraft_time::FrameRate::new(30000, 1001);
@@ -519,6 +690,114 @@ mod tests {
     }
     fn decode(v: &Value) -> Result<Plan> {
         plan(&serde_json::to_vec(v).unwrap())
+    }
+    /// Avid writes a subclip's range two ways and reading either alone is wrong somewhere. The
+    /// numbers here are from a fixture whose in and out points a person set deliberately: a
+    /// 334-frame master with a subclip over frames 47..83, which both forms must reproduce.
+    fn subclip_fixture(attribute_form: bool) -> Value {
+        let mut v = fixture();
+        let master = v["bins"][0]["catalog"]["clips"][0].clone();
+        v["bins"][0]["catalog"]["clips"][0]["length"] = json!(334);
+        v["bins"][0]["mobs"][0]["length"] = json!(334);
+        let rate = master["rate"].clone();
+        // Attribute form: the component spans the whole master and the mob's length is the
+        // master's, so only _START/_END describe the subclip. Component form: the reverse.
+        let (component_start, mob_length, attributes) =
+            if attribute_form { (0, 334, json!({"_START": 47, "_END": 83})) } else { (47, 36, json!({"_START": 0, "_END": 36})) };
+        let sub = json!({"kind":"CompositionMob","name":"B.sub.01","live":true,"user_placed":true,
+            "id":{"raw":"03".repeat(32),"byte_order":"little"},"length":mob_length,"rate":rate,"usage_code":2,
+            "attributes":attributes,
+            "tracks":[{"index":1,"component":{"class":"SCLP","media_kind":1,"length":mob_length,"rate":master["rate"],
+                "source_id":master["id"],"source_track":1,"start":component_start}}]});
+        v["bins"][0]["mobs"].as_array_mut().unwrap().push(sub);
+        v
+    }
+    #[test]
+    fn a_subclip_imports_the_range_avid_recorded_in_either_form() {
+        for attribute_form in [true, false] {
+            let v = subclip_fixture(attribute_form);
+            let plan = plan_scoped(&serde_json::to_vec(&v).unwrap(), TransferMode::Sequences).unwrap();
+            assert_eq!(plan.bins[0].subclips.len(), 1, "attribute_form={attribute_form}");
+            let mut project = Project::default();
+            let bins = apply(&mut project, plan, None).unwrap();
+            assert_eq!((bins[0].clips, bins[0].subclips), (1, 1));
+            let (parent, range) = project
+                .items
+                .values()
+                .find_map(|i| match &i.kind {
+                    ItemKind::Subclip { parent, range, .. } => Some((*parent, *range)),
+                    _ => None,
+                })
+                .expect("a subclip item");
+            // The parent is the master, and the range is 47..83 of its 334 frames, whichever way
+            // Avid recorded it. Expected ticks are computed from the fixture's 2997/125 rate
+            // directly, so this checks the range that was chosen rather than the conversion.
+            let at = |frames: i128| (frames * 125 * i128::from(TICKS_PER_SECOND) / 2997) as i64;
+            assert_eq!(range.start.0, at(47), "start, attribute_form={attribute_form}");
+            assert_eq!(range.duration.0, at(36), "duration, attribute_form={attribute_form}");
+            let master = project.item(parent).unwrap().as_media().unwrap();
+            assert!(range.end() <= master.info.duration, "the range stays inside its master");
+        }
+    }
+    #[test]
+    fn a_subclip_reaching_past_its_master_is_bounded_by_it() {
+        // Recorded ranges do run past a master's end, by a frame or by dozens, in a real project.
+        // The item must not reach past its own media.
+        let mut v = subclip_fixture(true);
+        v["bins"][0]["mobs"][1]["attributes"]["_END"] = json!(400); // master is 334 frames
+        let plan = plan_scoped(&serde_json::to_vec(&v).unwrap(), TransferMode::Sequences).unwrap();
+        assert_eq!(plan.bins[0].subclips.len(), 1);
+        assert!(plan.warnings.iter().any(|w| w.contains("reaching past the end of the master")), "{:?}", plan.warnings);
+        let mut project = Project::default();
+        apply(&mut project, plan, None).unwrap();
+        let (parent, range) = project
+            .items
+            .values()
+            .find_map(|i| match &i.kind {
+                ItemKind::Subclip { parent, range, .. } => Some((*parent, *range)),
+                _ => None,
+            })
+            .expect("a subclip item");
+        let master = project.item(parent).unwrap().as_media().unwrap();
+        assert_eq!(range.end(), master.info.duration, "shortened to exactly the master's extent");
+        assert!(range.duration > Tick::ZERO);
+        // Starting past the end is refused outright rather than clamped to nothing.
+        let mut v = subclip_fixture(true);
+        v["bins"][0]["mobs"][1]["attributes"]["_START"] = json!(500);
+        v["bins"][0]["mobs"][1]["attributes"]["_END"] = json!(600);
+        let plan = plan_scoped(&serde_json::to_vec(&v).unwrap(), TransferMode::Sequences).unwrap();
+        assert!(plan.bins[0].subclips.is_empty());
+        assert!(plan.warnings.iter().any(|w| w.contains("starts after the end of its master")), "{:?}", plan.warnings);
+        // An offset with no usable end is refused, never stretched to the master's length.
+        let mut v = subclip_fixture(true);
+        v["bins"][0]["mobs"][1]["attributes"]["_END"] = json!(47);
+        let plan = plan_scoped(&serde_json::to_vec(&v).unwrap(), TransferMode::Sequences).unwrap();
+        assert!(plan.bins[0].subclips.is_empty());
+        assert!(plan.warnings.iter().any(|w| w.contains("records a start without a usable end")), "{:?}", plan.warnings);
+    }
+    #[test]
+    fn a_composition_that_is_not_a_plain_range_is_reported_rather_than_approximated() {
+        // No master in this bin to restrict.
+        let mut v = subclip_fixture(true);
+        v["bins"][0]["mobs"][1]["tracks"][0]["component"]["source_id"]["raw"] = json!("09".repeat(32));
+        let plan = plan_scoped(&serde_json::to_vec(&v).unwrap(), TransferMode::Sequences).unwrap();
+        assert!(plan.bins[0].subclips.is_empty());
+        assert!(plan.warnings.iter().any(|w| w.contains("its master is not in this bin")), "{:?}", plan.warnings);
+        // An empty range is refused rather than imported as a zero-length item.
+        let mut v = subclip_fixture(true);
+        v["bins"][0]["mobs"][1]["attributes"]["_END"] = json!(47);
+        v["bins"][0]["mobs"][1]["length"] = json!(0);
+        let plan = plan_scoped(&serde_json::to_vec(&v).unwrap(), TransferMode::Sequences).unwrap();
+        assert!(plan.bins[0].subclips.is_empty());
+        assert!(plan.warnings.iter().any(|w| w.contains("subclip B.sub.01 was not imported")), "{:?}", plan.warnings);
+        // Tracks disagreeing about which master, or where, is not one range.
+        let mut v = subclip_fixture(true);
+        let mut second = v["bins"][0]["mobs"][1]["tracks"][0].clone();
+        second["index"] = json!(2);
+        second["component"]["start"] = json!(9);
+        v["bins"][0]["mobs"][1]["tracks"].as_array_mut().unwrap().push(second);
+        let plan = plan_scoped(&serde_json::to_vec(&v).unwrap(), TransferMode::Sequences).unwrap();
+        assert!(plan.bins[0].subclips.is_empty());
     }
     #[test]
     fn decimal_rate_is_preserved_with_explicit_subtick_quantization() {

@@ -524,7 +524,10 @@ fn plan_inner(p: &Project, bytes: &[u8], bin: BinId, best_effort: bool) -> Resul
         return Err(bad("report must identify exactly one matching source bin"));
     }
     let mut result = Plan { bin, sequences:Vec::new(), rejected:Vec::new(), warnings:vec!["Sequence audio output uses FilmCraft defaults: 48000 Hz stereo. Raw Avid attributes and auxiliary tracks are retained; color, mixer automation, markers and other effects are not translated.".into()] };
-    let compositions: Vec<_> = list(matching[0], "mobs", 200_000)?.iter().filter(|m| m["kind"] == "CompositionMob" && m["user_placed"] == true).collect();
+    // Subclips are placed compositions too, but they are bin contents restricting a master, not
+    // timelines; the catalog imports them as items, so converting them here would reject them.
+    let compositions: Vec<_> =
+        list(matching[0], "mobs", 200_000)?.iter().filter(|m| m["kind"] == "CompositionMob" && m["user_placed"] == true && m["usage_code"] != 2).collect();
     if compositions.len() > 1024 {
         return Err(bad("too many compositions"));
     }
