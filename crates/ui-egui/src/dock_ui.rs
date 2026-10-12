@@ -10,7 +10,8 @@ use crate::{FilmcraftApp, panels};
 /// Single source for rendering and hit testing: saved offscreen positions remain
 /// reachable, and every panel has enough room for its chrome.
 fn floating_rect(group: &dock::Floating, screen: Rect) -> Rect {
-    let rect = Rect::from_min_size(pos2(group.rect[0], group.rect[1]), vec2(group.rect[2].max(160.0), group.rect[3].max(100.0)));
+    let rect =
+        Rect::from_min_size(pos2(group.rect[0], group.rect[1]), vec2(group.rect[2].max(dock::group_min_width(&group.panels, 160.0)), group.rect[3].max(100.0)));
     rect.translate(vec2(
         (screen.min.x - rect.min.x).max(0.0) + (screen.max.x - 40.0 - rect.min.x).min(0.0),
         (screen.min.y - rect.min.y).max(0.0) + (screen.max.y - 30.0 - rect.min.y).min(0.0),
@@ -110,9 +111,24 @@ impl FilmcraftApp {
     }
 
     fn panel_body(&mut self, ui: &mut egui::Ui, panel: PanelKind, content: Rect) {
+        if !content.is_positive() || !content.min.is_finite() || !content.max.is_finite() {
+            return;
+        }
         self.auto.add(&format!("panel.{}", panel.id()), content, panel.title());
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(content).id_salt(("panel", panel.id())));
         child.set_clip_rect(content.intersect(ui.clip_rect()));
+        if panel == PanelKind::Properties {
+            child.spacing_mut().scroll.floating = false;
+        }
+        // A tiny host window can defeat the dock minima. Graphics and ordinary clips share
+        // this fallback, so changing the selection cannot expose a broken narrow inspector.
+        if panel == PanelKind::Properties && content.width() < dock::PROPERTIES_MIN_WIDTH {
+            egui::ScrollArea::horizontal().id_salt("properties-overflow").auto_shrink([false, false]).show(&mut child, |ui| {
+                let (rect, _) = ui.allocate_exact_size(vec2(dock::PROPERTIES_MIN_WIDTH, ui.available_height().max(0.0)), Sense::hover());
+                panels::show(self, ui, panel, rect);
+            });
+            return;
+        }
         panels::show(self, &mut child, panel, content);
     }
 
@@ -306,7 +322,7 @@ impl FilmcraftApp {
                 ui.painter().rect_stroke(grip, 2.0, Stroke::new(1.5, t.focus), StrokeKind::Inside);
             }
             if delta != egui::Vec2::ZERO {
-                next = Rect::from_min_size(next.min, (next.size() + delta).max(vec2(160.0, 100.0)));
+                next = Rect::from_min_size(next.min, (next.size() + delta).max(vec2(dock::group_min_width(&floating.panels, 160.0), 100.0)));
             }
             if next != rect {
                 let _ = self.dock_command(ctx, Action::MoveFloating { panel, rect: [next.min.x, next.min.y, next.width(), next.height()] });
