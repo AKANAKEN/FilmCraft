@@ -162,6 +162,49 @@ impl MxfVideoCodec {
 
 /// Audio codec. `Auto` = AAC in MP4 and AAC Audio, PCM in QuickTime / WAV / AIFF; MP3 only in
 /// the MP3 format.
+/// Compression of OpenEXR stills (the file's `compression` attribute). Every mode is lossless.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ExrCompression {
+    /// Uncompressed.
+    #[default]
+    None,
+    /// Run-length coded bytes (RLE_COMPRESSION), one scan line per chunk.
+    Rle,
+    /// zlib (deflate) per scan line (ZIPS_COMPRESSION).
+    Zips,
+    /// zlib (deflate) per block of 16 scan lines (ZIP_COMPRESSION).
+    Zip,
+}
+
+impl ExrCompression {
+    pub const ALL: [ExrCompression; 4] = [ExrCompression::None, ExrCompression::Rle, ExrCompression::Zips, ExrCompression::Zip];
+    pub fn label(self) -> &'static str {
+        match self {
+            ExrCompression::None => "None",
+            ExrCompression::Rle => "RLE",
+            ExrCompression::Zips => "ZIP (1 scan line)",
+            ExrCompression::Zip => "ZIP (16 scan lines)",
+        }
+    }
+    /// The value of the OpenEXR `compression` attribute.
+    pub(crate) fn code(self) -> u8 {
+        match self {
+            ExrCompression::None => 0,
+            ExrCompression::Rle => 1,
+            ExrCompression::Zips => 2,
+            ExrCompression::Zip => 3,
+        }
+    }
+    /// Scan lines per chunk.
+    pub(crate) fn lines(self) -> usize {
+        if self == ExrCompression::Zip { 16 } else { 1 }
+    }
+}
+
+/// Audio codec. `Auto` = AAC in MP4 and AAC Audio, PCM in QuickTime / WAV / AIFF, FLAC in FLAC,
+/// MP3 in MP3.
+/// MP4 and QuickTime can also carry FLAC; MXF is always PCM.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AudioCodec {
@@ -170,6 +213,8 @@ pub enum AudioCodec {
     Aac,
     Pcm,
     Mp3,
+    /// Lossless compression (the FLAC format).
+    Flac,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -182,13 +227,15 @@ pub struct AudioSettings {
     pub channels: u32,
     /// AAC bitrate.
     pub bitrate_kbps: u32,
-    /// PCM sample size: 16 or 24.
+    /// PCM and FLAC sample size: 16 or 24.
     pub bits: u16,
+    /// FLAC compression level, 0 (fastest) to 8 (smallest). Every level is lossless.
+    pub flac_level: u8,
 }
 
 impl Default for AudioSettings {
     fn default() -> Self {
-        AudioSettings { codec: AudioCodec::Auto, sample_rate: None, channels: 2, bitrate_kbps: 320, bits: 16 }
+        AudioSettings { codec: AudioCodec::Auto, sample_rate: None, channels: 2, bitrate_kbps: 320, bits: 16, flac_level: 5 }
     }
 }
 
@@ -444,9 +491,12 @@ impl ExportSettings {
     /// The audio codec actually used.
     pub fn audio_codec(&self) -> AudioCodec {
         match (self.format, self.audio.codec) {
+            (Format::Flac, _) => AudioCodec::Flac,
             (Format::Wav | Format::Aiff | Format::MxfOp1a | Format::MxfOpAtom, _) => AudioCodec::Pcm,
             (Format::Aac, _) => AudioCodec::Aac,
             (Format::Mp3, _) => AudioCodec::Mp3,
+            // MP4 and QuickTime both carry FLAC (`fLaC` + `dfLa`)
+            (_, AudioCodec::Flac) => AudioCodec::Flac,
             (f, _) if f.is_mp4_with(self.multiplexer) => AudioCodec::Aac,
             (_, AudioCodec::Auto | AudioCodec::Mp3) if self.format.is_mp4_video() => AudioCodec::Aac,
             (_, AudioCodec::Auto | AudioCodec::Mp3) => AudioCodec::Pcm,
@@ -500,20 +550,27 @@ impl ExportSettings {
             }
             Format::Mjpeg | Format::JpegSequence => px * 8.0 * (0.4 + self.quality as f64 / 100.0 * 2.0) * fps / 8.0,
             Format::PngSequence => px * 4.0 * 0.45 * 8.0 * fps,
-            Format::TiffSequence | Format::BmpSequence => px * if self.format == Format::BmpSequence { 3.0 } else { 4.0 } * 8.0 * fps,
+            Format::BmpSequence => px * 3.0 * 8.0 * fps,
+            Format::TiffSequence => px * if self.keeps_alpha() { 4.0 } else { 3.0 } * 8.0 * fps,
             Format::TgaSequence => px * if self.keeps_alpha() { 4.0 } else { 3.0 } * 8.0 * fps,
             // 10-bit RGB in one 32-bit word per pixel
             Format::DpxSequence => px * 4.0 * 8.0 * fps,
-            // two bytes per half-float channel
-            Format::ExrSequence => px * if self.keeps_alpha() { 8.0 } else { 6.0 } * 8.0 * fps,
+            // two bytes per half-float channel; lossless compression roughly halves it
+            Format::ExrSequence => {
+                let k = if self.exr_compression == ExrCompression::None { 1.0 } else { 0.5 };
+                px * if self.keeps_alpha() { 8.0 } else { 6.0 } * 8.0 * fps * k
+            }
             Format::Gif => px * 0.6 * 8.0 * fps,
-            Format::Wav | Format::Aiff | Format::MxfOp1a | Format::MxfOpAtom => 0.0,
+            Format::Wav | Format::Aiff | Format::Flac | Format::MxfOp1a | Format::MxfOpAtom => 0.0,
         };
         let audio_bps = if self.has_audio() || self.format.is_audio_only() {
+            let pcm = r.sample_rate as f64 * r.channels as f64 * if self.audio.bits >= 24 { 24.0 } else { 16.0 };
             match self.audio_codec() {
                 AudioCodec::Aac => self.audio.bitrate_kbps as f64 * 1000.0,
                 AudioCodec::Mp3 => self.mp3_stream(seq_sr).2 as f64 * 1000.0,
-                _ => r.sample_rate as f64 * r.channels as f64 * if self.audio.bits >= 24 { 24.0 } else { 16.0 },
+                // typical of music and dialogue; noise compresses less, silence far more
+                AudioCodec::Flac => pcm * 0.6,
+                _ => pcm,
             }
         } else {
             0.0
@@ -590,7 +647,13 @@ impl ExportSettings {
                 Format::Apv => v += &format!(", {}", crate::apv_profile(&self.apv_profile).name()),
                 Format::Mjpeg | Format::JpegSequence => v += &format!(", quality {}", self.quality),
                 Format::DpxSequence => v += ", 10-bit RGB",
-                Format::ExrSequence => v += ", 16-bit half float, linear",
+                Format::ExrSequence => {
+                    v += ", 16-bit half float, linear";
+                    match self.exr_compression {
+                        ExrCompression::None => v += ", uncompressed",
+                        c => v += &format!(", {} compression", c.label()),
+                    }
+                }
                 _ => {}
             }
             v
@@ -607,6 +670,12 @@ impl ExportSettings {
                     let (rate, channels, kbps) = self.mp3_stream(seq_sr);
                     format!("MP3, {kbps} kbps, {rate} Hz, {}", if channels == 1 { "Mono" } else { "Stereo" })
                 }
+                AudioCodec::Flac => format!(
+                    "FLAC (lossless) {}-bit, level {}, {} Hz, {ch}",
+                    if self.audio.bits >= 24 { 24 } else { 16 },
+                    self.audio.flac_level.min(8),
+                    r.sample_rate
+                ),
                 _ => format!("Uncompressed {}-bit PCM, {} Hz, {ch}", if self.audio.bits >= 24 { 24 } else { 16 }, r.sample_rate),
             }
         } else {
