@@ -57,7 +57,10 @@ fn import_and_place(s: &mut Session, paths: &[String], bin: Option<BinId>, place
         import["bin"] = json!(b.0);
     }
     let imported = s.execute("file.import", import)?;
-    let items: Vec<ItemId> = imported["items"].as_array().map(|a| a.iter().filter_map(Value::as_u64).map(ItemId).collect()).unwrap_or_default();
+    let mut items: Vec<ItemId> = imported["items"].as_array().map(|a| a.iter().filter_map(Value::as_u64).map(ItemId).collect()).unwrap_or_default();
+    // Files already in the project are placed from their existing item instead of re-imported.
+    // shortcut: they go after the new ones, not in `paths` order; fine unless mixed pastes need exact order.
+    items.extend(imported["duplicates"].as_array().into_iter().flatten().filter_map(|d| d["item"].as_u64()).map(ItemId));
     if !place {
         return Ok(json!({"items": items.iter().map(|i| i.0).collect::<Vec<_>>(), "clips": []}));
     }
