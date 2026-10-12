@@ -119,6 +119,13 @@ impl<'a> BitReader<'a> {
 
     /// Unsigned Exp-Golomb `ue(v)`.
     pub fn read_ue(&mut self) -> Result<u32> {
+        u32::try_from(self.read_ue_raw()?).map_err(|_| BitError::InvalidExpGolomb)
+    }
+
+    /// Raw Exp-Golomb codeNum as `u64`, before any `u32` narrowing. The signed mapping
+    /// (H.264 9.1.1 / Table 9-3) reaches codeNum `2^32` for `i32::MIN`, so `read_se` must
+    /// see the value the codeword actually carries.
+    fn read_ue_raw(&mut self) -> Result<u64> {
         let mut zeros = 0u32;
         while !self.read_bit()? {
             zeros += 1;
@@ -130,14 +137,15 @@ impl<'a> BitReader<'a> {
             return Ok(0);
         }
         let v = self.read_bits_u64(zeros)?;
-        let r = (1u64 << zeros) - 1 + v;
-        u32::try_from(r).map_err(|_| BitError::InvalidExpGolomb)
+        Ok((1u64 << zeros) - 1 + v)
     }
 
-    /// Signed Exp-Golomb `se(v)`.
+    /// Signed Exp-Golomb `se(v)` (H.264 9.1.1 / Table 9-3): odd codeNum maps to
+    /// `+(codeNum+1)/2`, even to `-codeNum/2`. Out-of-range results are rejected.
     pub fn read_se(&mut self) -> Result<i32> {
-        let k = self.read_ue()? as i64;
-        Ok(if k & 1 == 1 { ((k + 1) / 2) as i32 } else { -((k / 2) as i32) })
+        let k = self.read_ue_raw()?;
+        let mapped = if k & 1 == 1 { (k / 2 + 1) as i64 } else { -(k as i64) / 2 };
+        i32::try_from(mapped).map_err(|_| BitError::InvalidExpGolomb)
     }
 
     /// Truncated Exp-Golomb `te(v)` with range `max`.
@@ -196,7 +204,10 @@ impl BitWriter {
         self.write_bits(b as u32, 1);
     }
     pub fn write_ue(&mut self, v: u32) {
-        let x = v as u64 + 1;
+        self.write_ue_raw(v as u64);
+    }
+    fn write_ue_raw(&mut self, v: u64) {
+        let x = v + 1;
         let len = 64 - x.leading_zeros();
         let zeros = len - 1;
         for _ in 0..zeros {
@@ -210,8 +221,9 @@ impl BitWriter {
         }
     }
     pub fn write_se(&mut self, v: i32) {
-        let k = if v > 0 { (v as u32) * 2 - 1 } else { (-(v as i64) as u32) * 2 };
-        self.write_ue(k);
+        // codeNum per H.264 Table 9-3, computed in u64 so i32::MIN (codeNum 2^32) fits.
+        let k = if v > 0 { 2 * v as u64 - 1 } else { (-2i64 * v as i64) as u64 };
+        self.write_ue_raw(k);
     }
     pub fn bit_len(&self) -> usize {
         self.buf.len() * 8 + self.nbits as usize
@@ -340,6 +352,36 @@ pub fn crc32(data: &[u8]) -> u32 {
 
 #[cfg(test)]
 mod tests {
+    // #1428: signed Exp-Golomb boundaries (H.264 9.1.1 / Table 9-3).
+    #[test]
+    fn signed_exp_golomb_minimum_roundtrip() {
+        let mut w = BitWriter::new();
+        w.write_se(i32::MIN);
+        let bytes = w.finish();
+        assert_eq!(BitReader::new(&bytes).read_se(), Ok(i32::MIN));
+    }
+
+    #[test]
+    fn signed_exp_golomb_rejects_positive_overflow() {
+        let bytes = [0, 0, 0, 0, 0x80, 0, 0, 0, 0];
+        assert_eq!(BitReader::new(&bytes).read_se(), Err(BitError::InvalidExpGolomb));
+    }
+
+    #[test]
+    fn signed_exp_golomb_reads_minimum_from_spec_bits() {
+        let bytes = [0, 0, 0, 0, 0x80, 0, 0, 0, 0x80];
+        assert_eq!(BitReader::new(&bytes).read_se(), Ok(i32::MIN));
+    }
+
+    #[test]
+    fn signed_exp_golomb_roundtrips_boundaries() {
+        for v in [i32::MIN, i32::MIN + 1, -1, 0, 1, i32::MAX - 1, i32::MAX] {
+            let mut w = BitWriter::new();
+            w.write_se(v);
+            assert_eq!(BitReader::new(&w.finish()).read_se(), Ok(v), "roundtrip {v}");
+        }
+    }
+
     use super::*;
     use proptest::prelude::*;
 
