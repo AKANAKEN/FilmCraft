@@ -10,6 +10,40 @@ use craft_ui::layout::{ResizeHandle, ResizeHandleStyle, SplitAxis, SplitSize as 
 use crate::icons::{self, Icon};
 use crate::theme::Tokens;
 
+/// Logical points, shared by docked and floating Properties groups and their overflow viewport.
+pub(crate) const PROPERTIES_MIN_WIDTH: f32 = 360.0;
+
+pub(crate) fn group_min_width(panels: &[PanelKind], minimum: f32) -> f32 {
+    if panels.contains(&PanelKind::Properties) { minimum.max(PROPERTIES_MIN_WIDTH) } else { minimum }
+}
+
+fn node_min_width(node: &DockNode, minimum: f32, gap: f32, depth: usize) -> f64 {
+    if depth > 32 {
+        return f64::from(minimum);
+    }
+    match node {
+        DockNode::Tabs { panels, .. } => f64::from(group_min_width(panels, minimum)),
+        DockNode::Split { vertical, a, b, .. } => {
+            let a = node_min_width(a, minimum, gap, depth.saturating_add(1));
+            let b = node_min_width(b, minimum, gap, depth.saturating_add(1));
+            if *vertical { a.max(b) } else { a + b + f64::from(gap) }
+        }
+    }
+}
+
+/// Separate minima for the two children; when the window cannot fit them, share the shortage
+/// proportionally. Equal endpoints prevent an impossible resize and never cross clamp bounds.
+fn split_bounds(a: &DockNode, b: &DockNode, vertical: bool, available: f32, minimum: f32, gap: f32) -> (f32, f32) {
+    let (a, b) = if vertical { (f64::from(minimum), f64::from(minimum)) } else { (node_min_width(a, minimum, gap, 0), node_min_width(b, minimum, gap, 0)) };
+    let available = f64::from(available);
+    if a + b > available {
+        let first = (available * (a / (a + b))) as f32;
+        (first, first)
+    } else {
+        (a as f32, (available - b) as f32)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PanelKind {
     Project,
@@ -544,14 +578,21 @@ fn layout_inner(
         }
         DockNode::Split { vertical, size, a, b } => {
             let axis = if *vertical { SplitAxis::Vertical } else { SplitAxis::Horizontal };
-            let Some(split) = split_rect(rect, axis, size.shared(), t.gap, 20.0) else { return };
+            let Some(requested) = split_rect(rect, axis, size.shared(), t.gap, 0.0) else { return };
+            let (low, high) = split_bounds(a, b, *vertical, requested.available(), 20.0, t.gap);
+            let Some(split) = split_rect(rect, axis, SharedSplitSize::FixedFirst(requested.first_size().clamp(low, high)), t.gap, 0.0) else { return };
             let id = egui::Id::new(("dock-gutter", path.to_string()));
             let handle_style = ResizeHandleStyle { hovered: t.focus.gamma_multiply(0.4), dragged: t.focus.gamma_multiply(0.9), focused: t.focus };
             let label = if *vertical { tl!("Height:") } else { tl!("Width:") };
-            let response = ResizeHandle::new(id, axis, split.divider, label, handle_style).value(split.first_size(), 0.0..=split.available()).show(ui);
+            let (low, high) = split_bounds(a, b, *vertical, split.available(), 40.0, t.gap);
+            let response = ResizeHandle::new(id, axis, split.divider, label, handle_style).value(split.first_size(), low..=high).show(ui);
             reg.add_response(&format!("dock.gutter.{path}"), &response.response, "gutter");
             if response.delta != 0.0
-                && let Some(resized) = split.resized(size.shared(), response.delta, 40.0)
+                && let Some(resized) = split.resized(
+                    size.shared(),
+                    ((f64::from(split.first_size()) + f64::from(response.delta)).clamp(f64::from(low), f64::from(high)) as f32) - split.first_size(),
+                    0.0,
+                )
             {
                 actions.push(craft_ui::docking::Action::ResizeSplit { path: tree_path.to_vec(), size: resized });
             }
@@ -593,6 +634,9 @@ pub struct Chrome {
 }
 
 pub fn draw_group_chrome_details(ui: &mut egui::Ui, g: &Group, seqs: &SeqTabs, t: &Tokens, reg: &mut crate::automation::Registry) -> Chrome {
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(g.rect).id_salt(("dock-chrome", &g.path)));
+    child.set_clip_rect(g.rect.intersect(ui.clip_rect()));
+    let ui = &mut child;
     let mut actions = Vec::new();
     let mut tab_rects: Vec<(PanelKind, Rect)> = Vec::new();
     let painter = ui.painter().clone();
@@ -705,9 +749,19 @@ pub fn draw_group_chrome_details(ui: &mut egui::Ui, g: &Group, seqs: &SeqTabs, t
         for (i, tab) in tabs.iter().enumerate().take(last + 1).skip(first) {
             let p = &tab.panel;
             let is_active = tab.active;
-            let galley = painter.layout_no_wrap(tab.title.clone(), Tokens::ui(12.0), if is_active { t.tab_text_active } else { t.tab_text });
             let close_w = if is_active && tab.seq.is_some() { 16.0 } else { 0.0 };
-            let w = widths.get(i).copied().unwrap_or(0.0);
+            let end = if all_fit { strip.max.x } else { strip.max.x - 24.0 };
+            let w = widths.get(i).copied().unwrap_or(0.0).min((end - x).max(0.0));
+            let label_space = (w - 16.0 - close_w - if is_active { 20.0 } else { 0.0 }).max(0.0);
+            let mut job = egui::text::LayoutJob::single_section(
+                tab.title.clone(),
+                egui::TextFormat::simple(Tokens::ui(12.0), if is_active { t.tab_text_active } else { t.tab_text }),
+            );
+            job.wrap.max_width = label_space;
+            job.wrap.max_rows = 1;
+            job.wrap.break_anywhere = true;
+            job.wrap.overflow_character = Some('…');
+            let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
             let tab_rect = Rect::from_min_size(pos2(x, strip.min.y), vec2(w, t.tab_h));
             // a sequence tab keeps its identity when the tabs are reordered under the pointer
             let resp = match tab.seq {
@@ -754,9 +808,14 @@ pub fn draw_group_chrome_details(ui: &mut egui::Ui, g: &Group, seqs: &SeqTabs, t
                 reg.add_response(&format!("panel.tab.{}", p.id()), &resp, p.title());
             }
             let label_x = tab_rect.min.x + 8.0 + close_w;
-            let label_w = galley.size().x;
+            let label_w = galley.size().x.min(label_space);
             let col = if is_active || resp.hovered() { t.tab_text_active } else { t.tab_text };
-            painter.galley_with_override_text_color(pos2(label_x, text_y - galley.size().y / 2.0), galley, col);
+            let label_rect = Rect::from_min_max(pos2(label_x, strip.min.y), pos2(label_x + label_space, strip.max.y));
+            painter.with_clip_rect(label_rect.intersect(ui.clip_rect())).galley_with_override_text_color(
+                pos2(label_x, text_y - galley.size().y / 2.0),
+                galley,
+                col,
+            );
             let mut closed = false;
             if let Some(id) = tab.seq.filter(|_| is_active) {
                 // × closes the sequence's tab (the sequence stays in the project)

@@ -1445,6 +1445,10 @@ pub fn graphic_selected(app: &FilmcraftApp) -> bool {
 
 /// The graphic editor (Properties panel / Essential Graphics ▸ Edit).
 pub fn properties(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
+    if !rect.min.is_finite() || !rect.max.is_finite() || !rect.width().is_finite() || !rect.height().is_finite() || rect.width() <= 0.0 || rect.height() <= 0.0
+    {
+        return;
+    }
     let t = app.tokens;
     let Some((clip, it)) = selected_graphic(app) else {
         crate::dock::placeholder(ui, rect, &t, tl!("Select a graphic clip, or use the Type tool (T) on the Program monitor"));
@@ -1459,13 +1463,14 @@ pub fn properties(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         return;
     };
     let ph = app.session.playhead();
-    let mt = it.source_time_at(ph.clamp(it.start, it.end() - Tick(1)));
+    let mt = it.source_time_at(ph.clamp(it.start, (it.end() - Tick(1)).max(it.start)));
     let idx = layer_indices(&it.effects);
     let sel = app.session.state.graphic_layers.first().copied().filter(|l| *l < idx.len());
     let mut actions: Vec<(String, Value)> = Vec::new();
     let mut autos: Vec<(String, Rect, String)> = Vec::new();
-    let mut bui = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(vec2(12.0, 6.0))).id_salt("gfx-props"));
-    bui.set_clip_rect(rect);
+    let padding = vec2(12.0_f32.min(rect.width() / 2.0), 6.0_f32.min(rect.height() / 2.0));
+    let mut bui = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(padding)).id_salt("gfx-props"));
+    bui.set_clip_rect(rect.intersect(ui.clip_rect()));
     egui::ScrollArea::vertical().id_salt("gfx-props-scroll").auto_shrink([false, false]).show(&mut bui, |ui| {
         // header
         let (hr, _) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::hover());

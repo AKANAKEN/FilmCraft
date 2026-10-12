@@ -84,3 +84,28 @@ buttons use `craft-ui::layout::fit_toolbar`; commands beyond the available width
 through More, including their selected state and Source/Program routing. A scrolling fallback
 retains all commands if even More cannot fit. `monitor_geometry` checks the painted readouts,
 control bounds, overflow actions and Source drag payloads across monitor widths and themes.
+
+## Properties sizing and scrolling
+
+A tab group containing Properties has a 360 logical-point minimum width, including when a
+neighbouring tab is active. Docked groups, keyboard/accessibility divider resizing, floating
+geometry and floating resize grips use that same minimum. Nested horizontal splits add child
+minima and gutters; vertical splits keep the widest child. Rendering clamps legacy workspace
+sizes without rewriting saved preferences. An undersized host window shares the available width
+in proportion to the subtree minima, with horizontal scrolling inside Properties as a fallback.
+This is FilmCraft's sizing policy; Adobe's public panel documentation does not specify a numeric
+Properties minimum.
+
+Video/audio Properties scroll vertically. Scrollbar interaction strips reserve their own space
+so an expanding thumb cannot steal clicks from keyframe diamonds. Numeric columns share measured space, including the
+inline editor, while labels and long clip names ellipsize and expose full text on hover. Value
+cells clip painting and hit targets before the keyframe column; automation reports only visible
+portions of scrolled controls. Reset and section-collapse hit targets are separate. Existing
+keyframe IDs remain stable; values expose `properties.<effect>.<param>.value` or `.x` / `.y`, and
+sections expose `properties.section.<name>` and `.reset`.
+
+`properties_ui` exercises coordinate extremes, typing/undo, reset, both scroll directions,
+nested/legacy workspaces, sizing modes and docked/floating pointer and keyboard resizing.
+`FILMCRAFT_PROPERTIES_SNAPSHOT_DIR=<dir>` renders the minimum and wide inspector in all three
+themes at 1x/2x, plus short and tiny viewports, through wgpu. Unit regressions cover zero-length
+clips, hostile viewport dimensions and damaged numeric values without panicking.
