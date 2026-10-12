@@ -1,6 +1,6 @@
 //! Intel Quick Sync Video encoder probe, export, and configuration tests.
 
-#![cfg(target_os = "windows")]
+#![cfg(any(target_os = "windows", all(target_os = "linux", target_pointer_width = "64")))]
 
 use filmcraft_export::{ExportSettings, Format, HardwareEncoding};
 use filmcraft_platform::qsv::device::{INTEL_VENDOR_ID, IntelGpu};
@@ -15,7 +15,7 @@ fn intel_vendor_id_constant() {
 
 #[test]
 fn probe_does_not_panic() {
-    // Probing for an Intel GPU on any Windows machine must return a Result and never panic
+    // Probing for an Intel GPU on any machine must return a Result and never panic
     let result = IntelGpu::probe();
     assert!(result.is_ok(), "Intel GPU probe failed: {:?}", result.err());
 }
@@ -26,8 +26,11 @@ fn codec_properties() {
     assert_eq!(Codec::Hevc.name(), "HEVC");
     assert_eq!(Codec::Av1.name(), "AV1");
 
-    assert_ne!(Codec::H264.subtype(), Codec::Hevc.subtype());
-    assert_ne!(Codec::Hevc.subtype(), Codec::Av1.subtype());
+    #[cfg(target_os = "windows")]
+    {
+        assert_ne!(Codec::H264.subtype(), Codec::Hevc.subtype());
+        assert_ne!(Codec::Hevc.subtype(), Codec::Av1.subtype());
+    }
 }
 
 #[test]

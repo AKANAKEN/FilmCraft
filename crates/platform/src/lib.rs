@@ -44,7 +44,7 @@ pub mod media_foundation;
 pub mod nvdec;
 #[cfg(any(target_os = "windows", all(target_os = "linux", target_pointer_width = "64")))]
 pub mod nvenc;
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", all(target_os = "linux", target_pointer_width = "64")))]
 pub mod qsv;
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub mod vaapi;
@@ -71,7 +71,16 @@ pub enum Availability {
 /// using FilmCraft's own decoders.
 pub fn register() -> Availability {
     #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
-    filmcraft_export::register_encoder(nvenc::export::factory);
+    {
+        filmcraft_export::register_encoder(nvenc::export::factory);
+        filmcraft_export::register_encoder(qsv::export::factory);
+        filmcraft_export::register_format_probe(filmcraft_export::Format::Hevc, qsv::hevc_available);
+        filmcraft_export::register_format_probe(filmcraft_export::Format::Av1, qsv::av1_available);
+        filmcraft_export::register_hdr_probe(filmcraft_export::Format::Hevc, qsv::hevc_hdr_available);
+        filmcraft_export::register_hdr_probe(filmcraft_export::Format::Av1, qsv::av1_hdr_available);
+        qsv::warm_hevc_probe();
+        qsv::warm_av1_probe();
+    }
     #[cfg(target_os = "macos")]
     {
         filmcraft_codecs::register_video_decoder(videotoolbox_factory);

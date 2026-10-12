@@ -9,10 +9,13 @@ pub mod session;
 
 use std::sync::OnceLock;
 
+#[cfg(target_os = "windows")]
 use windows::Win32::Media::MediaFoundation::{MFVideoFormat_AV1, MFVideoFormat_HEVC};
 
 use self::device::IntelGpu;
+#[cfg(target_os = "windows")]
 use self::session::find_encoder_activate;
+#[cfg(target_os = "windows")]
 use crate::media_foundation::mft::api;
 
 static HEVC_AVAILABLE: OnceLock<bool> = OnceLock::new();
@@ -32,22 +35,22 @@ pub fn is_available() -> bool {
 
 /// Whether an Intel GPU is present and supports HEVC hardware export.
 pub fn hevc_available() -> bool {
-    *HEVC_AVAILABLE.get_or_init(|| probe_codec(MFVideoFormat_HEVC, false))
+    *HEVC_AVAILABLE.get_or_init(|| probe_codec_hevc(false))
 }
 
 /// Whether an Intel GPU is present and supports HEVC Main 10 (10-bit / HDR) hardware export.
 pub fn hevc_hdr_available() -> bool {
-    *HEVC_HDR_AVAILABLE.get_or_init(|| probe_codec(MFVideoFormat_HEVC, true))
+    *HEVC_HDR_AVAILABLE.get_or_init(|| probe_codec_hevc(true))
 }
 
 /// Whether an Intel GPU is present and supports AV1 hardware export.
 pub fn av1_available() -> bool {
-    *AV1_AVAILABLE.get_or_init(|| probe_codec(MFVideoFormat_AV1, false))
+    *AV1_AVAILABLE.get_or_init(|| probe_codec_av1(false))
 }
 
 /// Whether an Intel GPU is present and supports AV1 Main 10 (10-bit / HDR) hardware export.
 pub fn av1_hdr_available() -> bool {
-    *AV1_HDR_AVAILABLE.get_or_init(|| probe_codec(MFVideoFormat_AV1, true))
+    *AV1_HDR_AVAILABLE.get_or_init(|| probe_codec_av1(true))
 }
 
 /// Warm up HEVC probes asynchronously or on background thread.
@@ -62,7 +65,18 @@ pub fn warm_av1_probe() {
     let _ = av1_hdr_available();
 }
 
-fn probe_codec(subtype: windows::core::GUID, _ten_bit: bool) -> bool {
+#[cfg(target_os = "windows")]
+fn probe_codec_hevc(_ten_bit: bool) -> bool {
+    probe_codec_win(MFVideoFormat_HEVC)
+}
+
+#[cfg(target_os = "windows")]
+fn probe_codec_av1(_ten_bit: bool) -> bool {
+    probe_codec_win(MFVideoFormat_AV1)
+}
+
+#[cfg(target_os = "windows")]
+fn probe_codec_win(subtype: windows::core::GUID) -> bool {
     let Ok(Some(_gpu)) = IntelGpu::probe() else {
         return false;
     };
@@ -72,14 +86,21 @@ fn probe_codec(subtype: windows::core::GUID, _ten_bit: bool) -> bool {
     let Ok(Some(_)) = find_encoder_activate(mf_api, subtype) else {
         return false;
     };
-    // On Intel Arc and modern Iris Xe, HEVC 10-bit is standard. AV1 encode requires Arc (Gen 12.7+) or Meteor Lake.
-    if subtype == MFVideoFormat_AV1 {
-        // Intel Arc / Xe-HPG device IDs generally begin with 0x56 or discrete Arc IDs.
-        // For hardware MFT, existence of the encoder MFT for AV1 confirms driver/hardware capability.
-        true
-    } else {
-        true
-    }
+    true
+}
+
+#[cfg(not(target_os = "windows"))]
+fn probe_codec_hevc(_ten_bit: bool) -> bool {
+    IntelGpu::probe().ok().flatten().is_some()
+}
+
+#[cfg(not(target_os = "windows"))]
+fn probe_codec_av1(_ten_bit: bool) -> bool {
+    let Ok(Some(gpu)) = IntelGpu::probe() else {
+        return false;
+    };
+    let id = gpu.device_id;
+    (0x5690..=0x56c2).contains(&id) || (0x7d40..=0x7d67).contains(&id) || (0x64a0..=0x64b0).contains(&id)
 }
 
 #[cfg(test)]
@@ -91,6 +112,7 @@ mod tests {
         assert_eq!(device::INTEL_VENDOR_ID, 0x8086);
     }
 
+    #[cfg(target_os = "windows")]
     #[test]
     fn codec_subtypes_are_distinct() {
         use session::Codec;

@@ -8,6 +8,7 @@ use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::sync::Arc;
 
+#[cfg(target_os = "windows")]
 use windows::Win32::Media::MediaFoundation::{
     IMFActivate, IMFMediaBuffer, IMFMediaType, IMFSample, IMFTransform, MF_MT_AVG_BITRATE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE,
     MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_SA_D3D11_AWARE, MFMediaType_Video, MFT_CATEGORY_VIDEO_ENCODER, MFT_ENUM_FLAG, MFT_ENUM_FLAG_ASYNCMFT,
@@ -15,13 +16,17 @@ use windows::Win32::Media::MediaFoundation::{
     MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_MESSAGE_SET_D3D_MANAGER, MFT_OUTPUT_DATA_BUFFER, MFT_REGISTER_TYPE_INFO, MFVideoFormat_AV1, MFVideoFormat_H264,
     MFVideoFormat_HEVC, MFVideoFormat_NV12, MFVideoFormat_P010, MFVideoInterlace_Progressive,
 };
+#[cfg(target_os = "windows")]
 use windows::Win32::System::Com::CoTaskMemFree;
+#[cfg(target_os = "windows")]
 use windows::core::{GUID, Interface};
 
 use filmcraft_time::FrameRate;
 
 use super::device::IntelGpu;
+#[cfg(target_os = "windows")]
 use crate::media_foundation::gpu::ensure_com;
+#[cfg(target_os = "windows")]
 use crate::media_foundation::mft::{MfApi, api};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -32,6 +37,7 @@ pub enum Codec {
 }
 
 impl Codec {
+    #[cfg(target_os = "windows")]
     pub fn subtype(self) -> GUID {
         match self {
             Self::H264 => MFVideoFormat_H264,
@@ -80,6 +86,7 @@ pub struct Packet {
     pub dts: i64,
 }
 
+#[cfg(target_os = "windows")]
 pub struct QsvSession {
     _gpu: Arc<IntelGpu>,
     transform: IMFTransform,
@@ -88,9 +95,11 @@ pub struct QsvSession {
     pending: VecDeque<(i64, i64)>, // (pts, dts)
 }
 
+#[cfg(target_os = "windows")]
 // SAFETY: IMFTransform encoder MFT is free-threaded COM object, operated through &mut methods.
 unsafe impl Send for QsvSession {}
 
+#[cfg(target_os = "windows")]
 impl QsvSession {
     /// Create a new hardware encoding session on the Intel GPU.
     pub fn new(config: Config) -> Result<Self, String> {
@@ -256,6 +265,41 @@ impl QsvSession {
     }
 }
 
+#[cfg(not(target_os = "windows"))]
+pub struct QsvSession {
+    _gpu: Arc<IntelGpu>,
+    config: Config,
+}
+
+#[cfg(not(target_os = "windows"))]
+impl QsvSession {
+    /// Create a new hardware encoding session on the Intel GPU.
+    pub fn new(config: Config) -> Result<Self, String> {
+        let gpu = IntelGpu::shared()?;
+        Err(format!("Intel Quick Sync ({}) via Media Foundation is Windows-only; Linux uses VA-API", config.codec.name()))
+    }
+
+    /// Encode an 8-bit planar 4:2:0 frame (NV12).
+    pub fn encode_nv12(&mut self, _y: &[u8], _u: &[u8], _v: &[u8], _pts: i64) -> Result<Vec<Packet>, String> {
+        Err("not supported on this platform".into())
+    }
+
+    /// Encode a 10-bit planar 4:2:0 frame (P010).
+    pub fn encode_p010(&mut self, _y: &[u16], _u: &[u16], _v: &[u16], _pts: i64) -> Result<Vec<Packet>, String> {
+        Err("not supported on this platform".into())
+    }
+
+    /// Flush remaining buffered packets at stream end.
+    pub fn flush(&mut self) -> Result<Vec<Packet>, String> {
+        Ok(Vec::new())
+    }
+
+    pub fn codec(&self) -> Codec {
+        self.config.codec
+    }
+}
+
+#[cfg(target_os = "windows")]
 fn make_video_type(api: &MfApi, subtype: GUID, w: u32, h: u32, rate: FrameRate) -> Result<IMFMediaType, String> {
     let t = api.media_type()?;
     // SAFETY: setting standard video media type attributes.
@@ -375,6 +419,7 @@ fn is_key_frame(codec: Codec, data: &[u8]) -> bool {
     }
 }
 
+#[cfg(target_os = "windows")]
 pub fn find_encoder_activate(api: &MfApi, subtype: GUID) -> Result<Option<IMFActivate>, String> {
     let output = MFT_REGISTER_TYPE_INFO { guidMajorType: MFMediaType_Video, guidSubtype: subtype };
     let flags = MFT_ENUM_FLAG(MFT_ENUM_FLAG_SYNCMFT.0 | MFT_ENUM_FLAG_ASYNCMFT.0 | MFT_ENUM_FLAG_HARDWARE.0 | MFT_ENUM_FLAG_SORTANDFILTER.0);
