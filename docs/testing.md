@@ -49,7 +49,9 @@ are never linked or shipped ([AGENTS.md](../AGENTS.md) §2).
   this order: `FILMCRAFT_FFMPEG` / `FILMCRAFT_FFPROBE` (explicit paths; a wrong path is an error),
   then every directory on `PATH` (`ffmpeg` and `ffmpeg.exe`), then well-known install directories
   (`/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, `C:\ffmpeg\bin`, …).
-- If a tool is missing the test prints `SKIPPED (<test>): ffmpeg not found …` and passes. Set
+- If a tool is missing the test prints `SKIPPED (<test>): ffmpeg not found …` and passes. An ffmpeg
+  older than 8.0 is found but cannot demux raw APV; those oracle tests skip the same way unless
+  `FILMCRAFT_REQUIRE_ORACLES` is set. Set
   **`FILMCRAFT_REQUIRE_ORACLES=1`** (CI) to make every such skip a failure. In new tests use
   `let ff = filmcraft_testkit::require_ffmpeg!();` (also `require_ffprobe!`, `require_oracles!`).
 - Some oracles need a recent ffmpeg: the APV tests (`crates/apv/tests/oracle.rs`) skip when
