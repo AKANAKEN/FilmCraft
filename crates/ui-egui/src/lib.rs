@@ -32,6 +32,7 @@ macro_rules! tlf {
 pub mod automation;
 pub mod brand;
 pub mod calc;
+pub mod capabilities;
 mod cjk;
 pub mod control;
 pub mod crash;
@@ -196,6 +197,7 @@ pub struct RelinkHint {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Dialog {
     About,
+    RenderingCapabilities,
     Shortcuts,
     NewSequence,
     /// Settings (Preferences window; page in `UiState::settings`).
@@ -369,6 +371,8 @@ pub struct FilmcraftApp {
     pub(crate) stale_clipboard_media: Option<String>,
     /// GPU compositor (when running on wgpu): device state + compositor + the egui texture it feeds.
     pub gpu: Option<GpuState>,
+    /// Retain the compositor failure after the status bar changes. No project/media paths.
+    pub gpu_fallback_reason: Option<String>,
     /// Preview render job being watched (job id, where to start playing when it completes).
     watched_render: Option<(u64, Tick)>,
     /// Settings last applied to the UI (theme, tooltips, frame cache, audio device).
@@ -445,6 +449,7 @@ impl FilmcraftApp {
     /// Enable the GPU compositor on the eframe wgpu device.
     pub fn set_wgpu(&mut self, rs: eframe::egui_wgpu::RenderState) {
         if let Some(why) = gpu_compositor_unsupported(&rs.adapter) {
+            self.gpu_fallback_reason = Some(why.clone());
             log::warn!("GPU compositor disabled ({why}); compositing on the CPU");
             // Say so instead of letting the preview quietly crawl: "GPU 0 %, CPU 100 %" with no
             // explanation read like a renderer bug when the machine simply has no GPU access.
@@ -463,15 +468,20 @@ impl FilmcraftApp {
         let made = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| filmcraft_gpu::GpuCompositor::new(&rs.device, &rs.queue)));
         match made {
             Ok(compositor) if !broken.load(std::sync::atomic::Ordering::Relaxed) => {
+                self.gpu_fallback_reason = None;
                 let max_texture = rs.device.limits().max_texture_dimension_2d;
                 self.gpu = Some(GpuState { render_state: rs, compositor, texture: None, last_key: None, size: (0, 0), last_ms: 0.0, broken, max_texture });
             }
-            _ => log::error!("GPU compositor failed to initialise; compositing on the CPU"),
+            _ => {
+                self.gpu_fallback_reason = Some("GPU compositor failed to initialise".into());
+                log::error!("GPU compositor failed to initialise; compositing on the CPU");
+            }
         }
     }
 
     /// Drop the GPU compositor after a GPU error; the monitors composite on the CPU from then on.
     fn disable_gpu(&mut self, why: &str) {
+        self.gpu_fallback_reason = Some(why.to_owned());
         log::error!("GPU compositor disabled: {why}");
         if let Some(g) = self.gpu.take()
             && let Some(id) = g.texture
@@ -591,6 +601,7 @@ impl FilmcraftApp {
             v_down: false,
             stale_clipboard_media: None,
             gpu: None,
+            gpu_fallback_reason: None,
             watched_render: None,
             applied_prefs: None,
             applied_ui_scale: None,

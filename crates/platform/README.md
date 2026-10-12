@@ -314,6 +314,22 @@ level 4 High tier, which many hardware decoders refuse; it is now level 4.1 Main
 Fixtures are made with ffmpeg into `target/fixtures/platform/` (generator only, never linked);
 tests skip without ffmpeg or without a hardware decoder.
 
+## Rendering capability diagnostics
+
+Help → Rendering Capabilities and `perf.stats.capabilities` distinguish decoder registration,
+process-wide observed frame counters, and the most recent export video encoder initialization.
+VideoToolbox and NVENC identify successful encoder instances explicitly. Configuration/driver
+declines are retained during that selection, including when FilmCraft's software H.264 encoder
+takes over. The latest entry is historical; it is not an active-job indicator. Concurrent selections
+keep their decline reasons separate, and background probes do not overwrite an export's reason.
+
+Reading these diagnostics does not probe hardware, initialize encoders, or open media. Per-format
+hardware availability is reported as unknown, independently of built-in software encoder support.
+Decoder counters cover process lifetime; export renderer counters cover startup or the last explicit
+counter reset and exclude CPU-only frames. Driver diagnostics can contain library paths; review a
+copied report before sharing it. Arbitrary encoder-factory error strings are excluded from the
+shareable report; the normal export error retains the full details.
+
 ## Performance
 
 Hardware H.264 encoding, Apple M1 (8 cores), single runs: 1080p25 camera footage through the

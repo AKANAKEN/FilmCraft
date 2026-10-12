@@ -3566,3 +3566,11 @@
 	Appearance Settings…	Pengaturan Tampilan…
 	Add to favorites	Tambahkan ke favorit
 	Remove from favorites	Hapus dari favorit
+	Rendering Capabilities…	Kemampuan Rendering…
+	Rendering Capabilities	Kemampuan Rendering
+	Preview compositor	Kompositor pratinjau
+	Video decoding	Dekode video
+	Decoded frames (process lifetime)	Frame yang didekode (selama proses berjalan)
+	Latest export encoder selection	Pilihan encoder ekspor terakhir
+	Export render counters	Penghitung rendering ekspor
+	Copy diagnostics	Salin diagnostik

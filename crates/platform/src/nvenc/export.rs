@@ -82,6 +82,9 @@ fn composition_offset(pts: i64, dts: i64, den: i64) -> i32 {
 }
 
 impl VideoEncoder for NvencEncoder {
+    fn diagnostic_backend(&self) -> Option<(&'static str, bool)> {
+        Some(("NVENC", true))
+    }
     fn sample_entry(&self) -> SampleEntry {
         let (sps, pps) = self.enc.parameter_sets();
         // `config` declines sizes above u16::MAX
@@ -245,6 +248,7 @@ fn factory_with(
     }
     let declined = |why: &str| {
         log::info!("hardware encoding declined: {why}");
+        filmcraft_export::diagnostics::note_encoder_declined("NVENC", why);
         filmcraft_export::note_hw_encode_declined();
         None
     };
@@ -266,6 +270,7 @@ fn factory_with(
 fn hevc_factory(w: u32, h: u32, rate: FrameRate, s: &ExportSettings) -> Option<Result<Box<dyn VideoEncoder>>> {
     let declined = |why: &str| {
         log::info!("hardware H.265 encoding declined: {why}");
+        filmcraft_export::diagnostics::note_encoder_declined("NVENC", why);
         filmcraft_export::note_hw_encode_declined();
         Some(Err(ExportError::Unsupported(format!("H.265 export with NVENC: {why}"))))
     };
@@ -281,6 +286,7 @@ fn hevc_factory(w: u32, h: u32, rate: FrameRate, s: &ExportSettings) -> Option<R
         // no HEVC encoder here at all: not a hardware attempt, the export's own "encoder not available" error
         Err(why) if !super::hevc_available() => {
             log::info!("no hardware H.265 encoder: {why}");
+            filmcraft_export::diagnostics::note_encoder_declined("NVENC", &why);
             None
         }
         Err(why) => declined(&why),

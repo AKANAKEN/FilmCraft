@@ -3570,3 +3570,11 @@
 	Export the labels to a preset file…	将标签导出为预设文件…
 	Show the presets folder	显示预设文件夹
 	Delete this preset	删除此预设
+	Rendering Capabilities…	渲染能力…
+	Rendering Capabilities	渲染能力
+	Preview compositor	预览合成器
+	Video decoding	视频解码
+	Decoded frames (process lifetime)	已解码帧（进程运行期间）
+	Latest export encoder selection	最近选择的导出编码器
+	Export render counters	导出渲染计数
+	Copy diagnostics	复制诊断信息
