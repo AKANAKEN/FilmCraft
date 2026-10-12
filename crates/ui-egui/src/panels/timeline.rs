@@ -1726,6 +1726,26 @@ fn marker_menu(app: &mut FilmcraftApp, ctx: &egui::Context, ui: &mut egui::Ui) {
             ui.close();
         }
     }
+    // Label (#1143): set the marker's colour through `markers.edit`, the only command that does.
+    // The right-click parked the playhead on the marker, so that is the marker to edit.
+    let target = app.session.active_sequence().and_then(|q| q.markers.iter().find(|m| m.start == app.session.playhead()).map(|m| (m.id, m.color)));
+    if let Some((id, current)) = target {
+        ui.separator();
+        let label_btn = ui.menu_button(crate::i18n::t("Label"), |ui| {
+            for l in filmcraft_project::Label::ALL {
+                let name = crate::i18n::t(l.name());
+                let r = ui.button(if l == current { format!("✓ {name}") } else { name.to_string() });
+                app.auto.add(&format!("timeline.markerMenu.label.{}", l.name()), r.rect, l.name());
+                if r.clicked() {
+                    if let Err(e) = app.session.execute("markers.edit", json!({"marker": id.0, "color": l.name()})) {
+                        app.ui.status = e.to_string();
+                    }
+                    ui.close();
+                }
+            }
+        });
+        app.auto.add("timeline.markerMenu.Label", label_btn.response.rect, "Label");
+    }
 }
 
 pub(crate) const CLIP_MENU: &[&[(&str, &str)]] = &[
