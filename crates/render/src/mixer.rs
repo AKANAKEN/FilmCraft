@@ -50,7 +50,6 @@ use filmcraft_frame::AudioBuffer;
 use filmcraft_project::mixer::{LANE_MUTE, LANE_PAN, LANE_PAN51_CENTER, LANE_PAN51_LFE, LANE_PAN51_X, LANE_PAN51_Y, LANE_VOLUME, fx_lane, send_lane};
 use filmcraft_project::{AudioChannels, EffectInstance, InputMap, Param, ParamValue, Project, Sequence, Track, TrackId};
 use filmcraft_time::Tick;
-use rayon::prelude::*;
 
 use crate::SourceProvider;
 use crate::audio::{pan_gains, track_input_at};
@@ -871,7 +870,7 @@ pub(crate) fn mix_graph_at(
     let ntr = plan.strips.iter().take_while(|s| s.kind == Kind::Track).count();
     let (track_states, rest) = st.strips.split_at_mut(ntr);
     let track_outs: Vec<Option<StripOut>> = track_states
-        .par_iter_mut()
+        .iter_mut()
         .enumerate()
         .map(|(si, ss)| {
             let s = &plan.strips[si];
