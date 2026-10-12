@@ -90,6 +90,48 @@ impl Driver {
 }
 
 #[test]
+fn dropdown_template_control_is_clickable_and_undoable() {
+    let mut d = Driver::demo("dropdown");
+    d.exec("playhead.set", json!({"seconds": 600}));
+    let source = d.exec("graphics.newText", json!({"text": "Editable dropdown test"}));
+    let exported = d.exec(
+        "graphics.template.export",
+        json!({"clip": source["clip"], "name": "Dropdown Test", "controls": [{
+            "id": "alignment", "name": "Alignment", "layer": 0, "param": "align", "kind": "dropdown",
+            "options": [{"label": "Left", "value": 0}, {"label": "Center", "value": 1}, {"label": "Right", "value": 2}]
+        }]}),
+    );
+    d.exec("playhead.set", json!({"seconds": 610}));
+    let applied = d.exec("graphics.template.apply", json!({"template": exported["path"], "values": {"alignment": "Left"}}));
+    d.ok("ui.set", json!({"workspace": "Captions and Graphics"}));
+    d.ok("ui.menu.invoke", json!({"id": "window.panel.EssentialGraphics"}));
+    d.ok("ui.set", json!({"gfxTemplates": {"tab": "edit"}}));
+    d.frames(4);
+    d.ok("ui.click", json!({"id": "gfxTemplates.control.alignment"}));
+    d.frames(3);
+    assert!(d.ids("gfxTemplates.control.alignment.option.").contains(&"gfxTemplates.control.alignment.option.2".into()));
+    d.shot("template-dropdown-open");
+    d.ok("ui.click", json!({"id": "gfxTemplates.control.alignment.option.2"}));
+    d.frames(3);
+    let result = d.exec("graphics.template.controls", json!({"clip": applied["clip"]}));
+    assert_eq!(result["controls"][0]["value"], 2);
+    d.shot("template-dropdown-selected");
+    d.exec("edit.undo", json!({}));
+    let result = d.exec("graphics.template.controls", json!({"clip": applied["clip"]}));
+    assert_eq!(result["controls"][0]["value"], 0);
+    d.ok("ui.menu.invoke", json!({"id": "graphics.template.export"}));
+    d.frames(3);
+    d.ok("ui.click", json!({"id": "exportTemplate.name"}));
+    d.ok("ui.key", json!({"key": "Cmd+A"}));
+    d.ok("ui.type", json!({"text": "Dropdown Copy"}));
+    d.ok("ui.click", json!({"id": "exportTemplate.ok"}));
+    d.frames(3);
+    let copy = d.exec("graphics.template.list", json!({"query": "Dropdown Copy", "source": "user"}));
+    assert_eq!(copy[0]["controls"][0]["kind"], "dropdown");
+    assert_eq!(copy[0]["controls"][0]["options"].as_array().unwrap().len(), 3);
+}
+
+#[test]
 fn browse_search_apply_and_edit_template_properties() {
     let mut d = Driver::demo("browse");
     d.ok("ui.set", json!({"workspace": "Captions and Graphics"}));

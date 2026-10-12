@@ -192,16 +192,41 @@ documented, versioned JSON (`filmcraft_project::gtemplate`):
 
 | Field | Meaning |
 |---|---|
-| `format`, `version` | `"filmcraft.graphicsTemplate"`, `1` (newer versions are refused) |
+| `format`, `version` | `"filmcraft.graphicsTemplate"`, `1` or `2` (newer versions are refused; dropdowns require 2) |
 | `id`, `name`, `category`, `description`, `author`, `license`, `tags` | library information |
 | `canvas`, `duration` | frame size it was designed for, default clip length (ticks) |
 | `layers` | the graphic's layers, exactly as in a project file, each with a `uid` |
 | `graphic` | roll / crawl and responsive time |
-| `controls` | editable properties: `{id, name, kind: text\|color\|slider\|checkbox\|font\|position, layer: uid, param, min, max}`; `param: "enabled"` is the layer's visibility |
+| `controls` | editable properties: `{id, name, kind: text\|color\|slider\|checkbox\|font\|position\|dropdown, layer: uid, param, min, max, options}`; `param: "enabled"` is the layer's visibility |
 | `resources.fonts` | optional embedded font files (base64) with their licence; registered on install |
 
 Placing a template on a sequence of another size scales and centres its layers (pin distances
 scale too).
+
+Version 2 adds named dropdowns. Their target parameter is a static `Choice`; each option has a
+unique integer `value`, a unique `label`, and optional `overrides`. An override identifies a layer
+by uid and replaces one complete parameter, including any keyframes. This lets a theme change
+multiple colours, or an alignment choice switch both positions and entrance/exit animation.
+For example, a control targeting a layer's `theme` parameter can use:
+
+```json
+{"id":"theme","name":"Theme","kind":"dropdown","layer":1,"param":"theme",
+ "options":[
+   {"label":"Dark","value":0,"overrides":[
+     {"layer":2,"param":"fill_color","value":{"value":{"Color":[1,1,1,1]}}}]},
+   {"label":"Light","value":1,"overrides":[
+     {"layer":2,"param":"fill_color","value":{"value":{"Color":[0.07,0.07,0.11,1]}}}]}]}
+```
+
+The corresponding layer parameters must already exist. `graphics.template.set` accepts either
+the option's integer value or its label (case-insensitive). Every override is validated before
+an edit; an invalid batch changes nothing, and a successful batch is one undo step. Position
+and scale overrides fit the destination canvas along with ordinary layer parameters. Exporting
+a placed template without an explicit `controls` list preserves its controls and option animation.
+The export command accepts `options` on explicitly supplied dropdown controls as well. Simple
+templates continue to export as version 1; templates with dropdowns export as version 2.
+The export dialog retains existing template controls, including their options. An export entry
+`{"sourceControl":"theme","name":"Theme"}` selects an existing control without redefining it.
 
 **FilmCraft never reads or imports Adobe `.mogrt` files** (or any other application's template
 packages): Install refuses `.mogrt` paths without opening them, and the reader rejects ZIP
@@ -258,7 +283,43 @@ screen; 0° runs left to right across the layer's own bounds, and the ramp turns
 as a solid; the rest of the text keeps the ramp. A singular layer transform falls back to the
 solid fill colour.
 
-## Not yet
+## Declarative template relationships (format 2)
+
+Format 2 also supports `graphic.rig.bindings`: ordered numeric stack expressions which target
+a layer parameter and a `value`, `x`, or `y` component. Operations are tagged with `op`:
+`constant` (`value`), `parameter` (`layer`, `param`, `component`), `bounds` (`layer`, `edge` 0–3),
+`add`, `subtract`, `multiply`, `divide`, `min`, `max`, `round`, `equal`, and `select`.
+`select` consumes condition, true value, false value. Bounds are local layout bounds; transforms
+are excluded. Bindings read animated parameters at the current graphic time and run in order
+against a private copy. They do not change authored parameters or undo history. Later bindings
+can read earlier results. The rig's `scale` and `offset` map computed positions/scales when the
+template is fitted to another canvas. Expressions cannot execute scripts or access files.
+Limits are 512 bindings and 512 operations per expression; division by zero and nonfinite or
+out-of-range results fail evaluation and emit a render diagnostic.
+
+Optional layer metadata (`layer`, alongside `uid`) includes:
+
+- `paths`: compound cubic `MaskPath` contours; opposite winding cuts holes. Maximum 256 contours
+  and 16,384 vertices total. These are preserved on export; the pen tool still authors polygons.
+- `clip_to`: another layer's UID, used as an alpha matte. A hidden matte is evaluated without
+  being painted. Matte chains are limited to 16 layers; cycles and deeper chains are rejected.
+- `pair_spacing`: `{family, style, pairs}`. Each two-character key maps to an additional spacing
+  adjustment in 1/1000 em. The table applies to adjacent LTR single-character clusters using that
+  font, scales with font size, and is retained when text is edited. Unlisted pairs use metric
+  kerning. Font fallback, other fonts, ligatures and complex-script shaping retain native layout.
+- `gradient_alpha`: ordered `[position, opacity]` stops in [0,1], overriding gradient endpoint
+  opacity. Maximum 4,096 stops, interpolated linearly.
+- `uppercase_pattern`: a bounded Rust regular expression selecting ASCII text to uppercase for
+  display. Source text and byte offsets remain unchanged. Maximum pattern size is 4,096 bytes;
+  the transform is skipped on text larger than 65,536 bytes.
+
+Templates with these extensions require version 2. There is no general After Effects expression
+interpreter or Adobe rasterizer; translating a source design requires separate visual validation.
+`graphic.encodedBlending` optionally blends the graphic's layers in encoded sRGB and converts
+the composed group to linear premultiplied pixels for the sequence compositor. The default is
+linear blending. This option does not change the sequence's blend space with underlying footage.
+
+## Remaining limitations
 
 Mask-with-text, per-layer blend modes, Bézier curves in the pen tool (paths are polygons), media
 layers inside graphics, and template controls grouped into folders.

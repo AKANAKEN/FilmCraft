@@ -41,6 +41,75 @@ fn clip_of(v: &Value) -> ClipId {
 }
 
 #[test]
+fn dropdown_changes_linked_properties_atomically_and_survives_export() {
+    use filmcraft_geom::Vec2;
+    use filmcraft_project::gtemplate::{ControlKind, GraphicsTemplate, TemplateControl, TemplateOption, TemplateOverride, builtin_templates, layer_uid};
+    use filmcraft_project::{Keyframe, Param};
+    let mut s = demo("gt-dropdown");
+    let mut t = builtin_templates().into_iter().find(|t| t.id == "builtin:title-centered").unwrap();
+    t.version = 2;
+    t.id = "user:test-theme".into();
+    let uid = layer_uid(&t.layers[0]);
+    t.layers[0].params.insert("theme".into(), Param::new(ParamValue::Choice(0)));
+    let before_color = t.layers[0].params["fill_color"].clone();
+    let mut motion = Param::new(ParamValue::Vec2(Vec2::new(100.0, 200.0)));
+    motion.keyframes =
+        vec![Keyframe::new(Tick::ZERO, motion.value.clone()), Keyframe::new(Tick::from_seconds_f64(1.0), ParamValue::Vec2(Vec2::new(400.0, 200.0)))];
+    t.controls.push(TemplateControl {
+        id: "theme".into(),
+        name: "Theme".into(),
+        kind: ControlKind::Dropdown,
+        layer: uid,
+        param: "theme".into(),
+        options: vec![
+            TemplateOption {
+                label: "Original".into(),
+                value: 0,
+                overrides: vec![TemplateOverride { layer: uid, param: "fill_color".into(), value: before_color }],
+            },
+            TemplateOption {
+                label: "Light".into(),
+                value: 7,
+                overrides: vec![
+                    TemplateOverride { layer: uid, param: "fill_color".into(), value: Param::new(ParamValue::Color([0.1, 0.1, 0.1, 1.0])) },
+                    TemplateOverride { layer: uid, param: "position".into(), value: motion.clone() },
+                ],
+            },
+        ],
+        ..Default::default()
+    });
+    let path = tmp_dir("gt-dropdown-source").join("theme.fcgt");
+    std::fs::write(&path, t.to_json()).unwrap();
+    let c = clip_of(&s.execute("graphics.template.apply", json!({"template": path})).unwrap());
+    let original = item(&s, c);
+    let undo = s.history.undo.len();
+    for invalid in [json!(-1), json!(0.5), json!(99), json!("missing"), json!(null)] {
+        assert!(s.execute("graphics.template.set", json!({"clip": c.0, "control": "theme", "value": invalid})).is_err());
+        assert_eq!(item(&s, c), original);
+        assert_eq!(s.history.undo.len(), undo);
+    }
+    assert!(s.execute("graphics.template.set", json!({"clip": c.0, "values": {"theme": "Light", "zz_missing": 1}})).is_err());
+    assert_eq!(item(&s, c), original, "an invalid batch must leave all layers unchanged");
+    assert_eq!(s.history.undo.len(), undo);
+    s.execute("graphics.template.set", json!({"clip": c.0, "control": "theme", "value": "light"})).unwrap();
+    let changed = item(&s, c);
+    let l = changed.effects.iter().find(|e| layer_uid(e) == uid).unwrap();
+    // Demo is 1920x1080, matching the authored template.
+    assert_eq!(l.params["position"], motion);
+    assert_eq!(l.params["theme"].value, ParamValue::Choice(7));
+    assert_eq!(l.params["fill_color"].value, ParamValue::Color([0.1, 0.1, 0.1, 1.0]));
+    assert_eq!(s.history.undo.len(), undo + 1);
+    let exported = s.execute("graphics.template.export", json!({"clip": c.0, "name": "Dropdown Copy"})).unwrap();
+    let saved = GraphicsTemplate::from_bytes(&std::fs::read(exported["path"].as_str().unwrap()).unwrap()).unwrap();
+    assert_eq!(saved.version, 2);
+    assert_eq!(saved.controls, t.controls);
+    let serialized = serde_json::to_string(&changed).unwrap();
+    assert_eq!(serde_json::from_str::<TrackItem>(&serialized).unwrap(), changed);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(item(&s, c), original);
+}
+
+#[test]
 fn template_export_install_apply_round_trip() {
     let mut s = demo("gt-export");
     let c = clip_of(&s.execute("graphics.newText", json!({"text": "Headline", "position": [200, 900]})).unwrap());
