@@ -144,10 +144,14 @@ impl Encoder {
 
         if self.config.spatial_aq && !frame.y.is_empty() {
             let var = intra::block_variance(frame.y, frame.y_stride, self.config.width as usize, self.config.height as usize);
-            if var > 2000 {
-                qindex = qindex.saturating_add(4);
-            } else if var < 200 {
-                qindex = qindex.saturating_sub(4).max(16);
+            if var > 3000 {
+                qindex = qindex.saturating_add(6);
+            } else if var > 1500 {
+                qindex = qindex.saturating_add(3);
+            } else if var < 80 {
+                qindex = qindex.saturating_sub(6).max(12);
+            } else if var < 250 {
+                qindex = qindex.saturating_sub(3).max(16);
             }
         }
 
@@ -171,15 +175,21 @@ impl Encoder {
         let total_sbs = (sb_cols as usize).saturating_mul(sb_rows as usize);
         let mut sym = symbol::SymbolEncoder::with_capacity(total_sbs.saturating_mul(4).max(64));
 
+        #[derive(Clone, Copy, Debug)]
+        struct SbAnalysis {
+            mode: u8,
+            split: bool,
+            is_flat: bool,
+        }
+
         // Row Analysis (Wavefront/Row parallelism):
-        // If Preset != Speed, compute the best intra mode for each superblock row.
-        // When `threads` feature is enabled, rows are analyzed concurrently across cores using Rayon.
-        let analyze_row = |r: u32| -> Vec<u8> {
+        // Compute best intra mode, quad-tree split decision, and flat-skip flag concurrently across CPU cores.
+        let analyze_row = |r: u32| -> Vec<SbAnalysis> {
             let y0 = (r as usize) * 64;
             let block_h = 64.min((self.config.height as usize).saturating_sub(y0));
             let avail_u = r > 0;
 
-            let mut row_modes = Vec::with_capacity(sb_cols as usize);
+            let mut row_analyses = Vec::with_capacity(sb_cols as usize);
             for c in 0..sb_cols {
                 let avail_l = c > 0;
                 let x0 = (c as usize) * 64;
@@ -204,17 +214,32 @@ impl Encoder {
                     None
                 };
 
-                let mode = if let Some(src_sub) = frame.y.get(y0 * frame.y_stride + x0..) {
-                    intra::choose_best_intra_mode(src_sub, frame.y_stride, block_w, block_h, above_slice, left_slice)
+                let src_sub = frame.y.get(y0 * frame.y_stride + x0..);
+                let mode = if self.config.preset != Preset::Speed {
+                    if let Some(src) = src_sub {
+                        intra::choose_best_intra_mode(src, frame.y_stride, block_w, block_h, above_slice, left_slice)
+                    } else {
+                        intra::DC_PRED
+                    }
                 } else {
                     intra::DC_PRED
                 };
-                row_modes.push(mode);
+
+                let split = should_split_64x64(frame.y, frame.y_stride, x0, y0, block_w, block_h, self.config.preset);
+
+                let is_flat = if let Some(src) = src_sub {
+                    let var = intra::block_variance(src, frame.y_stride, block_w, block_h);
+                    var <= 16
+                } else {
+                    false
+                };
+
+                row_analyses.push(SbAnalysis { mode, split, is_flat });
             }
-            row_modes
+            row_analyses
         };
 
-        let precomputed_modes: Vec<Vec<u8>> = if self.config.preset != Preset::Speed {
+        let precomputed_analyses: Vec<Vec<SbAnalysis>> = {
             #[cfg(feature = "threads")]
             {
                 use rayon::prelude::*;
@@ -224,8 +249,6 @@ impl Encoder {
             {
                 (0..sb_rows).map(analyze_row).collect()
             }
-        } else {
-            Vec::new()
         };
 
         let width = self.config.width as usize;
@@ -305,7 +328,13 @@ impl Encoder {
                 let left_is_split = avail_l && grid_is_split.get(r32 * cols32 + c32.saturating_sub(1)).copied().unwrap_or(false);
                 let part_ctx = ((left_is_split as usize) * 2) + (above_is_split as usize);
 
-                let split = should_split_64x64(frame.y, frame.y_stride, x0, y0, block_w, block_h, self.config.preset);
+                let sb_info = precomputed_analyses.get(sb_r).and_then(|row| row.get(sb_c)).copied().unwrap_or(SbAnalysis {
+                    mode: intra::DC_PRED,
+                    split: false,
+                    is_flat: false,
+                });
+
+                let split = sb_info.split;
 
                 if !split {
                     sym.write_symbol_no_update(tables::PARTITION_NONE, &tables::DEFAULT_PARTITION_W64_CDF[part_ctx]);
@@ -320,61 +349,105 @@ impl Encoder {
                     let actx = tables::INTRA_MODE_CONTEXT.get(above_mode as usize).copied().unwrap_or(0) as usize;
                     let lctx = tables::INTRA_MODE_CONTEXT.get(left_mode as usize).copied().unwrap_or(0) as usize;
 
-                    let y_mode = if self.config.preset != Preset::Speed {
-                        precomputed_modes.get(sb_r).and_then(|row| row.get(sb_c).copied()).unwrap_or(intra::DC_PRED)
-                    } else {
-                        intra::DC_PRED
-                    };
-
-                    let (dc_level, is_neg) = compute_and_reconstruct_plane_dc(
-                        frame.y,
-                        frame.y_stride,
-                        &mut self.recon_y,
-                        width,
-                        x0,
-                        y0,
-                        block_w,
-                        block_h,
-                        y_mode,
-                        avail_u,
-                        avail_l,
-                        qindex,
-                        512,
-                    );
+                    let y_mode = sb_info.mode;
 
                     let uv_mode = if y_mode == intra::V_PRED || y_mode == intra::H_PRED { y_mode } else { intra::DC_PRED };
 
-                    let (u_dc_level, u_is_neg) = compute_and_reconstruct_plane_dc(
-                        frame.u,
-                        frame.uv_stride,
-                        &mut self.recon_u,
-                        uv_width,
-                        x0 / 2,
-                        y0 / 2,
-                        (block_w / 2).max(1),
-                        (block_h / 2).max(1),
-                        uv_mode,
-                        avail_u,
-                        avail_l,
-                        qindex,
-                        256,
-                    );
-
-                    let (v_dc_level, v_is_neg) = compute_and_reconstruct_plane_dc(
-                        frame.v,
-                        frame.uv_stride,
-                        &mut self.recon_v,
-                        uv_width,
-                        x0 / 2,
-                        y0 / 2,
-                        (block_w / 2).max(1),
-                        (block_h / 2).max(1),
-                        uv_mode,
-                        avail_u,
-                        avail_l,
-                        qindex,
-                        256,
-                    );
+                    let (dc_level, is_neg, u_dc_level, u_is_neg, v_dc_level, v_is_neg) = if sb_info.is_flat && self.config.preset == Preset::Speed {
+                        compute_and_reconstruct_plane_dc(
+                            frame.y,
+                            frame.y_stride,
+                            &mut self.recon_y,
+                            width,
+                            x0,
+                            y0,
+                            block_w,
+                            block_h,
+                            y_mode,
+                            avail_u,
+                            avail_l,
+                            qindex,
+                            512,
+                        );
+                        compute_and_reconstruct_plane_dc(
+                            frame.u,
+                            frame.uv_stride,
+                            &mut self.recon_u,
+                            uv_width,
+                            x0 / 2,
+                            y0 / 2,
+                            (block_w / 2).max(1),
+                            (block_h / 2).max(1),
+                            uv_mode,
+                            avail_u,
+                            avail_l,
+                            qindex,
+                            256,
+                        );
+                        compute_and_reconstruct_plane_dc(
+                            frame.v,
+                            frame.uv_stride,
+                            &mut self.recon_v,
+                            uv_width,
+                            x0 / 2,
+                            y0 / 2,
+                            (block_w / 2).max(1),
+                            (block_h / 2).max(1),
+                            uv_mode,
+                            avail_u,
+                            avail_l,
+                            qindex,
+                            256,
+                        );
+                        (0, false, 0, false, 0, false)
+                    } else {
+                        let (dc, neg) = compute_and_reconstruct_plane_dc(
+                            frame.y,
+                            frame.y_stride,
+                            &mut self.recon_y,
+                            width,
+                            x0,
+                            y0,
+                            block_w,
+                            block_h,
+                            y_mode,
+                            avail_u,
+                            avail_l,
+                            qindex,
+                            512,
+                        );
+                        let (u_dc, u_neg) = compute_and_reconstruct_plane_dc(
+                            frame.u,
+                            frame.uv_stride,
+                            &mut self.recon_u,
+                            uv_width,
+                            x0 / 2,
+                            y0 / 2,
+                            (block_w / 2).max(1),
+                            (block_h / 2).max(1),
+                            uv_mode,
+                            avail_u,
+                            avail_l,
+                            qindex,
+                            256,
+                        );
+                        let (v_dc, v_neg) = compute_and_reconstruct_plane_dc(
+                            frame.v,
+                            frame.uv_stride,
+                            &mut self.recon_v,
+                            uv_width,
+                            x0 / 2,
+                            y0 / 2,
+                            (block_w / 2).max(1),
+                            (block_h / 2).max(1),
+                            uv_mode,
+                            avail_u,
+                            avail_l,
+                            qindex,
+                            256,
+                        );
+                        (dc, neg, u_dc, u_neg, v_dc, v_neg)
+                    };
 
                     let has_residual = dc_level > 0 || u_dc_level > 0 || v_dc_level > 0;
 
@@ -808,17 +881,40 @@ fn compute_and_reconstruct_plane_dc(
         if is_negative { -mag } else { mag }
     };
 
-    for i in 0..block_h {
-        for j in 0..block_w {
-            let pred_pixel = match mode {
-                intra::V_PRED if avail_u && y0 > 0 => recon_plane.get((y0 - 1) * recon_stride + x0 + j).copied().unwrap_or(128) as i64,
-                intra::H_PRED if avail_l && x0 > 0 => recon_plane.get((y0 + i) * recon_stride + x0.saturating_sub(1)).copied().unwrap_or(128) as i64,
-                _ => pred_mean,
-            };
-            let recon_pixel = (pred_pixel + recon_shift).clamp(0, 255) as u8;
-            let dst_idx = (y0 + i) * recon_stride + x0 + j;
-            if dst_idx < recon_plane.len() {
-                recon_plane[dst_idx] = recon_pixel;
+    let recon_val = (pred_mean + recon_shift).clamp(0, 255) as u8;
+    match mode {
+        intra::V_PRED if avail_u && y0 > 0 => {
+            let above_off = (y0 - 1) * recon_stride + x0;
+            if let Some(above_slice) = recon_plane.get(above_off..above_off + block_w) {
+                let mut temp = [0u8; 64];
+                let len = block_w.min(64);
+                for (dst, &src) in temp[..len].iter_mut().zip(&above_slice[..len]) {
+                    *dst = (src as i64 + recon_shift).clamp(0, 255) as u8;
+                }
+                for i in 0..block_h {
+                    let row_off = (y0 + i) * recon_stride + x0;
+                    if let Some(row) = recon_plane.get_mut(row_off..row_off + len) {
+                        row.copy_from_slice(&temp[..len]);
+                    }
+                }
+            }
+        }
+        intra::H_PRED if avail_l && x0 > 0 => {
+            for i in 0..block_h {
+                let left_val = recon_plane.get((y0 + i) * recon_stride + x0.saturating_sub(1)).copied().unwrap_or(128) as i64;
+                let val = (left_val + recon_shift).clamp(0, 255) as u8;
+                let row_off = (y0 + i) * recon_stride + x0;
+                if let Some(row) = recon_plane.get_mut(row_off..row_off + block_w) {
+                    row.fill(val);
+                }
+            }
+        }
+        _ => {
+            for i in 0..block_h {
+                let row_off = (y0 + i) * recon_stride + x0;
+                if let Some(row) = recon_plane.get_mut(row_off..row_off + block_w) {
+                    row.fill(recon_val);
+                }
             }
         }
     }
