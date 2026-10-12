@@ -51,7 +51,9 @@
 //!   [`IN_FLIGHT_BUDGET`]: `2 * batch * frame_bytes <= budget`, at least one frame
 //!   ([`overlap_batch`]). A batch never grows over what it was without overlap, so the peak is the
 //!   old peak plus at most the finished frames of the batch being encoded (half the budget,
-//!   256 MiB); a 4K HDR export (100 MB a frame) runs 2-frame batches and 4K SDR 8-frame ones instead of 16. Frames are
+//!   256 MiB); a 4K HDR export (100 MB a frame) runs 2-frame batches and 4K SDR 8-frame ones instead of 16. A frame
+//!   counts as 4:2:0 (12 MB at 4K, so 16-frame batches) only after a batch came back all 4:2:0 from the GPU
+//!   ([`in_flight_frame_bytes`]): until then, and after any batch with an RGBA frame in it, as RGBA. Frames are
 //!   dropped as soon as they are encoded.
 //! * **Two-pass** exports overlap in the analysis pass (encode only) and in the real pass; the
 //!   prefetch never runs past the end of a pass.
@@ -99,6 +101,18 @@ enum Frame {
 pub(crate) fn yuv_frame_bytes(w: u32, h: u32) -> u64 {
     let (w, h) = (u64::from(w), u64::from(h));
     w.saturating_mul(h).saturating_add(w.div_ceil(2).saturating_mul(h.div_ceil(2)).saturating_mul(2))
+}
+
+/// Bytes a frame counts for in the in-flight budget: 4:2:0 only once a batch has come back all
+/// 4:2:0 (`yuv_batch`), else the RGBA / HDR size (frames the GPU declines, CPU-planned frames and
+/// every frame after the GPU device fails arrive as RGBA even in a 4:2:0 export).
+pub(crate) fn in_flight_frame_bytes(w: u32, h: u32, hdr: bool, yuv_batch: bool) -> u64 {
+    if yuv_batch && !hdr { yuv_frame_bytes(w, h) } else { frame_bytes(w, h, hdr) }
+}
+
+/// Whether every frame of a (non-empty) batch is 4:2:0.
+fn all_yuv(frames: &[Frame]) -> bool {
+    !frames.is_empty() && frames.iter().all(|f| matches!(f, Frame::Yuv(_)))
 }
 
 /// Bytes of one [`Frame`] of a `w` x `h` export (RGBA8, or three f32 per pixel for HDR).
@@ -184,6 +198,8 @@ pub struct Exporter {
     venc: Box<dyn VideoEncoder>,
     /// Frames go to the encoder as 4:2:0 from the GPU renderer where it can ([`Pipeline::yuv_eligible`]).
     yuv: bool,
+    /// The last batch came back all 4:2:0, so batches are sized by the 4:2:0 frame size.
+    yuv_batch: bool,
     aenc: Option<Box<dyn AudioEncoder>>,
     audio: Option<AudioOut>,
     /// The loudness pass ran (or is not needed).
@@ -296,6 +312,7 @@ impl Exporter {
             overlapped_steps: 0,
             brand,
             yuv,
+            yuv_batch: false,
             venc,
             aenc,
             audio,
@@ -359,7 +376,7 @@ impl Exporter {
     fn batch_len(&self) -> i64 {
         let batch = self.pipe.render_batch_limit(self.batch);
         if self.overlapping() {
-            let bytes = if self.yuv { yuv_frame_bytes(self.pipe.w, self.pipe.h) } else { frame_bytes(self.pipe.w, self.pipe.h, self.pipe.hdr_out) };
+            let bytes = in_flight_frame_bytes(self.pipe.w, self.pipe.h, self.pipe.hdr_out, self.yuv && self.yuv_batch);
             overlap_batch(batch, bytes, self.budget)
         } else {
             batch
@@ -568,6 +585,7 @@ impl Exporter {
         if end <= f {
             return Err(ExportError::Encode("internal: an empty batch was rendered".into()));
         }
+        self.yuv_batch = all_yuv(&frames);
         // the batch after this one, when the pool can render it while this one is encoded
         let plan =
             (end < self.f1 && self.overlapping() && !progress.cancel.load(Ordering::Relaxed)).then(|| (end, end.saturating_add(self.batch_len()).min(self.f1)));
@@ -680,6 +698,18 @@ mod tests {
     use super::*;
 
     const MIB: u64 = 1 << 20;
+
+    #[test]
+    fn in_flight_budget_counts_rgba_until_a_batch_came_back_all_yuv() {
+        let rgba = frame_bytes(3840, 2160, false);
+        assert_eq!(in_flight_frame_bytes(3840, 2160, false, false), rgba, "not confirmed: the worst case");
+        assert_eq!(in_flight_frame_bytes(3840, 2160, false, true), yuv_frame_bytes(3840, 2160), "a batch came back all 4:2:0");
+        assert_eq!(in_flight_frame_bytes(3840, 2160, true, true), frame_bytes(3840, 2160, true), "HDR frames are never 4:2:0");
+        let yuv = |w, h| Frame::Yuv(filmcraft_frame::VideoFrame::rgba8(w, h, vec![0; (w * h * 4) as usize]));
+        assert!(all_yuv(&[yuv(2, 2), yuv(2, 2)]));
+        assert!(!all_yuv(&[yuv(2, 2), Frame::Rgba(vec![0; 16])]), "one RGBA frame in the batch");
+        assert!(!all_yuv(&[]), "an empty batch confirms nothing");
+    }
 
     #[test]
     fn frame_bytes_by_format() {

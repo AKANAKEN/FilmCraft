@@ -5,7 +5,7 @@
 //! registry is process-wide.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use filmcraft_export::{ExportSettings, Format, FrameRenderer, GpuRendering, Progress, export, gpu_render_stats, register_frame_renderer};
@@ -17,6 +17,9 @@ use filmcraft_time::{FrameRate, Tick, TimeRange};
 
 /// 0: YUV for every frame, 1: never, 2: every other frame.
 static MODE: AtomicU8 = AtomicU8::new(0);
+/// Times the pipeline asked the renderer for a 4:2:0 frame: what eligibility decided, whatever
+/// the renderer answered.
+static YUV_CALLS: AtomicU64 = AtomicU64::new(0);
 static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// The pictures the fake renderer hands out, keyed by (tick, render scale bits): the CPU reference
@@ -40,14 +43,18 @@ fn yuv_of(img: &filmcraft_render::Image) -> filmcraft_frame::VideoFrame {
     }
 }
 
-/// Fill the cache with every frame of the sequence at full scale.
+/// Fill the cache with every frame of the sequence at full and half scale (the render scales the
+/// exports below ask for).
 fn prepare(p: &Project, seq: ItemId, m: &SourceMap) {
     let mut c = Cache::new();
-    for f in 0..24 {
-        let t = FrameRate::FPS_24.tick_of(f);
-        let img = filmcraft_render::render_sequence(p, seq, t, RenderOptions::default(), m);
-        let yuv = yuv_of(&img);
-        c.insert((t.0, RenderOptions::default().scale.to_bits()), (img, yuv));
+    for scale in [1.0f32, 0.5] {
+        let opts = RenderOptions { scale, ..RenderOptions::default() };
+        for f in 0..24 {
+            let t = FrameRate::FPS_24.tick_of(f);
+            let img = filmcraft_render::render_sequence(p, seq, t, opts, m);
+            let yuv = yuv_of(&img);
+            c.insert((t.0, scale.to_bits()), (img, yuv));
+        }
     }
     *CACHE.lock().unwrap_or_else(PoisonError::into_inner) = Some(c);
 }
@@ -66,6 +73,7 @@ impl FrameRenderer for Perfect {
     }
     fn render_yuv420(&mut self, _: &Project, _: ItemId, t: Tick, opts: RenderOptions, _: &dyn SourceProvider) -> Option<filmcraft_frame::VideoFrame> {
         self.0 += 1;
+        YUV_CALLS.fetch_add(1, Ordering::SeqCst);
         match MODE.load(Ordering::SeqCst) {
             1 => return None,
             2 if self.0.is_multiple_of(2) => return None,
@@ -171,15 +179,47 @@ fn ineligible_exports_never_take_the_yuv_path() {
     let mut s = settings("letterbox.mp4", GpuRendering::Auto);
     s.frame_size = Some((320, 240));
     cases.push(("letterbox frame size", s));
-    let mut s = settings("scaled.mp4", GpuRendering::Auto);
-    s.frame_size = Some((160, 90));
-    cases.push(("scaled", s));
+    let mut s = settings("pillarbox.mp4", GpuRendering::Auto);
+    s.frame_size = Some((240, 180));
+    cases.push(("scaled into another aspect (pillarbox)", s));
+    let overlay = tmp("overlay.png");
+    image::RgbaImage::from_pixel(16, 16, image::Rgba([255, 0, 0, 200])).save(&overlay).unwrap();
+    let mut s = settings("image-overlay.mp4", GpuRendering::Auto);
+    s.effects.image_overlay.enabled = true;
+    s.effects.image_overlay.path = overlay;
+    cases.push(("image overlay", s));
     cases.push(("ProRes (RGBA encoder)", ExportSettings { format: Format::ProRes, path: tmp("prores.mov"), ..settings("x", GpuRendering::Auto) }));
     cases.push(("GPU rendering Off", settings("off2.mp4", GpuRendering::Off)));
     for (what, s) in &cases {
+        let calls = YUV_CALLS.load(Ordering::SeqCst);
         assert_eq!(run(s), 0, "{what}");
+        assert_eq!(YUV_CALLS.load(Ordering::SeqCst) - calls, 0, "{what}: the pipeline must not even ask the renderer for 4:2:0");
     }
     MODE.store(1, Ordering::SeqCst);
     assert_eq!(run(&settings("declined.mp4", GpuRendering::Auto)), 0, "renderer returns None");
     MODE.store(0, Ordering::SeqCst);
+}
+
+/// Exports that change size without letterboxing (the render itself is scaled) and two-pass
+/// exports are eligible: every frame is asked for as 4:2:0 and the file equals GPU Rendering Off.
+#[test]
+fn scaled_and_two_pass_exports_take_the_path_and_give_the_same_file() {
+    let _g = setup();
+    MODE.store(0, Ordering::SeqCst);
+    let mut cases: Vec<(&str, ExportSettings, ExportSettings, u64)> = Vec::new();
+    let (mut off, mut auto) = (settings("half-off.mp4", GpuRendering::Off), settings("half-auto.mp4", GpuRendering::Auto));
+    off.frame_size = Some((160, 90));
+    auto.frame_size = Some((160, 90));
+    cases.push(("half size (render scale 0.5)", off, auto, 24));
+    let (mut off, mut auto) = (settings("2pass-off.mp4", GpuRendering::Off), settings("2pass-auto.mp4", GpuRendering::Auto));
+    off.bitrate_mode = filmcraft_export::BitrateMode::Vbr2Pass;
+    auto.bitrate_mode = filmcraft_export::BitrateMode::Vbr2Pass;
+    cases.push(("two-pass VBR (both passes)", off, auto, 48));
+    for (what, off, auto, want) in &cases {
+        run(off);
+        let calls = YUV_CALLS.load(Ordering::SeqCst);
+        assert_eq!(run(auto), *want, "{what}: frames through the 4:2:0 path");
+        assert_eq!(YUV_CALLS.load(Ordering::SeqCst) - calls, *want, "{what}: asked for 4:2:0");
+        assert_eq!(std::fs::read(&off.path).unwrap(), std::fs::read(&auto.path).unwrap(), "{what}: same bytes as the CPU path");
+    }
 }

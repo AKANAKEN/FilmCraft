@@ -137,9 +137,11 @@ Each codec README has the full fixture matrix and the measured results.
   within ±1, the exact share printed; `export_renderer.rs` checks the same through the real
   renderer, and `tests/export_yuv_pipeline.rs` a whole H.264 export (every frame through the pass,
   decoding like the CPU export). `crates/export/tests/gpu_yuv_path.rs` drives the export pipeline
-  with a CPU-exact fake renderer: eligible exports take every frame and give the same file as GPU
-  Rendering Off, a renderer declining every other frame too, and letterbox, scaling, overlays,
-  the limiter, ProRes and Off never take the path. All skip without a GPU adapter.
+  with a CPU-exact fake renderer that counts how often it is asked for 4:2:0: eligible exports
+  (full and half size, two-pass) take every frame and give the same file as GPU Rendering Off, a
+  renderer declining every other frame too, and letterbox, pillarbox, image / name / timecode
+  overlays, the limiter, ProRes and Off are never asked. The GPU tests skip without an adapter;
+  `gpu_yuv_path.rs` needs none.
 - **Golden images** (`crates/golden`, a test-only crate): `tests/golden.rs` builds small procedural
   projects (demo-generator footage, bars, no media files) at 320×180 and renders one frame of each
   through the CPU compositor: Motion transform + opacity, four blend modes (Multiply, Screen,

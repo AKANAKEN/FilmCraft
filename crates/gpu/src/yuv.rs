@@ -74,11 +74,31 @@ fn grown(device: &wgpu::Device, slot: &mut Option<(wgpu::Buffer, u64)>, size: u6
 }
 
 impl YuvPass {
-    pub(crate) fn new(device: &wgpu::Device) -> Self {
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("filmcraft-yuv"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("yuv.wgsl").into()),
-        });
+    /// The pass, or None when this device cannot build it.
+    pub(crate) fn try_new(device: &wgpu::Device) -> Option<Self> {
+        Self::try_new_from(device, include_str!("yuv.wgsl"))
+    }
+
+    /// [`try_new`](Self::try_new) for a given shader source. The pipeline is built inside a
+    /// validation error scope: a device that rejects it (a backend whose shader compiler or
+    /// storage-buffer support differs) gives None instead of an uncaptured error, which would
+    /// retire the shared export device and with it all GPU export rendering.
+    pub(crate) fn try_new_from(device: &wgpu::Device, source: &str) -> Option<Self> {
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let pass = Self::build(device, source);
+        match crate::poll_now(scope.pop()) {
+            Some(None) => Some(pass),
+            Some(Some(e)) => {
+                log::warn!("GPU 4:2:0 export output unavailable on this device, converting on the CPU: {e}");
+                None
+            }
+            None => None,
+        }
+    }
+
+    fn build(device: &wgpu::Device, source: &str) -> Self {
+        let shader =
+            device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("filmcraft-yuv"), source: wgpu::ShaderSource::Wgsl(source.into()) });
         let buf =
             |read_only| wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only }, has_dynamic_offset: false, min_binding_size: None };
         let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -255,7 +275,7 @@ mod tests {
             wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
         );
         let view = tex.create_view(&Default::default());
-        let mut pass = YuvPass::new(&device);
+        let mut pass = YuvPass::try_new(&device)?;
         let mut enc = device.create_command_encoder(&Default::default());
         let l = pass.record(&device, &mut enc, &view, w, h)?;
         queue.submit([enc.finish()]);
@@ -282,6 +302,20 @@ mod tests {
 
     fn rgba16(px: impl IntoIterator<Item = [f32; 4]>) -> Vec<u16> {
         px.into_iter().flat_map(|p| p.map(crate::f32_to_f16)).collect()
+    }
+
+    /// A pass the device cannot build (here: a shader that does not compile) is None, not an
+    /// uncaptured validation error, which would retire the shared export device (and panics on
+    /// this test device); a valid pass on the same device still works afterwards.
+    #[test]
+    fn a_pass_the_device_rejects_is_contained() {
+        static DEVICE: std::sync::OnceLock<Option<(wgpu::Device, wgpu::Queue)>> = std::sync::OnceLock::new();
+        let Some((device, _)) = DEVICE.get_or_init(crate::blend_tests::device).clone() else {
+            eprintln!("SKIPPED (gpu yuv): no adapter");
+            return;
+        };
+        assert!(YuvPass::try_new_from(&device, "this is not WGSL").is_none());
+        assert!(YuvPass::try_new(&device).is_some(), "the real shader builds");
     }
 
     #[test]

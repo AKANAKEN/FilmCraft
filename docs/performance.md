@@ -141,8 +141,9 @@ tolerance, not bit for bit, and Off keeps exports byte-reproducible on every mac
 
 ## Results (GPU export as 4:2:0: colour conversion on the GPU, #30)
 
-With GPU Rendering on, an export whose frames need no CPU work after compositing (no letterbox or
-scaling, overlays, video limiter, HDR or alpha) asks the GPU renderer for the encoder's input
+With GPU Rendering on, an export whose frames need no CPU work after compositing (no letterbox,
+pillarbox or resample into the frame size, overlays, video limiter, HDR or alpha; a size change the
+render scale makes by itself is fine) asks the GPU renderer for the encoder's input
 directly: `crates/gpu/src/yuv.wgsl` converts the linear accumulator to 8-bit BT.709 limited 4:2:0
 with `Image::over_black_rgba8`'s table and `rgba_to_yuv420_8`'s formulas (within ±1 code; 100 % of
 bytes exact on solids and odd sizes, 99.97 % on a ramp across every table entry), and only the

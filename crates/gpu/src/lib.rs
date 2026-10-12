@@ -83,8 +83,8 @@ pub struct GpuCompositor {
     backdrop: Option<(wgpu::Texture, wgpu::TextureView, (u32, u32))>,
     output: Option<(wgpu::Texture, wgpu::TextureView, (u32, u32))>,
     accum_readback_buf: Option<(wgpu::Buffer, u64)>,
-    /// The YUV export pass (built on first use).
-    yuv: Option<yuv::YuvPass>,
+    /// The YUV export pass: None until first used, then Some(None) when this device cannot build it.
+    yuv: Option<Option<yuv::YuvPass>>,
     uploads: HashMap<(usize, u32, u32), Uploaded>,
     clock: u64,
     dummy: wgpu::TextureView,
@@ -997,7 +997,7 @@ impl GpuCompositor {
         let (_, view, (w, h)) = self.accum.as_ref()?;
         let (view, w, h) = (view.clone(), *w, *h);
         let device = self.device.clone();
-        let pass = self.yuv.get_or_insert_with(|| yuv::YuvPass::new(&device));
+        let pass = self.yuv.get_or_insert_with(|| yuv::YuvPass::try_new(&device)).as_mut()?;
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("filmcraft-yuv-export") });
         let l = pass.record(&device, &mut enc, &view, w, h)?;
         self.queue.submit([enc.finish()]);
@@ -1222,7 +1222,7 @@ const UNIFORM_FLOATS: usize = 52;
 
 /// Poll a future once: wgpu's native error scopes resolve immediately. `None` if it is still
 /// pending (then the caller assumes the worst).
-fn poll_now<F: std::future::Future>(f: F) -> Option<F::Output> {
+pub(crate) fn poll_now<F: std::future::Future>(f: F) -> Option<F::Output> {
     let mut f = std::pin::pin!(f);
     match f.as_mut().poll(&mut std::task::Context::from_waker(std::task::Waker::noop())) {
         std::task::Poll::Ready(v) => Some(v),
