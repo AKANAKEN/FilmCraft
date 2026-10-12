@@ -97,6 +97,7 @@ fn yuv_code_range_uniforms() {
                 chroma: (1, 1),
                 size: (1, 1),
                 color: filmcraft_color::ColorInfo { range, ..filmcraft_color::ColorInfo::REC709 },
+                input: None,
             };
             let u = GpuCompositor::uniforms(&src, &Affine::IDENTITY, 1.0, Blend::Normal, (1, 1));
             // Full: 0..2^bits-1, neutral 2^(bits-1). Limited: BT.709 8-bit codes * 2^(bits-8).
@@ -113,6 +114,74 @@ fn yuv_code_range_uniforms() {
         }
     }
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
+#[test]
+fn imported_yuv_preserves_managed_input_transform() {
+    use filmcraft_color::{ColorInfo, ColorPipeline, ColorSpace, InputTransform, Matrix, Primaries, Transfer};
+    let Some((dev, q)) = device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    set_surface_importer(import_cache_surface);
+    let texture = |width, height, format, bytes: &[u8], bytes_per_row| {
+        let size = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
+        let texture = dev.create_texture(&wgpu::TextureDescriptor {
+            label: Some("managed-import-test"),
+            size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        q.write_texture(
+            texture.as_image_copy(),
+            bytes,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(bytes_per_row), rows_per_image: None },
+            size,
+        );
+        texture
+    };
+    // Limited-range luma ramp + non-neutral chroma; 2x2 NV12 matches one planar 4:2:0 cell.
+    let y = vec![64, 144, 200, 235];
+    let uv = [90, 200];
+    let surface = Arc::new(CacheSurface {
+        id: u64::MAX - 2,
+        luma: texture(2, 2, wgpu::TextureFormat::R8Unorm, &y, 2),
+        chroma: texture(1, 1, wgpu::TextureFormat::Rg8Unorm, &uv, 2),
+    });
+    let color = ColorInfo { matrix: Matrix::Bt2020Ncl, transfer: Transfer::Hlg, primaries: Primaries::Bt2020, range: Range::Limited };
+    let cpu_frame = VideoFrame {
+        width: 2,
+        height: 2,
+        data: PixelData::Yuv8 { planes: [Arc::new(y), Arc::new(vec![uv[0]]), Arc::new(vec![uv[1]])], chroma: Chroma::C420, alpha: None },
+        color,
+        par: (1, 1),
+        pts: Default::default(),
+    };
+    let gpu_frame = VideoFrame { data: PixelData::Gpu(filmcraft_frame::GpuPixels::new(surface, Chroma::C420, 8)), ..cpu_frame.clone() };
+    let transform = Arc::new(InputTransform::new(ColorSpace::from_info(&color), color.range, &ColorPipeline::REC709, None));
+    assert!(transform.gpu_params().is_some());
+    let plan = |frame, input| FramePlan::Layers {
+        width: 2,
+        height: 2,
+        layers: vec![PlanLayer { input, ..PlanLayer::new(Arc::new(frame), Affine::IDENTITY, 1.0, Blend::Normal) }],
+    };
+    let cpu = execute_cpu(&plan(cpu_frame, Some(transform.clone()))).unwrap().over_black_rgba8();
+    let mut compositor = GpuCompositor::new(&dev, &q);
+    compositor.composite(&plan(gpu_frame.clone(), Some(transform))).unwrap();
+    let (_, _, managed) = compositor.read_output().expect("managed readback");
+    compositor.composite(&plan(gpu_frame, None)).unwrap();
+    let (_, _, unmanaged) = compositor.read_output().expect("unmanaged readback");
+    let max_error = |pixels: &[u8]| cpu.iter().zip(pixels).map(|(a, b)| a.abs_diff(*b)).max().unwrap_or(0);
+    eprintln!("imported HLG: managed error {}, unmanaged error {}", max_error(&managed), max_error(&unmanaged));
+    // Match the existing HDR parity allowance: two 8-bit output codes for GPU rounding.
+    assert!(max_error(&managed) <= 2);
+    // More than twenty codes distinguishes the unmanaged control from the two-code rounding allowance.
+    assert!(max_error(&unmanaged) > 20, "fixture must respond to input color management");
+    assert_eq!(compositor.uploaded_bytes, 0, "resident import uploaded CPU pixels");
 }
 
 #[derive(Debug)]
@@ -308,13 +377,14 @@ fn gpu_matches_cpu_plan() {
         width: w,
         height: h,
         layers: vec![
-            PlanLayer { frame: yuv_frame(640, 360), matrix: Affine::scale(0.5, 0.5), opacity: 1.0, blend: Blend::Normal, fx: None },
+            PlanLayer { frame: yuv_frame(640, 360), matrix: Affine::scale(0.5, 0.5), opacity: 1.0, blend: Blend::Normal, fx: None, input: None },
             PlanLayer {
                 frame: rgba,
                 matrix: Affine::motion(Vec2::new(200.0, 100.0), Vec2::new(0.4, 0.4), 12.0, Vec2::new(160.0, 90.0)),
                 opacity: 0.7,
                 blend: Blend::Normal,
                 fx: None,
+                input: None,
             },
         ],
     };
@@ -473,8 +543,8 @@ fn prepared_upload_matches_inline_conversion() {
         width: w as usize,
         height: h as usize,
         layers: vec![
-            PlanLayer { frame: yuv16, matrix: Affine::IDENTITY, opacity: 1.0, blend: Blend::Normal, fx: None },
-            PlanLayer { frame: rgbaf, matrix: Affine::scale(0.5, 0.5), opacity: 0.8, blend: Blend::Normal, fx: None },
+            PlanLayer { frame: yuv16, matrix: Affine::IDENTITY, opacity: 1.0, blend: Blend::Normal, fx: None, input: None },
+            PlanLayer { frame: rgbaf, matrix: Affine::scale(0.5, 0.5), opacity: 0.8, blend: Blend::Normal, fx: None, input: None },
         ],
     };
     let image = FramePlan::Image(filmcraft_render::Image { w: w as usize, h: h as usize, px: f32_layer });
@@ -503,8 +573,11 @@ fn upload_cache_keeps_buffers_alive() {
     let mut c = GpuCompositor::new(&dev, &q);
     let px = Arc::new(vec![200u8; 16 * 8 * 4]);
     let frame = Arc::new(VideoFrame { width: 16, height: 8, data: PixelData::Rgba8(px.clone()), ..(*yuv_frame(16, 8)).clone() });
-    let plan =
-        FramePlan::Layers { width: 16, height: 8, layers: vec![PlanLayer { frame, matrix: Affine::IDENTITY, opacity: 1.0, blend: Blend::Normal, fx: None }] };
+    let plan = FramePlan::Layers {
+        width: 16,
+        height: 8,
+        layers: vec![PlanLayer { frame, matrix: Affine::IDENTITY, opacity: 1.0, blend: Blend::Normal, fx: None, input: None }],
+    };
     c.composite(&plan).unwrap();
     drop(plan);
     assert!(Arc::strong_count(&px) > 1, "cached upload must own its pixel buffer");
@@ -653,8 +726,8 @@ fn gpu_draws_yuv_alpha_plane_like_the_cpu() {
             width: w,
             height: h,
             layers: vec![
-                PlanLayer { frame: background.clone(), matrix: Affine::IDENTITY, opacity: 1.0, blend: Blend::Normal, fx: None },
-                PlanLayer { frame: yuv_alpha_frame(320, 180, bits), matrix: Affine::IDENTITY, opacity: 0.9, blend: Blend::Normal, fx: None },
+                PlanLayer { frame: background.clone(), matrix: Affine::IDENTITY, opacity: 1.0, blend: Blend::Normal, fx: None, input: None },
+                PlanLayer { frame: yuv_alpha_frame(320, 180, bits), matrix: Affine::IDENTITY, opacity: 0.9, blend: Blend::Normal, fx: None, input: None },
             ],
         };
         let cpu = execute_cpu(&plan).unwrap().over_black_rgba8();
@@ -670,7 +743,7 @@ fn gpu_draws_yuv_alpha_plane_like_the_cpu() {
         let bg = execute_cpu(&FramePlan::Layers {
             width: w,
             height: h,
-            layers: vec![PlanLayer { frame: background.clone(), matrix: Affine::IDENTITY, opacity: 1.0, blend: Blend::Normal, fx: None }],
+            layers: vec![PlanLayer { frame: background.clone(), matrix: Affine::IDENTITY, opacity: 1.0, blend: Blend::Normal, fx: None, input: None }],
         })
         .unwrap()
         .over_black_rgba8();
@@ -685,5 +758,52 @@ fn fast_half_float_conversion_matches_the_reference_for_every_value() {
     for h in 0..=u16::MAX {
         let (fast, slow) = (f16_to_f32_fast(h), f16_to_f32(h));
         assert!(fast.to_bits() == slow.to_bits() || (fast.is_nan() && slow.is_nan()), "{h:#06x}: {fast} vs {slow}");
+    }
+}
+
+/// HDR and wide-gamut Y'CbCr on a Rec. 709 sequence (#965): the shader's colour management
+/// (curve, HLG OOTF, BT.2020 → 709 matrix, BT.2390 tone mapping, desaturation) matches the CPU
+/// running the same `InputTransform`.
+#[test]
+fn hdr_input_gpu_matches_cpu() {
+    use filmcraft_color::{ColorInfo, ColorPipeline, ColorSpace, InputTransform, Matrix, Primaries, Transfer};
+    let Some((dev, q)) = device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    let mut c = GpuCompositor::new(&dev, &q);
+    // a 10-bit luma ramp (to the top code) under neutral, saturated and extreme chroma, 4:4:4
+    let (w, h) = (256u32, 6u32);
+    let chroma = [(512, 512), (300, 760), (760, 300), (64, 512), (960, 960), (512, 64)];
+    let y: Vec<u16> = (0..h).flat_map(|_| (0..w).map(|x| (64 + x * 876 / 255) as u16)).collect();
+    let cb: Vec<u16> = (0..h).flat_map(|r| std::iter::repeat_n(chroma[r as usize].0, w as usize)).collect();
+    let cr: Vec<u16> = (0..h).flat_map(|r| std::iter::repeat_n(chroma[r as usize].1, w as usize)).collect();
+    let data = PixelData::Yuv16 { planes: [Arc::new(y), Arc::new(cb), Arc::new(cr)], chroma: Chroma::C444, bits: 10, alpha: None };
+    let hdr = |transfer| ColorInfo { matrix: Matrix::Bt2020Ncl, transfer, primaries: Primaries::Bt2020, range: Range::Limited };
+    let cases = [
+        ("HLG", hdr(Transfer::Hlg), None),
+        ("PQ", hdr(Transfer::Pq), None),
+        ("PQ 4000 cd/m²", hdr(Transfer::Pq), Some(4000.0)),
+        ("BT.2020 SDR", ColorInfo { primaries: Primaries::Bt2020, ..ColorInfo::REC709 }, None),
+    ];
+    for (name, color, peak) in cases {
+        let frame = Arc::new(VideoFrame { width: w, height: h, data: data.clone(), color, par: (1, 1), pts: Default::default() });
+        let cs = ColorSpace::from_info(&color);
+        let t = Arc::new(InputTransform::new(cs, color.range, &ColorPipeline::REC709, peak));
+        assert!(t.gpu_params().is_some(), "{name}");
+        let layer = PlanLayer { input: Some(t), ..PlanLayer::new(frame.clone(), Affine::IDENTITY, 1.0, Blend::Normal) };
+        let plan = FramePlan::Layers { width: w as usize, height: h as usize, layers: vec![layer] };
+        let cpu = execute_cpu(&plan).unwrap().over_black_rgba8();
+        c.composite(&plan).unwrap();
+        let (_, _, gpu) = c.read_output().expect("readback");
+        let error = cpu.iter().zip(&gpu).map(|(a, b)| a.abs_diff(*b)).max().unwrap_or(0);
+        // and the stage does something: the default decode of the same frame is far off
+        let plain = FramePlan::Layers { width: w as usize, height: h as usize, layers: vec![PlanLayer::new(frame, Affine::IDENTITY, 1.0, Blend::Normal)] };
+        c.composite(&plain).unwrap();
+        let (_, _, unmanaged) = c.read_output().expect("readback");
+        let apart = cpu.iter().zip(&unmanaged).map(|(a, b)| a.abs_diff(*b)).max().unwrap_or(0);
+        eprintln!("{name}: max error {error}, unmanaged differs by up to {apart}");
+        assert!(error <= 2, "{name}: GPU differs from the CPU by up to {error} codes");
+        assert!(apart > 20, "{name}: colour management changed nothing ({apart})");
     }
 }

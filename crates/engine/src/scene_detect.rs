@@ -9,8 +9,10 @@
 //!
 //! - **Apply a cut at each detected cut point**: the clip (and its linked audio) is cut at the
 //!   first frame of each new shot;
-//! - **Create a subclip for each cut**: one subclip per shot, in a new bin "<clip> Scenes";
-//! - **Generate clip markers**: a marker on the clip's master clip (media time) at each cut.
+//! - **Create a bin of subclips from each detected cut point**: one subclip per shot, in a new
+//!   bin "<clip> Scenes";
+//! - **Create a clip marker at each detected cut point**: a marker on the clip's master clip
+//!   (media time) at each cut.
 
 use std::sync::{Arc, Mutex};
 
@@ -157,7 +159,7 @@ fn detect(s: &mut Session, p: &Value) -> Result<Value> {
                 match w
                     .src
                     .video_frame(filmcraft_media::FrameRequest { time: *mt, scale: w.scale })
-                    .and_then(|f| f.to_rgba8().map(|px| (f, px)).map_err(filmcraft_media::MediaError::Decode))
+                    .and_then(|f| f.to_rgba8().map(|px| (f, px)).map_err(filmcraft_media::MediaError::FrameAccess))
                 {
                     Ok((f, px)) => {
                         det.push_rgba(&px, f.width as usize, f.height as usize);

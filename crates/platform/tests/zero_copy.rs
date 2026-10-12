@@ -47,7 +47,7 @@ fn plan(frame: &Arc<VideoFrame>) -> FramePlan {
     FramePlan::Layers {
         width: frame.width as usize,
         height: frame.height as usize,
-        layers: vec![PlanLayer { frame: frame.clone(), matrix: Affine::IDENTITY, opacity: 1.0, blend: Blend::Normal, fx: None }],
+        layers: vec![PlanLayer::new(frame.clone(), Affine::IDENTITY, 1.0, Blend::Normal)],
     }
 }
 
