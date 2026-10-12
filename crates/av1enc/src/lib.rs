@@ -54,11 +54,24 @@ pub struct EncoderConfig {
     pub preset: Preset,
     pub spatial_aq: bool,
     pub enable_cdef: bool,
+    pub scene_cut_detection: bool,
 }
 
 impl EncoderConfig {
     pub fn new(width: u32, height: u32, fps_num: u32, fps_den: u32) -> Self {
-        Self { width, height, fps_num, fps_den, qindex: 100, key_int: 30, rate_control: None, preset: Preset::Balanced, spatial_aq: false, enable_cdef: true }
+        Self {
+            width,
+            height,
+            fps_num,
+            fps_den,
+            qindex: 100,
+            key_int: 30,
+            rate_control: None,
+            preset: Preset::Balanced,
+            spatial_aq: false,
+            enable_cdef: true,
+            scene_cut_detection: true,
+        }
     }
 }
 
@@ -90,6 +103,7 @@ pub struct Encoder {
     ref_u: Vec<u8>,
     ref_v: Vec<u8>,
     ref_src_y: Vec<u8>,
+    last_key_frame: u64,
 }
 
 #[inline]
@@ -153,6 +167,7 @@ impl Encoder {
             ref_u: vec![128; uv_len],
             ref_v: vec![128; uv_len],
             ref_src_y: vec![0; y_len],
+            last_key_frame: 0,
         })
     }
 
@@ -172,7 +187,34 @@ impl Encoder {
     }
 
     pub fn encode(&mut self, frame: &YuvFrame<'_>, pts: i64) -> Result<Packet> {
-        let is_key = self.frame_count == 0 || self.frame_count.is_multiple_of(u64::from(self.config.key_int));
+        let width = self.config.width as usize;
+        let height = self.config.height as usize;
+
+        let mut is_key = self.frame_count == 0 || (self.frame_count.saturating_sub(self.last_key_frame)) >= u64::from(self.config.key_int);
+
+        if !is_key && self.config.scene_cut_detection && self.frame_count > 0 {
+            // Fast subsampled SAD across the frame (step by 4 rows and 4 cols: only 1/16th of pixels)
+            let mut diff_sum = 0u64;
+            let mut sample_count = 0u64;
+            for r in (0..height).step_by(4) {
+                let curr_off = r * frame.y_stride;
+                let prev_off = r * width;
+                if let (Some(curr_row), Some(prev_row)) = (frame.y.get(curr_off..curr_off + width), self.ref_src_y.get(prev_off..prev_off + width)) {
+                    for (&c, &p) in curr_row.iter().step_by(4).zip(prev_row.iter().step_by(4)) {
+                        diff_sum += c.abs_diff(p) as u64;
+                        sample_count += 1;
+                    }
+                }
+            }
+            if sample_count > 0 && (diff_sum / sample_count) > 42 {
+                is_key = true;
+            }
+        }
+
+        if is_key {
+            self.last_key_frame = self.frame_count;
+        }
+
         let frame_type = if is_key { frame_header::KEY_FRAME } else { frame_header::INTER_FRAME };
         let order_hint = (self.frame_count & 0x7f) as u32;
         let seq_cfg = obu::SequenceConfig {
@@ -190,6 +232,11 @@ impl Encoder {
             Some(RateControl::Cbr { .. } | RateControl::Vbr { .. }) => self.active_qindex,
             None => self.config.qindex,
         };
+
+        // IP offset: Boost Keyframe quality slightly to establish superior reference for downstream P-frames
+        if is_key {
+            qindex = qindex.saturating_sub(4).max(12);
+        }
 
         if self.config.spatial_aq && !frame.y.is_empty() {
             let var = intra::block_variance(frame.y, frame.y_stride, self.config.width as usize, self.config.height as usize);
@@ -227,8 +274,6 @@ impl Encoder {
             is_inter: bool,
         }
 
-        let width = self.config.width as usize;
-        let height = self.config.height as usize;
         let ref_y_plane = &self.ref_y;
         let ref_src_y_plane = &self.ref_src_y;
         let has_prev_frame = self.frame_count > 0;

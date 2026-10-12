@@ -156,3 +156,43 @@ fn test_av1enc_inter_p_frames_roundtrip() {
         assert!(psnr > 9.0, "Frame {i} decoded PSNR must be > 9 dB, got {psnr:.2} dB");
     }
 }
+
+#[test]
+fn test_av1enc_scene_cut_detection() {
+    let (w, h) = (128u32, 128u32);
+    // key_int is 50, so normally no keyframe until frame 50
+    let mut enc = Encoder::new(EncoderConfig::new(w, h, 24, 50)).unwrap();
+
+    let scene_a_y = vec![40u8; (w * h) as usize];
+    let scene_b_y = vec![220u8; (w * h) as usize];
+    let uv_plane = vec![128u8; ((w / 2) * (h / 2)) as usize];
+
+    let frame_a = YuvFrame { y: &scene_a_y, u: &uv_plane, v: &uv_plane, y_stride: w as usize, uv_stride: (w / 2) as usize };
+    let frame_b = YuvFrame { y: &scene_b_y, u: &uv_plane, v: &uv_plane, y_stride: w as usize, uv_stride: (w / 2) as usize };
+
+    let p0 = enc.encode(&frame_a, 0).unwrap();
+    let p1 = enc.encode(&frame_a, 1000).unwrap();
+    let p2 = enc.encode(&frame_a, 2000).unwrap();
+    // Scene cut to Scene B at frame 3!
+    let p3 = enc.encode(&frame_b, 3000).unwrap();
+    let p4 = enc.encode(&frame_b, 4000).unwrap();
+
+    assert!(p0.keyframe, "Frame 0 must be keyframe");
+    assert!(!p1.keyframe, "Frame 1 must be P-frame");
+    assert!(!p2.keyframe, "Frame 2 must be P-frame");
+    assert!(p3.keyframe, "Frame 3 must be detected as SCENE CUT and encoded as KEYFRAME!");
+    assert!(!p4.keyframe, "Frame 4 must be P-frame referencing Scene B keyframe");
+
+    // All frames decode successfully
+    let mut dec = filmcraft_av1::Decoder::new();
+    let mut pics = Vec::new();
+    for p in [&p0, &p1, &p2, &p3, &p4] {
+        pics.extend(dec.decode(&p.data).unwrap());
+    }
+    pics.extend(dec.flush());
+
+    assert_eq!(pics.len(), 5);
+    assert_eq!(pics[0].planes[0][0], 40);
+    assert_eq!(pics[3].planes[0][0], 220);
+    assert_eq!(pics[4].planes[0][0], 220);
+}
