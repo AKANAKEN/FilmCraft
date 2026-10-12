@@ -1,23 +1,25 @@
-# Brazilian Portuguese (pt-br) catalog. Same format as `es.tsv`: context <TAB> source <TAB> translation.
-#
-# Clean-room: every entry was written from the plain meaning of the English text using ordinary
-# Brazilian Portuguese video-editing vocabulary. No proprietary localisation resource, string table
-# or product UI was consulted or copied; add entries the same way. Commands use the infinitive
-# ("Salvar como…"), instructions use the polite imperative ("Selecione um clipe…"), and labels use
-# sentence case. Product, format and technology names (FilmCraft, ArtCraft, Lumetri, ProRes, LUFS,
-# EDL, AAF…) keep their spelling; decimals in prose use a comma ("29,97 fps"). This catalog has the
-# same entries as `es.tsv` plus the native macOS Settings menu; strings added later show in English
-# until they are translated. A native-speaker review is welcome.
-#
-# Terms: clip = clipe, track = faixa, sequence = sequência, timeline = linha do tempo, bin = pasta,
-# playhead = cursor de reprodução, In/Out = entrada / saída, marker = marcador, keyframe =
-# quadro-chave, frame = quadro, frame hold = quadro congelado, edit point = ponto de edição, panel =
-# painel, workspace = área de trabalho, render = renderizar, preset = predefinição, captions =
-# legendas, voice-over = narração, trim = aparar (aparagem), ripple = em cascata, roll = rolante,
-# slip / slide = deslizar conteúdo / deslizar clipe, overwrite = sobrescrever, wipe = cortina,
-# dissolve = dissolução, scopes = escopos, highlights = realces, offline = offline, legacy = legado,
-# preferences (also the native macOS Settings menu) = Preferências, settings = configurações.
-
+# Catálogo em português brasileiro (pt-br). Mesmo formato de `es.tsv`: contexto <TAB> original <TAB> tradução.		
+#		
+# Desenvolvimento independente: cada entrada foi escrita a partir do sentido do texto em inglês, usando		
+# vocabulário comum de edição de vídeo em português brasileiro. Nenhum recurso de localização,		
+# tabela de strings ou interface proprietária foi consultado ou copiado; adicione entradas da mesma		
+"# forma. Comandos usam o infinitivo (""Salvar como…""), instruções usam o imperativo de cortesia"		
+"# (""Selecione um clipe…"") e rótulos usam capitalização de frase. Nomes de"		
+# produtos, formatos e tecnologias (FilmCraft, ArtCraft, Lumetri, ProRes, LUFS, EDL, AAF…) mantêm		
+"# a grafia original; números decimais em textos usam vírgula (""29,97 fps""). Este catálogo contém"		
+# as mesmas entradas de `es.tsv`, além do menu nativo Ajustes do macOS; strings adicionadas depois		
+# aparecem em inglês até serem traduzidas. Uma revisão de falante nativo é bem-vinda.		
+#		
+# Termos: clip = clipe, track = faixa, sequence = sequência, timeline = linha do tempo, bin = pasta,		
+# playhead = cursor de reprodução, In/Out = entrada / saída, marker = marcador, keyframe =		
+# quadro-chave, frame = quadro, frame hold = quadro congelado, edit point = ponto de edição,		
+# panel = painel, workspace = área de trabalho, render = renderizar, preset = predefinição,		
+# captions = legendas, voice-over = narração, trim = aparar (aparagem), ripple = em cascata,		
+# roll = rolante, slip / slide = deslizar conteúdo / deslizar clipe, overwrite = sobrescrever,		
+# wipe = cortina, dissolve = dissolução, scopes = escopos, highlights = realces, offline = offline,		
+# legacy = legado, preferences (também o menu Ajustes nativo do macOS) = Preferências,		
+# settings = configurações.		
+		
 	About FilmCraft	Sobre o FilmCraft
 	Add Audio Submix Track	Adicionar faixa de submixagem de áudio
 	Add Caption at Playhead	Adicionar legenda no cursor de reprodução
@@ -656,7 +658,7 @@
 	(no sequences)	(nenhuma sequência)
 	(no clips)	(nenhum clipe)
 	Show Transport Controls	Mostrar controles de transporte
-	Loop	Loop
+	Loop	Repetir
 	Multi-Camera Audio Follows Video	Áudio multicâmera segue o vídeo
 	Multi-Camera Record	Gravação multicâmera
 	Multi-Camera Selection Top Down	Seleção multicâmera de cima para baixo
@@ -801,7 +803,7 @@
 	Clip Name	Nome do clipe
 	File Name	Nome do arquivo
 	File Path	Caminho do arquivo
-	Status	Status
+	Status	Estado
 	Match file properties:	Propriedades de arquivo que devem corresponder:
 	File Extension	Extensão do arquivo
 	Clip ID (fingerprint)	ID do clipe (impressão digital)
@@ -874,7 +876,7 @@
 	Reverb	Reverberação
 	Stereo Width	Largura estéreo
 	Remixing music to a target duration is not available yet. Trim the clip and add a crossfade instead.	Ainda não é possível remixar a música para uma duração desejada. Apare o clipe e adicione uma transição cruzada.
-	Pan	Pan
+	Pan	Panorâmica
 	Auto-Match	Correspondência automática
 	Not matched yet	Ainda sem correspondência
 	Matches each of the {n} clips on its own.	Faz a correspondência de cada um dos {n} clipes separadamente.
@@ -882,7 +884,7 @@
 	Untagged	Sem marcação
 	Sensitivity	Sensibilidade
 	Reduce By	Reduzir em
-	Fades	Fades
+	Fades	Transições graduais
 	Generate Keyframes	Gerar quadros-chave
 	Clip Volume	Volume do clipe
 	(no clip selected)	(nenhum clipe selecionado)
@@ -1038,7 +1040,7 @@
 	Small Caps	Versaletes
 	Underline	Sublinhado
 	OpenType	OpenType
-	Kerning	Kerning
+	Kerning	Ajuste entre letras
 	Ligatures	Ligaduras
 	Shape	Forma
 	Size	Tamanho
@@ -1453,7 +1455,7 @@
 	Center Point (Longitude)	Ponto central (longitude)
 	Center Split	Divisão central
 	Center of Sphere	Centro da esfera
-	Cents	Cents
+	Cents	Centésimos de semitom
 	Change to Color	Alterar para cor
 	Changes are copied in the background a moment after each edit. If FilmCraft quits unexpectedly, they are offered the next time it starts.	As alterações são copiadas em segundo plano logo após cada edição. Se o FilmCraft fechar inesperadamente, elas serão oferecidas na próxima vez que ele for iniciado.
 	Channel	Canal
@@ -1581,12 +1583,12 @@
 	Default language	Idioma padrão
 	Default paragraph direction	Direção de parágrafo padrão
 	Default subtitle and text font	Fonte padrão de legendas e texto
-	Delay	Delay
-	Delay 1	Delay 1
-	Delay 2	Delay 2
-	Delay 3	Delay 3
-	Delay 4	Delay 4
-	Delay and Echo	Delay e eco
+	Delay	Atraso
+	Delay 1	Atraso 1
+	Delay 2	Atraso 2
+	Delay 3	Atraso 3
+	Delay 4	Atraso 4
+	Delay and Echo	Atraso e eco
 	Delete files older than	Excluir arquivos com mais de
 	Delete oldest files when the cache exceeds	Excluir os arquivos mais antigos quando o cache ultrapassar
 	Delete…	Excluir…
@@ -1684,7 +1686,7 @@
 	Exponential Fade	Fade exponencial
 	Extended Dynamic Range Monitoring	Monitoramento de faixa dinâmica estendida
 	FFT Filter	Filtro FFT
-	Fade	Fade
+	Fade	Desvanecimento
 	Fade Out	Fade de saída
 	Faded Matte	Matte desbotado
 	Falloff	Atenuação
@@ -1720,7 +1722,7 @@
 	Flare Brightness	Brilho do reflexo
 	Flare Center	Centro do reflexo
 	Flare Color	Cor do reflexo
-	Flash	Flash
+	Flash	Clarão
 	Flicker	Cintilação
 	Flickers	Cintilações
 	Flip Motion	Movimento de virada
@@ -1853,7 +1855,7 @@
 	Highlight Tint	Tonalidade dos realces
 	Highlights Lightness	Luminosidade dos realces
 	Highpass	Passa-altas
-	Hindi	Hindi
+	Hindi	Híndi
 	Hindi digits	Dígitos hindi
 	Horizontal 16:9	Horizontal 16:9
 	Horizontal Alignment	Alinhamento horizontal
@@ -1927,7 +1929,7 @@
 	Large Hall	Salão grande
 	Large Trim Offset	Deslocamento de aparagem grande
 	Large Volume Adjustment	Ajuste de volume grande
-	Latch	Latch
+	Latch	Trava
 	Layer Name	Nome da camada
 	Layers	Camadas
 	Leave Color	Manter cor
@@ -1984,9 +1986,9 @@
 	Logo Cutout	Recorte de logotipo
 	Long Shadow	Sombra longa
 	Look-Ahead Time	Tempo de antecipação
-	Loudness	Loudness
-	Loudness Maximizer	Maximizador de loudness
-	Loudness Meter	Medidor de loudness
+	Loudness	Sonoridade
+	Loudness Maximizer	Maximizador de sonoridade
+	Loudness Meter	Medidor de sonoridade
 	Louver	Persiana
 	Low	Baixa
 	Low Frequency Cut	Corte de baixas frequências
@@ -2051,7 +2053,7 @@
 	Memory	Memória
 	Metadata & Timecode Burn-in	Gravação de metadados e timecode na imagem
 	Method	Método
-	Metrics Kerning	Kerning métrico
+	Metrics Kerning	Ajuste métrico entre letras
 	Mid	Médios
 	Mid Point	Ponto médio
 	Midtone Blue Balance	Balanço de azul nos meios-tons
@@ -2128,7 +2130,7 @@
 	Offset (Turbulence)	Deslocamento (turbulência)
 	Offset From	Deslocar de
 	Offset To	Deslocar até
-	Omni	Omni
+	Omni	Omnidirecional
 	On	Ativado
 	On Original Image	Sobre a imagem original
 	On Transparent	Sobre transparente
@@ -2159,7 +2161,7 @@
 	Paint On White	Pintar sobre branco
 	Paint Style	Estilo de pintura
 	Paint Surface	Superfície de pintura
-	Pan (Y Axis)	Pan (eixo Y)
+	Pan (Y Axis)	Panorâmica (eixo Y)
 	Panel Wipe	Cortina de painéis
 	Panels	Painéis
 	Panner - Ambisonics	Panorâmico - Ambisonics
@@ -2373,7 +2375,7 @@
 	Shift Center To	Deslocar o centro para
 	Shift clips that overlap trim point during ripple trimming	Deslocar os clipes que se sobrepõem ao ponto de aparagem durante a aparagem em cascata
 	Shot	Plano
-	Show "Project:" and "Bin:" in Project panel tab	Mostrar "Projeto:" e "Pasta:" na guia do painel Projeto
+	"Show ""Project:"" and ""Bin:"" in Project panel tab"	"Mostrar ""Projeto:"" e ""Pasta:"" na guia do painel Projeto"
 	Show Clip Mismatch Warning dialog	Mostrar o aviso de incompatibilidade de clipe
 	Show Event Indicator	Mostrar o indicador de eventos
 	Show Focus Area	Mostrar área de foco
@@ -2551,7 +2553,7 @@
 	Top Center	Superior central
 	Top Left	Superior esquerdo
 	Top Right	Superior direito
-	Touch	Touch
+	Touch	Toque
 	Track Matte Key	Chave de matte de faixa
 	Transcription	Transcrição
 	Transcription preferences	Preferências de transcrição
@@ -2899,7 +2901,7 @@
 	WebVTT (.vtt)	WebVTT (.vtt)
 	Title	Título
 	Creator	Autor
-	Copyright	Copyright
+	Copyright	Direitos autorais
 	Image	Imagem
 	Frame Size	Tamanho do quadro
 	Match Source	Igual à origem
@@ -3347,7 +3349,7 @@
 	WAV, stereo 48 kHz 24-bit PCM	WAV, estéreo, PCM de 48 kHz e 24 bits
 	Warm Tint	Tonalidade quente
 	Warm highlights, brown shadows	Realces quentes, sombras marrons
-	Waveform Audio	Waveform Audio
+	Waveform Audio	Áudio em forma de onda
 	Waveform Audio 48 kHz 16-bit	Waveform Audio 48 kHz 16 bits
 	Waveform Audio 48 kHz 24-bit	Waveform Audio 48 kHz 24 bits
 	Web & Social	Web e redes sociais
@@ -3506,7 +3508,7 @@
 	Preview File Format:	Formato de arquivo de pré-visualização:
 	Working Color Space:	Espaço de cores de trabalho:
 	Projection:	Projeção:
-	Layout:	Layout:
+	Layout:	Disposição:
 	Captured View:	Visualização capturada:
 	Video Previews	Pré-visualizações de vídeo
 	No Fields (Progressive Scan)	Sem campos (varredura progressiva)
@@ -3525,7 +3527,7 @@
 	Configure…	Configurar…
 	Not supported in FilmCraft yet	Ainda não suportado no FilmCraft
 	FilmCraft always composites in linear light	O FilmCraft sempre compõe em luz linear
-	Loop marked range	Loop do intervalo marcado
+	Loop marked range	Repetir o intervalo marcado
 	Play Source	Reproduzir origem
 	Source Play/Stop	Reproduzir/parar origem
 	Stop Source	Parar origem
@@ -3534,8 +3536,8 @@
 	tracks	faixas
 	Clear Transition	Limpar transição
 	Set Transition Duration	Definir duração da transição
-
-# System appearance modes and theme cards.
+		
+# System appearance modes and theme cards.		
 	Active	Ativo
 	Appearance Mode	Modo de aparência
 	Dark Theme	Tema escuro
@@ -3556,16 +3558,16 @@
 	Text to Speech	Texto para fala
 	Edit Narration	Editar narração
 	Project Notes	Notas do projeto
-
+		
 	Appearance Settings…	Configurações de aparência…
-
+		
 	Add to favorites	Adicionar aos favoritos
-
+		
 	Remove from favorites	Remover dos favoritos
 	Get Project Notes	Obter notas do projeto
 	Edit Project Notes	Editar notas do projeto
 	Notes for this project: to-dos, instructions, frame numbers… Saved with the project.	Notas deste projeto: tarefas, instruções, números de quadro… Salvas com o projeto.
 	Use Effect Shutter Angle	Usar o ângulo do obturador do efeito
-
-# The native macOS application menu (Settings…).
+		
+# The native macOS application menu (Settings…).		
 	Settings	Preferências
