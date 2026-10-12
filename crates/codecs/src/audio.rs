@@ -795,6 +795,29 @@ pub struct AudioFileSource {
     samples: Vec<Vec<f32>>,
 }
 
+/// A raw ADTS `.aac` stream (ISO/IEC 13818-7): every frame carries its own header, so the first
+/// header configures the decoder and each payload is one access unit. `None` when the stream does
+/// not start with ADTS frames (#1291: FilmCraft's own AAC export writes this, so the import had to
+/// read it).
+fn decode_adts_aac(bytes: &[u8]) -> Option<(u32, Vec<Vec<f32>>)> {
+    let frames = filmcraft_aac::split_adts(bytes).ok()?;
+    let mut dec = filmcraft_aac::Decoder::from_adts(&frames[0].0).ok()?;
+    let rate = dec.sample_rate();
+    let mut samples: Vec<Vec<f32>> = Vec::new();
+    for (_, au) in &frames {
+        let Ok(ch) = dec.decode(au) else { continue };
+        if samples.is_empty() {
+            samples = vec![Vec::new(); ch.len().max(1)];
+        }
+        for (i, v) in ch.iter().enumerate() {
+            if let Some(c) = samples.get_mut(i) {
+                c.extend_from_slice(v);
+            }
+        }
+    }
+    (!samples.is_empty()).then_some((rate, samples))
+}
+
 impl AudioFileSource {
     pub fn decode(name: &str, bytes: Arc<[u8]>) -> Result<Self> {
         let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
@@ -808,6 +831,22 @@ impl AudioFileSource {
                 duration: Tick::from_units(frames as i64, rate as i64),
                 video: None,
                 audio_streams: vec![AudioStreamInfo { sample_rate: rate, channels: samples.len() as u32, codec: format!("MP{layer}"), bits_per_sample: None }],
+                container: ext.to_uppercase(),
+                start_timecode: None,
+                file_size: Some(bytes.len() as u64),
+            };
+            return Ok(Self { info, rate, samples });
+        }
+        if ext == "aac"
+            && let Some((rate, samples)) = decode_adts_aac(&bytes)
+        {
+            let frames = samples.first().map_or(0, Vec::len);
+            let info = MediaInfo {
+                name: name.to_string(),
+                kind: MediaKind::AudioOnly,
+                duration: Tick::from_units(frames as i64, rate as i64),
+                video: None,
+                audio_streams: vec![AudioStreamInfo { sample_rate: rate, channels: samples.len() as u32, codec: "AAC".into(), bits_per_sample: None }],
                 container: ext.to_uppercase(),
                 start_timecode: None,
                 file_size: Some(bytes.len() as u64),
@@ -928,7 +967,7 @@ impl MediaSource for AudioFileSource {
 
 pub fn opener(name: &str, bytes: Arc<[u8]>) -> Option<std::result::Result<SharedSource, MediaError>> {
     let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
-    if !matches!(ext.as_str(), "mp3" | "mp2" | "flac" | "ogg" | "oga" | "aif" | "aiff" | "aifc") {
+    if !matches!(ext.as_str(), "mp3" | "mp2" | "flac" | "ogg" | "oga" | "aif" | "aiff" | "aifc" | "aac") {
         return None;
     }
     Some(AudioFileSource::decode(name, bytes).map(|s| Arc::new(s) as SharedSource).map_err(Into::into))
