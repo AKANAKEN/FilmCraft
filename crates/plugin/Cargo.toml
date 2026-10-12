@@ -1,0 +1,25 @@
+[package]
+name = "filmcraft-plugin"
+description = "Plugin specification, manifest parsing, sandboxed traits and host runtime interfaces for FilmCraft"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["wasm"]
+wasm = ["dep:wasmtime"]
+
+[dependencies]
+filmcraft-project = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }
+wasmtime = { version = "29", optional = true }
+
+[dev-dependencies]
+proptest = { workspace = true }

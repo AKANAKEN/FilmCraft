@@ -56,6 +56,8 @@ filmcraft-ui-egui = { path = "crates/ui-egui" }
 filmcraft-automation = { path = "crates/automation" }
 filmcraft-platform = { path = "crates/platform" }
 filmcraft-testkit = { path = "crates/testkit" }
+filmcraft-plugin = { path = "crates/plugin" }
+filmcraft-plugin-sdk = { path = "crates/plugin-sdk" }
 
 # foundation
 thiserror = "2"

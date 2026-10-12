@@ -26,9 +26,9 @@ Design principles:
  L5  ui-egui · automation · platform
  L4  engine
  L3  render · gpu · export · golden (test-only)
- L2  edit · codecs · interchange · captions · speech · tts · tts-text
+ L2  edit · codecs · interchange · captions · speech · tts · tts-text · plugin
  L1  frame · media · project · audio-dsp · text
- L0  foundation: time · geom · color · bitstream · testkit (dev-dependency only)
+ L0  foundation: time · geom · color · bitstream · testkit (dev-dependency only) · plugin-sdk
      codecs/containers: isobmff · matroska · mxf · cfb · mpegts · ogg · h264 · h264enc · hevc · vp9 · av1 · mpeg2v · prores · dnx · apv · aac · ac3 · opus
 ```
 
@@ -57,6 +57,7 @@ and `filmcraft-cli`.
 | `aac` | L0 | AAC-LC decoder and encoder |
 | `ac3` | L0 | AC-3 (ATSC A/52) decoder ([README](../crates/ac3/README.md)) |
 | `testkit` | L0 | test-only helpers, used only as a dev-dependency: ffmpeg/ffprobe discovery, fixture dirs, golden images ([testing.md](testing.md)) |
+| `plugin-sdk` | L0 | safe, high-level Rust SDK for authoring WebAssembly plugins (`VideoEffect`, `AudioEffect`, `VideoFrame`, `AudioBlock`) |
 | `frame` | L1 | `VideoFrame` (planar YUV / RGBA8 / linear RGBA f32, colour metadata), `AudioBuffer` |
 | `media` | L1 | `MediaSource` trait, probing/openers, frame cache, generators, stills, image sequences, WAV / Broadcast WAV |
 | `project` | L1 | document model, effect definitions, keyframes |
@@ -68,6 +69,7 @@ and `filmcraft-cli`.
 | `tts-text` | L2 | text front end for narration: normalizer (numbers, money, dates, acronyms, pauses) and English pronunciation (CMUdict + letter-to-sound) to Kokoro phonemes |
 | `codecs` | L2 | container + codec hub: MP4/MOV, MKV, MXF, Ogg and MPEG TS / PS / video elementary stream sources, GOP-aware seeking, decoder registry, audio decoding |
 | `interchange` | L2 | EDL, FCP7 XML, FCPXML, OTIO, AAF (on `cfb`) and OMF 2.0 import/export (no file I/O; the engine supplies rendered audio essence) ([README](../crates/interchange/README.md)) |
+| `plugin` | L2 | declarative manifest parsing, sandboxed WASM host (Wasmtime), traits and plugin registry ([ADR 0002](adr/0002-sandboxed-wasm-plugins.md)) |
 | `render` | L3 | sequence evaluation, CPU compositor, video effects (`effects`, `vfx`; effects needing other frames or tracks read them through `vfx::FxEnv`), transitions, audio mix |
 | `gpu` | L3 | wgpu compositor (WGSL) |
 | `golden` | L3 | test-only: golden-image tests of the CPU renderer and GPU-vs-CPU parity; empty library, dev-dependencies only |

@@ -27,12 +27,15 @@ pub mod mixer;
 pub mod multicam;
 pub mod offline;
 pub mod plan;
+pub mod plugin_bridge;
 pub mod preview;
 pub mod remix;
 pub mod scene;
 pub mod track;
 pub mod transitions;
 pub mod vfx;
+
+pub use plugin_bridge::apply_plugin_effect;
 
 use std::sync::Arc;
 

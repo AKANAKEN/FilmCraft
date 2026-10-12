@@ -637,6 +637,31 @@ fn custom(app: &mut FilmcraftApp, ui: &mut Ui, d: &mut SettingsDraft, name: &str
                 note(ui, &t, &last);
             }
         }
+        "installedPlugins" => {
+            let plugins = app.session.plugins.list_installed();
+            if plugins.is_empty() {
+                note(ui, &t, "No plugins are installed.");
+            } else {
+                egui::Grid::new("settings-installed-plugins")
+                    .num_columns(4)
+                    .spacing(vec2(24.0, 8.0))
+                    .show(ui, |ui| {
+                        ui.label(RichText::new("Name").strong().size(12.0));
+                        ui.label(RichText::new("Version").strong().size(12.0));
+                        ui.label(RichText::new("Author").strong().size(12.0));
+                        ui.label(RichText::new("Status").strong().size(12.0));
+                        ui.end_row();
+
+                        for p in plugins {
+                            ui.label(RichText::new(&p.name).size(12.0));
+                            ui.label(RichText::new(&p.version).size(11.5).color(t.text_dim));
+                            ui.label(RichText::new(&p.author).size(11.5).color(t.text_dim));
+                            ui.label(RichText::new("Active").size(11.5).color(Color32::from_rgb(80, 200, 120)));
+                            ui.end_row();
+                        }
+                    });
+            }
+        }
         _ => {}
     }
 }

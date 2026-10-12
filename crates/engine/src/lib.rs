@@ -34,6 +34,7 @@ pub mod narration;
 pub mod panels;
 pub mod paste_media;
 pub mod perf;
+pub mod plugins;
 pub mod presets;
 pub mod previews;
 pub mod project_manager;
@@ -69,6 +70,7 @@ pub use filmcraft_project as project;
 pub use filmcraft_render as render;
 pub use filmcraft_time as time;
 pub use media_pool::MediaPool;
+pub use plugins::{InstalledPluginInfo, PluginManager};
 
 /// The OS temp folder; `/tmp` on wasm32, where `std::env::temp_dir()` panics ("no filesystem on
 /// this platform"). Use this instead of `std::env::temp_dir()` in any code the web build runs.
@@ -411,6 +413,8 @@ pub struct Session {
     pub media_stamps: std::collections::HashMap<String, media_watch::Stamp>,
     /// The stamps being taken on a worker thread ([`Session::start_media_scan`]).
     pub media_scan: Option<media_watch::MediaScan>,
+    /// Sandboxed WebAssembly and built-in plugin manager.
+    pub plugins: plugins::PluginManager,
 }
 
 /// An export advanced a batch at a time on the host's thread ([`Session::pump_jobs`]).
@@ -502,6 +506,7 @@ impl Session {
             exec_depth: 0,
             media_stamps: Default::default(),
             media_scan: None,
+            plugins: plugins::PluginManager::new(),
         }
     }
 

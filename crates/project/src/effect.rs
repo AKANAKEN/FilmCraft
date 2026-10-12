@@ -852,19 +852,52 @@ fn build_effects() -> Vec<EffectDef> {
     v
 }
 
+static DYNAMIC_EFFECTS: std::sync::RwLock<Vec<&'static EffectDef>> = std::sync::RwLock::new(Vec::new());
+
+/// Registers a dynamically loaded plugin effect definition at runtime.
+pub fn register_dynamic_effect(def: EffectDef) {
+    let leaked: &'static EffectDef = Box::leak(Box::new(def));
+    if let Ok(mut lock) = DYNAMIC_EFFECTS.write() {
+        if !lock.iter().any(|e| e.id == leaked.id) {
+            lock.push(leaked);
+        }
+    }
+}
+
+/// Returns all dynamically registered plugin effect definitions.
+pub fn dynamic_effect_defs() -> Vec<&'static EffectDef> {
+    DYNAMIC_EFFECTS.read().map(|l| l.clone()).unwrap_or_default()
+}
+
 pub fn effect_defs() -> &'static [EffectDef] {
     static DEFS: OnceLock<Vec<EffectDef>> = OnceLock::new();
     DEFS.get_or_init(build_effects)
 }
 
 pub fn find_effect(id: &str) -> Option<&'static EffectDef> {
-    effect_defs().iter().find(|e| e.id == id)
+    if let Some(e) = effect_defs().iter().find(|e| e.id == id) {
+        return Some(e);
+    }
+    if let Ok(lock) = DYNAMIC_EFFECTS.read() {
+        if let Some(e) = lock.iter().find(|e| e.id == id) {
+            return Some(*e);
+        }
+    }
+    None
 }
 
 /// Case-insensitive lookup by id or display name.
 pub fn find_effect_by_name(name: &str) -> Option<&'static EffectDef> {
     let n = name.to_ascii_lowercase();
-    effect_defs().iter().find(|e| e.id == n || e.name.to_ascii_lowercase() == n)
+    if let Some(e) = effect_defs().iter().find(|e| e.id == n || e.name.to_ascii_lowercase() == n) {
+        return Some(e);
+    }
+    if let Ok(lock) = DYNAMIC_EFFECTS.read() {
+        if let Some(e) = lock.iter().find(|e| e.id == n || e.name.to_ascii_lowercase() == n) {
+            return Some(*e);
+        }
+    }
+    None
 }
 
 /// Intrinsic video effects every video track item carries (Motion, Opacity, Time Remapping).

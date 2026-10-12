@@ -28,6 +28,7 @@ use serde_json::Value;
 /// (crate name without the `filmcraft-` prefix, layer).
 const LAYERS: &[(&str, u8)] = &[
     ("testkit", 0),
+    ("plugin-sdk", 0),
     ("time", 0),
     ("geom", 0),
     ("color", 0),
@@ -67,6 +68,7 @@ const LAYERS: &[(&str, u8)] = &[
     ("tts", 2),
     ("tts-text", 2),
     ("interchange", 2),
+    ("plugin", 2),
     ("render", 3),
     ("gpu", 3),
     ("golden", 3),
@@ -84,7 +86,7 @@ const LAYERS: &[(&str, u8)] = &[
 ];
 
 /// L0 crates that are not codecs/containers (no `bitstream`-only restriction).
-const L0_FOUNDATION: &[&str] = &["time", "geom", "color", "bitstream", "testkit"];
+const L0_FOUNDATION: &[&str] = &["time", "geom", "color", "bitstream", "testkit", "plugin-sdk"];
 
 /// Allowed same-layer edges (from, to).
 const SAME_LAYER: &[(&str, &str)] = &[

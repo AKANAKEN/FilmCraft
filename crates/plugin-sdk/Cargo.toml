@@ -1,0 +1,15 @@
+[package]
+name = "filmcraft-plugin-sdk"
+description = "High-level, panic-safe Rust SDK for developing sandboxed FilmCraft WebAssembly plugins"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
