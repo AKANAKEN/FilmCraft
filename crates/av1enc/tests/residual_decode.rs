@@ -34,6 +34,7 @@ fn test_raw_non_skip_residual_tile() {
         error_resilient_mode: false,
         disable_cdf_update: true,
         qindex: 100, // Tier 2 (61..=120)
+        order_hint: 0,
     };
 
     let mut tu = Vec::new();

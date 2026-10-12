@@ -109,3 +109,50 @@ fn test_av1enc_mp4_mux_and_decode_gradient_psnr() {
     // In intra mode with transform residuals and directional prediction, reconstructed PSNR improves.
     assert!(psnr > 10.0, "Reconstruction PSNR should be > 10 dB, got {psnr:.2} dB");
 }
+
+#[test]
+fn test_av1enc_inter_p_frames_roundtrip() {
+    let (w, h) = (320u32, 240u32);
+    // key_int = 10, so frame 0 is KeyFrame, frames 1..5 are InterFrames
+    let mut enc = Encoder::new(EncoderConfig::new(w, h, 24, 10)).unwrap();
+    let mut y_plane = vec![100u8; (w * h) as usize];
+    for y in 0..h {
+        for x in 0..w {
+            y_plane[(y * w + x) as usize] = ((x + y) % 256) as u8;
+        }
+    }
+    let uv_plane = vec![128u8; ((w / 2) * (h / 2)) as usize];
+    let frame = YuvFrame { y: &y_plane, u: &uv_plane, v: &uv_plane, y_stride: w as usize, uv_stride: (w / 2) as usize };
+
+    let mut packets = Vec::new();
+    for i in 0..6 {
+        let p = enc.encode(&frame, i * 1000).unwrap();
+        packets.push(p);
+    }
+
+    assert!(packets[0].keyframe, "Frame 0 must be a keyframe");
+    println!("Frame 0 (KeyFrame) size = {} bytes", packets[0].data.len());
+    for (i, p) in packets.iter().enumerate().skip(1) {
+        assert!(!p.keyframe, "Frame {i} must be an inter (P) frame");
+        println!("Frame {i} (Inter P-frame) size = {} bytes", p.data.len());
+        // Static scene inter frames should be much smaller than keyframe
+        assert!(p.data.len() < packets[0].data.len(), "Inter frame {i} size ({}) must be smaller than keyframe size ({})", p.data.len(), packets[0].data.len());
+    }
+
+    // Decode all frames with AV1 decoder
+    let mut dec = filmcraft_av1::Decoder::new();
+    let mut decoded = Vec::new();
+    for p in &packets {
+        decoded.extend(dec.decode(&p.data).unwrap());
+    }
+    decoded.extend(dec.flush());
+
+    assert_eq!(decoded.len(), 6, "All 6 frames (1 Key + 5 Inter) must decode successfully");
+    for (i, pic) in decoded.iter().enumerate() {
+        assert_eq!(pic.width, w);
+        assert_eq!(pic.height, h);
+        let psnr = filmcraft_av1enc::compute_psnr_u16(&y_plane, &pic.planes[0]).unwrap();
+        println!("Frame {i} decoded PSNR = {psnr:.2} dB");
+        assert!(psnr > 9.0, "Frame {i} decoded PSNR must be > 9 dB, got {psnr:.2} dB");
+    }
+}

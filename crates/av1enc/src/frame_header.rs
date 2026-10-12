@@ -13,6 +13,7 @@ pub struct FrameHeaderConfig {
     pub error_resilient_mode: bool,
     pub disable_cdf_update: bool,
     pub qindex: u8,
+    pub order_hint: u32,
 }
 
 /// Write uncompressed frame header (spec 5.9).
@@ -38,11 +39,31 @@ pub fn write_frame_header(cfg: &FrameHeaderConfig, seq: &SequenceConfig) -> Vec<
 
     // 5. frame_size_override_flag = 0
     w.write_bit(false);
-    // 6. order_hint = 0 (7 bits, matching order_hint_bits)
-    w.write_bits(0, 7);
+    // 6. order_hint (7 bits, matching order_hint_bits)
+    w.write_bits(cfg.order_hint & 0x7f, 7);
 
     if is_key {
         // render_and_frame_size_different = 0
+        w.write_bit(false);
+    } else {
+        // primary_ref_frame: PRIMARY_REF_NONE (7 = 3 bits: 111)
+        w.write_bits(7, 3);
+        // refresh_frame_flags: 8 bits, 0x01 (updates slot 0)
+        w.write_bits(1, 8);
+        // short: 0 (explicit ref indices)
+        w.write_bit(false);
+        // ref_frame_idx[0..7]: 7 * 3 bits = 0 (all point to slot 0)
+        for _ in 0..7 {
+            w.write_bits(0, 3);
+        }
+        // render_and_frame_size_different: 0
+        w.write_bit(false);
+        // allow_high_precision_mv: 0
+        w.write_bit(false);
+        // interpolation_filter: is_filter_switchable = 0, filter = EIGHTTAP (0) (2 bits)
+        w.write_bit(false);
+        w.write_bits(0, 2);
+        // is_motion_mode_switchable: 0
         w.write_bit(false);
     }
 
@@ -108,8 +129,21 @@ pub fn write_frame_header(cfg: &FrameHeaderConfig, seq: &SequenceConfig) -> Vec<
         w.write_bit(false);
     }
 
+    if !is_key {
+        // reference_select = 0 (single reference)
+        w.write_bit(false);
+    }
+
     // 14. reduced_tx_set = 1
     w.write_bit(true);
+
+    if !is_key {
+        // global_motion_params: 7 reference frames (LAST_FRAME..=ALTREF_FRAME)
+        // 0 = IDENTITY transformation (zero motion)
+        for _ in 0..7 {
+            w.write_bit(false);
+        }
+    }
 
     w.finish()
 }
