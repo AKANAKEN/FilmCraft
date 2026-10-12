@@ -87,8 +87,19 @@ pub const INTERLEAVE: i64 = 16;
 /// the one being rendered), see [`overlap_batch`].
 pub const IN_FLIGHT_BUDGET: u64 = 1 << 29;
 
-/// One rendered picture: straight RGBA8, or for HDR exports the encoded R'G'B' floats.
-type Frame = (Vec<u8>, Vec<f32>);
+/// One rendered picture: straight RGBA8, the encoded R'G'B' floats of an HDR export, or 8-bit
+/// BT.709 4:2:0 from the GPU for encoders that take it ([`VideoEncoder::takes_yuv420`]).
+enum Frame {
+    Rgba(Vec<u8>),
+    Hdr(Vec<f32>),
+    Yuv(filmcraft_frame::VideoFrame),
+}
+
+/// Bytes of one 4:2:0 frame of a `w` x `h` export.
+pub(crate) fn yuv_frame_bytes(w: u32, h: u32) -> u64 {
+    let (w, h) = (u64::from(w), u64::from(h));
+    w.saturating_mul(h).saturating_add(w.div_ceil(2).saturating_mul(h.div_ceil(2)).saturating_mul(2))
+}
 
 /// Bytes of one [`Frame`] of a `w` x `h` export (RGBA8, or three f32 per pixel for HDR).
 pub(crate) fn frame_bytes(w: u32, h: u32, hdr: bool) -> u64 {
@@ -113,12 +124,18 @@ struct Ahead {
 /// Render frames `f..end` in parallel. `None` when a source was not ready for one of them (the
 /// pending flag, taken after every frame because it is per thread): the batch is incomplete and
 /// must be rendered again.
-fn render_batch(pipe: &Pipeline, f: i64, end: i64, sources: &dyn SourceProvider) -> Option<Vec<Frame>> {
+fn render_batch(pipe: &Pipeline, f: i64, end: i64, sources: &dyn SourceProvider, yuv: bool) -> Option<Vec<Frame>> {
     let pending = AtomicBool::new(false);
     let frames: Vec<Frame> = (f..end)
         .into_par_iter()
         .map(|fi| {
-            let frame = pipe.frame(fi, sources);
+            let frame = match yuv.then(|| pipe.frame_yuv(fi, sources)).flatten() {
+                Some(v) => Frame::Yuv(v),
+                None => {
+                    let (rgba, hdr) = pipe.frame(fi, sources);
+                    if pipe.hdr_out { Frame::Hdr(hdr) } else { Frame::Rgba(rgba) }
+                }
+            };
             if filmcraft_media::pending::take() {
                 pending.store(true, Ordering::Relaxed);
             }
@@ -165,6 +182,8 @@ pub struct Exporter {
     overlapped_steps: u64,
     brand: Brand,
     venc: Box<dyn VideoEncoder>,
+    /// Frames go to the encoder as 4:2:0 from the GPU renderer where it can ([`Pipeline::yuv_eligible`]).
+    yuv: bool,
     aenc: Option<Box<dyn AudioEncoder>>,
     audio: Option<AudioOut>,
     /// The loudness pass ran (or is not needed).
@@ -252,6 +271,7 @@ impl Exporter {
             progress.set_status(format!("Exporting {} frames ({})", nframes, settings.format.label()));
         }
         let venc = make_venc(&settings, pipe.w, pipe.h, pipe.rate)?;
+        let yuv = pipe.yuv_eligible() && venc.takes_yuv420();
         let brand = if settings.format.is_mp4_with(settings.multiplexer) { Brand::Mp4 } else { Brand::Mov };
         let audio = if settings.has_audio() { Some(AudioOut::new(project.clone(), seq, &settings, range)?) } else { None };
         let aenc: Option<Box<dyn AudioEncoder>> = match (&audio, settings.audio_codec()) {
@@ -275,6 +295,7 @@ impl Exporter {
             ahead: None,
             overlapped_steps: 0,
             brand,
+            yuv,
             venc,
             aenc,
             audio,
@@ -337,7 +358,12 @@ impl Exporter {
     /// Frames in the next batch, bounded before Rayon can steal nested frame tasks.
     fn batch_len(&self) -> i64 {
         let batch = self.pipe.render_batch_limit(self.batch);
-        if self.overlapping() { overlap_batch(batch, frame_bytes(self.pipe.w, self.pipe.h, self.pipe.hdr_out), self.budget) } else { batch }
+        if self.overlapping() {
+            let bytes = if self.yuv { yuv_frame_bytes(self.pipe.w, self.pipe.h) } else { frame_bytes(self.pipe.w, self.pipe.h, self.pipe.hdr_out) };
+            overlap_batch(batch, bytes, self.budget)
+        } else {
+            batch
+        }
     }
 
     fn sample_at_frame(&self, f: i64, sr: u32) -> i64 {
@@ -531,8 +557,8 @@ impl Exporter {
             Some(a) if a.first == self.next => (a.first, a.frames),
             _ => {
                 let (f, end) = (self.next, self.next.saturating_add(self.batch_len()).min(self.f1));
-                let pipe = &self.pipe;
-                match timed(Stage::Render, || render_batch(pipe, f, end, sources)) {
+                let (pipe, yuv) = (&self.pipe, self.yuv);
+                match timed(Stage::Render, || render_batch(pipe, f, end, sources, yuv)) {
                     Some(frames) => (f, frames),
                     None => return Ok(Step::Pending),
                 }
@@ -555,12 +581,12 @@ impl Exporter {
                 }
             };
         };
-        let pipe = self.pipe.clone();
+        let (pipe, yuv) = (self.pipe.clone(), self.yuv);
         let mut slot: Option<std::thread::Result<Option<Vec<Frame>>>> = None;
         let mut encode_done: Option<web_time::Instant> = None;
         let encoded = rayon::in_place_scope(|s| {
             s.spawn(|_| {
-                slot = Some(catch_unwind(AssertUnwindSafe(|| timed(Stage::Render, || render_batch(&pipe, a, b, sources)))));
+                slot = Some(catch_unwind(AssertUnwindSafe(|| timed(Stage::Render, || render_batch(&pipe, a, b, sources, yuv)))));
             });
             let r = self.encode_batch(f, frames, sources);
             encode_done = Some(web_time::Instant::now());
@@ -634,17 +660,16 @@ impl Exporter {
         Ok(Encoded::Done)
     }
 
-    fn encode(&mut self, frames: &[(Vec<u8>, Vec<f32>)], f: i64) -> Result<Vec<EncodedPacket>> {
+    fn encode(&mut self, frames: &[Frame], f: i64) -> Result<Vec<EncodedPacket>> {
         let mut packets = Vec::new();
-        for (k, (rgba, hdr)) in frames.iter().enumerate() {
-            let fr = EncoderFrame {
-                width: self.pipe.w,
-                height: self.pipe.h,
-                rgba,
-                hdr: self.pipe.hdr_out.then_some(hdr.as_slice()),
-                index: (f - self.f0) as u64 + k as u64,
-            };
-            packets.extend(self.venc.encode(&fr)?);
+        let (w, h) = (self.pipe.w, self.pipe.h);
+        for (k, frame) in frames.iter().enumerate() {
+            let index = (f - self.f0) as u64 + k as u64;
+            packets.extend(match frame {
+                Frame::Yuv(v) => self.venc.encode_yuv420(v, index)?,
+                Frame::Rgba(rgba) => self.venc.encode(&EncoderFrame { width: w, height: h, rgba, hdr: None, index })?,
+                Frame::Hdr(hdr) => self.venc.encode(&EncoderFrame { width: w, height: h, rgba: &[], hdr: Some(hdr.as_slice()), index })?,
+            });
         }
         Ok(packets)
     }
