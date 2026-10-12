@@ -95,7 +95,12 @@ pub fn normalize(text: &str, lang: Lang) -> Result<Vec<Token>, NormalizeError> {
                     out.push(Token::Punct(c));
                 }
             }
-            _ if c.is_ascii_digit() => match parse_number_cluster(rest, lang) {
+            _ if c.is_ascii_digit() => match if text.get(..pos).is_some_and(|prefix| prefix.ends_with('/')) {
+                // A rejected slash cluster must not turn its suffix into a fraction or date.
+                parse_number_core(rest, lang)
+            } else {
+                parse_number_cluster(rest, lang)
+            } {
                 Some((tokens, used)) => {
                     pos += used;
                     out.extend(tokens);
@@ -1326,6 +1331,9 @@ mod tests {
         assert_eq!(words("October 7th, 2026", Lang::EnUs), "October seventh , twenty twenty-six");
         assert_eq!(words("9/9/1999", Lang::EnUs), "September ninth nineteen ninety-nine");
         assert_eq!(words("13/7/2026", Lang::EnUs), "thirteen slash seven slash twenty twenty-six");
+        assert_eq!(words("7/32/2026", Lang::EnGb), "seven slash thirty-two slash twenty twenty-six");
+        assert_eq!(words("1/2/3", Lang::EnUs), "one slash two slash three");
+        assert_eq!(words("13/7/2026 1/2", Lang::EnUs), "thirteen slash seven slash twenty twenty-six one half");
         assert_eq!(words("10/7/2026.", Lang::EnUs), "October seventh twenty twenty-six |");
     }
 

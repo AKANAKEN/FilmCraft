@@ -2055,7 +2055,10 @@ pub(crate) fn wheel_input(ctx: &egui::Context) -> WheelInput {
 
 /// Puts the playhead where the pointer is on the ruler: what a press does before any drag (#1090).
 fn scrub_playhead(app: &mut FilmcraftApp, seq: &Sequence, layout: &Layout, p: Pos2, shift: bool) {
-    app.stop();
+    // Reuse the active scrub stream when a press becomes a drag.
+    if !app.scrub.is_open() {
+        app.stop();
+    }
     let mut tt = seq.settings.frame_rate.snap_nearest(layout.tick_at(p.x).max(Tick::ZERO));
     if shift || app.session.prefs.timeline.snap_playhead {
         tt = snap_playhead(app, seq, layout, tt);
@@ -2340,8 +2343,10 @@ fn interact(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence, layout: &
     }
 
     // ---- Escape abandons the drag: the release commits nothing and the clips stay put (#580)
-    if app.tl.drag.is_some() && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-        app.tl.drag = None;
+    if ctx.input(|i| i.key_pressed(egui::Key::Escape))
+        && let Some(Drag::Marquee { before, .. }) = app.tl.drag.take()
+    {
+        app.session.state.selection = before;
     }
 
     // ---- drag

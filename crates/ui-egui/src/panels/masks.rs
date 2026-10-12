@@ -591,7 +591,8 @@ fn pen_overlay(app: &mut FilmcraftApp, ui: &mut egui::Ui, pic: Rect, frame: (u32
         _ => p,
     };
     let mut commit = false;
-    let pressed = resp.drag_started_by(LEFT) || (resp.clicked() && !ui.data(|m| m.get_temp::<bool>(egui::Id::new("mask-pen-placed")).unwrap_or(false)));
+    let drag_started = resp.drag_started_by(LEFT);
+    let pressed = drag_started || (resp.clicked() && !ui.data(|m| m.get_temp::<bool>(egui::Id::new("mask-pen-placed")).unwrap_or(false)));
     if pressed && let Some(p) = resp.interact_pointer_pos() {
         let near_first = d.points.first().is_some_and(|f| (sp(&to_screen, Vec2::new(f[0], f[1])) - p).length() < 8.0);
         if d.points.len() >= 3 && near_first {
@@ -599,7 +600,8 @@ fn pen_overlay(app: &mut FilmcraftApp, ui: &mut egui::Ui, pic: Rect, frame: (u32
         } else {
             let c = to_c(snap(d.points.last(), p));
             d.points.push([c.x, c.y, 0.0, 0.0]);
-            ui.data_mut(|m| m.insert_temp(egui::Id::new("mask-pen-placed"), resp.drag_started_by(LEFT)));
+            // Response queries also lock the Context; evaluate them before data_mut.
+            ui.data_mut(|m| m.insert_temp(egui::Id::new("mask-pen-placed"), drag_started));
         }
     }
     if resp.clicked() || resp.drag_stopped() {
