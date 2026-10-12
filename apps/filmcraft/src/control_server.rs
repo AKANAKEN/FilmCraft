@@ -47,8 +47,10 @@ impl Token {
         match getrandom::fill(&mut bytes) {
             Ok(()) => Self(bytes.iter().map(|b| format!("{b:02x}")).collect()),
             Err(e) => {
-                // No OS randomness: refuse to run without a token rather than invent a weak one.
-                eprintln!("filmcraft: control server could not generate a token ({e}); set FILMCRAFT_CONTROL_TOKEN");
+                // No OS randomness: run with no token rather than invent a weak one. `matches`
+                // rejects an empty token, so the control channel stays shut until the operator
+                // sets FILMCRAFT_CONTROL_TOKEN.
+                eprintln!("filmcraft: control server could not generate a token ({e}); the control channel stays closed until FILMCRAFT_CONTROL_TOKEN is set");
                 Self(String::new())
             }
         }
@@ -59,7 +61,12 @@ impl Token {
     }
 
     /// Constant-time compare: the reply does not leak how much of a guess was right.
+    /// An empty token (generation failed and no `FILMCRAFT_CONTROL_TOKEN` was set) matches
+    /// nothing: the gate stays closed rather than admitting anyone.
     fn matches(&self, guess: &str) -> bool {
+        if self.0.is_empty() {
+            return false;
+        }
         let (a, b) = (self.0.as_bytes(), guess.as_bytes());
         if a.len() != b.len() {
             return false;
@@ -76,8 +83,14 @@ impl Token {
 /// Failure is reported, not fatal: a client can still use `FILMCRAFT_CONTROL_TOKEN`.
 pub fn write_token_file(path: &std::path::Path, token: &Token) {
     use std::fs::OpenOptions;
+    #[cfg(unix)]
     use std::os::unix::fs::OpenOptionsExt;
-    let result = OpenOptions::new().create(true).write(true).truncate(true).mode(0o600).open(path).and_then(|mut f| f.write_all(token.as_str().as_bytes()));
+    let mut opts = OpenOptions::new();
+    opts.create(true).write(true).truncate(true);
+    // Owner-only on unix; on other platforms the file system's own permissions apply.
+    #[cfg(unix)]
+    opts.mode(0o600);
+    let result = opts.open(path).and_then(|mut f| f.write_all(token.as_str().as_bytes()));
     if let Err(e) = result {
         eprintln!("filmcraft: control token could not be written to {}: {e}", path.display());
     }
@@ -199,7 +212,9 @@ fn read_bounded_line(reader: &mut impl BufRead, buf: &mut Vec<u8>, max: usize) -
 
 /// Serve requests from `read`, answering on `out`, until the peer closes, sends something that is
 /// not a request, or `handle` returns `None` (app gone). `handle` gets `(method, params)` and
-/// returns the reply object (the request's `id` is added here).
+/// returns the reply object (the request's `id` is added here). Test helper: production uses
+/// `serve_lines_gated` (#163).
+#[cfg(test)]
 fn serve_lines<R: Read, W: Write>(read: R, out: W, handle: impl FnMut(String, Value) -> Option<Value>) {
     serve_lines_gated(read, out, None, handle);
 }
@@ -474,5 +489,18 @@ mod tests {
         BufReader::new(&mut extra).read_line(&mut line).unwrap();
         assert!(line.contains("too many control connections"), "{line}");
         drop(held);
+    }
+}
+
+#[cfg(test)]
+mod empty_token_tests {
+    use super::Token;
+
+    #[test]
+    fn an_empty_token_never_matches() {
+        // Generation failure leaves an empty token; it must admit nobody, not even the empty guess.
+        let t = Token(String::new());
+        assert!(!t.matches(""));
+        assert!(!t.matches("anything"));
     }
 }

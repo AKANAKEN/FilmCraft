@@ -22,8 +22,17 @@ pub fn default_token() -> Option<String> {
     if let Some(t) = std::env::var("FILMCRAFT_CONTROL_TOKEN").ok().map(|t| t.trim().to_string()).filter(|t| !t.is_empty()) {
         return Some(t);
     }
-    let dir = filmcraft_engine::autosave::default_data_dir()?;
-    let text = std::fs::read_to_string(dir.join(TOKEN_FILE)).ok()?;
+    // An explicit path wins; otherwise the same directory the app resolves: FILMCRAFT_DATA_DIR
+    // (the CLI's `--data-dir` is app-side only, so an out-of-process bridge sets the env var)
+    // over the default data directory (#163).
+    let path = std::env::var_os("FILMCRAFT_CONTROL_TOKEN_FILE").filter(|v| !v.is_empty()).map(std::path::PathBuf::from).or_else(|| {
+        let dir = std::env::var_os("FILMCRAFT_DATA_DIR")
+            .filter(|v| !v.is_empty())
+            .map(std::path::PathBuf::from)
+            .or_else(filmcraft_engine::autosave::default_data_dir)?;
+        Some(dir.join(TOKEN_FILE))
+    })?;
+    let text = std::fs::read_to_string(path).ok()?;
     let t = text.trim().to_string();
     (!t.is_empty()).then_some(t)
 }
@@ -71,14 +80,14 @@ impl BridgeClient {
         }
         let mut start = self.call("engine.execute", json!({"command": id, "params": params})).await?;
         let Some(job) = start.get("job").and_then(Value::as_u64) else { return Ok(start) };
-        let result = loop {
+        let (result, offline) = loop {
             tokio::time::sleep(JOB_POLL).await;
             let jobs = self.call("engine.execute", json!({"command": "jobs.list", "params": {}})).await?;
             let Some(j) = jobs.as_array().and_then(|a| a.iter().find(|j| j["id"].as_u64() == Some(job))).cloned() else {
-                break Value::Null;
+                break (Value::Null, None);
             };
             if j["finished"].as_bool() == Some(true) {
-                break j["result"].clone();
+                break (j["result"].clone(), j.get("offlineMedia").cloned());
             }
         };
         if let Some(e) = result.get("error").and_then(Value::as_str) {
@@ -86,6 +95,9 @@ impl BridgeClient {
         }
         if let Some(o) = start.as_object_mut() {
             o.insert("result".into(), result);
+            if let Some(off) = offline {
+                o.insert("offlineMedia".into(), off);
+            }
         }
         Ok(start)
     }
@@ -165,6 +177,11 @@ mod tests {
     /// export starts job 7, which `jobs.list` reports running twice and then finished with
     /// `result`. Every request is recorded.
     async fn fake_app(result: Value) -> (String, Arc<Mutex<Vec<Value>>>) {
+        fake_app_with(result, None).await
+    }
+
+    /// [`fake_app`] whose finished job also lists `offline` as its `offlineMedia`.
+    async fn fake_app_with(result: Value, offline: Option<Value>) -> (String, Arc<Mutex<Vec<Value>>>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap().to_string();
         let seen = Arc::new(Mutex::new(Vec::new()));
@@ -186,7 +203,11 @@ mod tests {
                     Some("jobs.list") => {
                         polls += 1;
                         let finished = polls >= 3;
-                        json!([{"id": 7, "finished": finished, "result": if finished { result.clone() } else { Value::Null }}])
+                        let mut j = json!({"id": 7, "finished": finished, "result": if finished { result.clone() } else { Value::Null }});
+                        if let Some(o) = offline.clone().filter(|_| finished) {
+                            j["offlineMedia"] = o;
+                        }
+                        json!([j])
                     }
                     _ => json!(null),
                 };
@@ -211,6 +232,16 @@ mod tests {
         assert!(seen.iter().all(|q| q["params"]["params"]["wait"] != json!(true)));
         assert_eq!(seen.iter().filter(|q| q["params"]["command"] == "file.exportMedia").count(), 1, "started once");
         assert_eq!(seen.iter().filter(|q| q["params"]["command"] == "jobs.list").count(), 3);
+    }
+
+    /// The offline media a polled export drew comes back as in a blocking export's reply (#1054).
+    #[tokio::test]
+    async fn a_polled_export_reports_its_offline_media() {
+        let off = json!([{"item": 8, "status": "missing"}]);
+        let (addr, _) = fake_app_with(json!({"frames": 3}), Some(off.clone())).await;
+        let b = BridgeClient::with_token(addr, Some("test-token".into())).unwrap();
+        let r = b.execute("file.exportMedia", json!({"path": "/tmp/out.mov", "wait": true})).await.unwrap();
+        assert_eq!(r["offlineMedia"], off, "{r}");
     }
 
     #[tokio::test]
