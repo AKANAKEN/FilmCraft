@@ -1,0 +1,197 @@
+# Turkish (tr) catalog. Columns, separated by a TAB: context <TAB> source <TAB> translation
+#
+# Clean-room: entries were translated from the plain meaning of FilmCraft's English interface
+# using ordinary Turkish video-editing vocabulary. Untranslated strings fall back to English.
+
+	File	Dosya
+	Edit	Düzenle
+	Clip	Klip
+	Sequence	Sekans
+	Markers	İşaretçiler
+	Graphics and Titles	Grafikler ve Başlıklar
+	View	Görünüm
+	Window	Pencere
+	Help	Yardım
+	Language	Dil
+	Settings	Ayarlar
+	Preferences	Tercihler
+	Import	İçe Aktar
+	Export	Dışa Aktar
+	Project	Proje
+	Source	Kaynak
+	Program	Program
+	Properties	Özellikler
+	Effect Controls	Efekt Kontrolleri
+	Effects	Efektler
+	Audio	Ses
+	Audio Clip Mixer	Ses Klibi Mikseri
+	Audio Track Mixer	Ses Parçası Mikseri
+	Metadata	Meta Veriler
+	Media Browser	Medya Tarayıcısı
+	Libraries	Kitaplıklar
+	Text	Metin
+	Essential Graphics	Temel Grafikler
+	Captions and Graphics	Altyazılar ve Grafikler
+	All Panels	Tüm Paneller
+	Editing	Düzenleme
+	Assembly	Kurgu
+	Color	Renk
+	Close	Kapat
+	Cancel	İptal
+	OK	Tamam
+	Apply	Uygula
+	Reset	Sıfırla
+	Reset…	Sıfırla…
+	Save	Kaydet
+	Save As…	Farklı Kaydet…
+	Close Project	Projeyi Kapat
+	Quit FilmCraft	FilmCraft'tan Çık
+	About FilmCraft	FilmCraft Hakkında
+	Undo	Geri Al
+	Redo	Yinele
+	Cut	Kes
+	Copy	Kopyala
+	Paste	Yapıştır
+	Delete	Sil
+	Select All	Tümünü Seç
+	Deselect All	Seçimi Kaldır
+	Search	Ara
+	Name	Ad
+	Type	Tür
+	Duration	Süre
+	General	Genel
+	Appearance	Görünüm
+	Auto Save	Otomatik Kaydetme
+	Audio Hardware	Ses Donanımı
+	Graphics	Grafikler
+	Labels	Etiketler
+	Media	Medya
+	Media Cache	Medya Önbelleği
+	Memory	Bellek
+	Playback	Oynatma
+	Plugins	Eklentiler
+	Timeline	Zaman Çizelgesi
+	Trim	Kırpma
+	Interface Language	Arayüz Dili
+	System Language	Sistem Dili
+	At Startup	Başlangıçta
+	Show Tool Tips	Araç İpuçlarını Göster
+	Hardware decoding	Donanım destekli çözme
+	Auto	Otomatik
+	Full	Tam
+	High Quality Playback	Yüksek Kaliteli Oynatma
+	Playback Resolution	Oynatma Çözünürlüğü
+	Paused Resolution	Duraklatılmış Görüntü Çözünürlüğü
+	Play/Stop	Oynat/Durdur
+	Stop	Durdur
+	Loop	Döngü
+	Zoom In	Yakınlaştır
+	Zoom Out	Uzaklaştır
+	Zoom to Sequence	Sekansa Sığdır
+	Fit	Sığdır
+	Show Rulers	Cetvelleri Göster
+	Show Guides	Kılavuzları Göster
+	Lock Guides	Kılavuzları Kilitle
+	Add Guide…	Kılavuz Ekle…
+	Clear Guides	Kılavuzları Temizle
+	Safe Margins	Güvenli Kenar Boşlukları
+	Darkest	En Koyu
+	Dark	Koyu
+	Light	Açık
+	Workspaces	Çalışma Alanları
+	Reset to Saved Layout	Kaydedilmiş Düzene Dön
+	Save Changes to this Workspace	Bu Çalışma Alanındaki Değişiklikleri Kaydet
+	Save as New Workspace…	Yeni Çalışma Alanı Olarak Kaydet…
+	Edit Workspaces…	Çalışma Alanlarını Düzenle…
+	Selection Tool	Seçim Aracı
+	Track Select Forward Tool	İleri Parça Seçim Aracı
+	Track Select Backward Tool	Geri Parça Seçim Aracı
+	Ripple Edit Tool	Kaydırmalı Düzenleme Aracı
+	Rolling Edit Tool	Yuvarlamalı Düzenleme Aracı
+	Rate Stretch Tool	Hız Uzatma Aracı
+	Razor Tool	Jilet Aracı
+	Slip Tool	Kaydırma Aracı
+	Slide Tool	Öteleme Aracı
+	Pen Tool	Kalem Aracı
+	Hand Tool	El Aracı
+	Zoom Tool	Yakınlaştırma Aracı
+	Type Tool	Metin Aracı
+	Position	Konum
+	Anchor Point	Bağlantı Noktası
+	Scale	Ölçek
+	Uniform Scale	Orantılı Ölçek
+	Rotation	Döndürme
+	Opacity	Saydamlık
+	Crop	Kırp
+	Left	Sol
+	Right	Sağ
+	Top	Üst
+	Bottom	Alt
+	Motion	Hareket
+	Video	Video
+	Video Effects	Video Efektleri
+	Audio Effects	Ses Efektleri
+	Video Transitions	Video Geçişleri
+	Audio Transitions	Ses Geçişleri
+	Gaussian Blur	Gauss Bulanıklığı
+	Blur	Bulanıklık
+	Sharpen	Keskinleştir
+	Ultra Key	Ultra Key
+	Key Color	Anahtar Rengi
+	Eyedropper (pick a color from the Program monitor)	Damlalık (Program ekranından bir renk seçin)
+	Create ellipse mask	Elips maske oluştur
+	Create 4-point polygon mask	4 noktalı çokgen maske oluştur
+	Free draw bezier	Serbest Bézier çizimi
+	Inverted	Ters Çevir
+	Delete Mask	Maskeyi Sil
+	Track selected mask backward	Seçili maskeyi geriye doğru takip et
+	Track selected mask backward 1 frame	Seçili maskeyi 1 kare geriye doğru takip et
+	Track selected mask forward 1 frame	Seçili maskeyi 1 kare ileri doğru takip et
+	Track selected mask forward	Seçili maskeyi ileri doğru takip et
+	Stop tracking	Takibi durdur
+	Sequence Settings…	Sekans Ayarları…
+	Frame Size	Kare Boyutu
+	Frame Rate	Kare Hızı
+	Width	Genişlik
+	Height	Yükseklik
+	Scale to Frame Size	Kare Boyutuna Ölçekle
+	Set to Frame Size	Kare Boyutuna Ayarla
+	Add Edit	Kesme Noktası Ekle
+	Add Edit to All Tracks	Tüm Parçalara Kesme Noktası Ekle
+	Add Marker	İşaretçi Ekle
+	Add Chapter Marker…	Bölüm İşaretçisi Ekle…
+	Keyboard Shortcuts…	Klavye Kısayolları…
+	General…	Genel…
+	Appearance…	Görünüm…
+	Audio…	Ses…
+	Audio Hardware…	Ses Donanımı…
+	Auto Save…	Otomatik Kaydetme…
+	Color…	Renk…
+	Graphics…	Grafikler…
+	Labels…	Etiketler…
+	Media…	Medya…
+	Media Cache…	Medya Önbelleği…
+	Memory…	Bellek…
+	Playback…	Oynatma…
+	Plugins…	Eklentiler…
+	Timeline…	Zaman Çizelgesi…
+	Trim…	Kırpma…
+	Format	Biçim
+	Preset	Hazır Ayar
+	Output	Çıktı
+	Render at Maximum Depth	En Yüksek Derinlikte Oluştur
+	Use Maximum Render Quality	En Yüksek Oluşturma Kalitesini Kullan
+	Target Bitrate	Hedef Bit Hızı
+	Export Audio	Sesi Dışa Aktar
+	Create Proxies	Proxy Dosyaları Oluştur
+	Render In to Out	Girişten Çıkışa Oluştur
+	Render Effects In to Out	Efektleri Girişten Çıkışa Oluştur
+	Remove	Kaldır
+	Enable	Etkinleştir
+	On	Açık
+	Off	Kapalı
+	None	Yok
+	Custom	Özel
+	Default	Varsayılan
+	Warning	Uyarı
+	Error	Hata

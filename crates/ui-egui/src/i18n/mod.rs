@@ -46,6 +46,7 @@ pub enum Language {
     Ru,
     Fr,
     Id,
+    Tr,
 }
 
 static JAPANESE: OnceLock<Catalog> = OnceLock::new();
@@ -57,9 +58,22 @@ static GERMAN: OnceLock<Catalog> = OnceLock::new();
 static RUSSIAN: OnceLock<Catalog> = OnceLock::new();
 static FRENCH: OnceLock<Catalog> = OnceLock::new();
 static INDONESIAN: OnceLock<Catalog> = OnceLock::new();
+static TURKISH: OnceLock<Catalog> = OnceLock::new();
 
 impl Language {
-    pub const ALL: [Self; 10] = [Self::En, Self::Ja, Self::Es, Self::PtBr, Self::Uk, Self::ZhCn, Self::De, Self::Ru, Self::Fr, Self::Id];
+    pub const ALL: [Self; 11] = [
+        Self::En,
+        Self::Ja,
+        Self::Es,
+        Self::PtBr,
+        Self::Uk,
+        Self::ZhCn,
+        Self::De,
+        Self::Ru,
+        Self::Fr,
+        Self::Id,
+        Self::Tr,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -73,6 +87,7 @@ impl Language {
             Self::Ru => "Русский",
             Self::Fr => "Français",
             Self::Id => "Bahasa Indonesia",
+            Self::Tr => "Türkçe",
         }
     }
 
@@ -88,6 +103,7 @@ impl Language {
             "ru" => Some(Self::Ru),
             "fr" => Some(Self::Fr),
             "id" => Some(Self::Id),
+            "tr" => Some(Self::Tr),
             _ => None,
         }
     }
@@ -101,7 +117,7 @@ impl Language {
     /// only for Simplified locales (`zh`, `zh-CN`, `zh-SG`, `zh-Hans…`); Traditional ones (`zh-TW`,
     /// `zh-HK`, `zh-MO`, `zh-Hant…`) are skipped.
     pub fn from_locales(tags: &[String]) -> Self {
-        const PRIMARY: [(&str, Language); 10] = [
+        const PRIMARY: [(&str, Language); 11] = [
             ("en", Language::En),
             ("ja", Language::Ja),
             ("es", Language::Es),
@@ -112,6 +128,7 @@ impl Language {
             ("fr", Language::Fr),
             ("id", Language::Id),
             ("in", Language::Id),
+            ("tr", Language::Tr),
         ];
         tags.iter()
             .find_map(|tag| {
@@ -142,6 +159,7 @@ impl Language {
             Self::Ru => "ru",
             Self::Fr => "fr",
             Self::Id => "id",
+            Self::Tr => "tr",
         }
     }
 
@@ -158,6 +176,7 @@ impl Language {
             Self::Ru => Some(RUSSIAN.get_or_init(|| Catalog::parse(include_str!("ru.tsv")))),
             Self::Fr => Some(FRENCH.get_or_init(|| Catalog::parse(include_str!("fr.tsv")))),
             Self::Id => Some(INDONESIAN.get_or_init(|| Catalog::parse(include_str!("id.tsv")))),
+            Self::Tr => Some(TURKISH.get_or_init(|| Catalog::parse(include_str!("tr.tsv")))),
         }
     }
 
@@ -329,6 +348,7 @@ mod tests {
             ("ru", include_str!("ru.tsv")),
             ("fr", include_str!("fr.tsv")),
             ("id", include_str!("id.tsv")),
+            ("tr", include_str!("tr.tsv")),
         ] {
             let (entries, errors) = catalog::parse_entries(text);
             assert!(errors.is_empty(), "{code}: {errors:?}");
@@ -383,6 +403,12 @@ mod tests {
         assert_eq!(Language::Id.tr("An untranslated label"), "An untranslated label");
         assert_eq!(Language::parse("id"), Some(Language::Id));
         assert_eq!(Language::parse("id-ID"), None, "the preference stores the bare code");
+        assert_eq!(Language::Tr.name(), "Türkçe");
+        assert_eq!(Language::Tr.tr("File"), "Dosya");
+        assert_eq!(Language::Tr.tr("Save As…"), "Farklı Kaydet…");
+        assert_eq!(Language::Tr.tr("tatil videosu.mp4"), "tatil videosu.mp4");
+        assert_eq!(Language::parse("tr"), Some(Language::Tr));
+        assert_eq!(Language::parse("tr-TR"), None, "the preference stores the bare code");
         for l in Language::ALL {
             assert_eq!(Language::parse(l.code()), Some(l));
             let json = serde_json::to_string(&l).unwrap();
@@ -944,6 +970,23 @@ mod tests {
         let mut restarted = filmcraft_engine::Session::default();
         restarted.prefs = serde_json::from_str(&prefs).unwrap();
         assert_eq!(crate::FilmcraftApp::new(restarted).ui.language, Language::Id);
+        let result = crate::menus::invoke(&mut app, &ctx, "app.language.turkish", serde_json::json!({})).unwrap();
+        assert_eq!(result, serde_json::json!("tr"));
+        assert_eq!((app.ui.language, current()), (Language::Tr, Language::Tr));
+        assert_eq!(app.session.prefs.general.interface_language, "tr");
+        for it in crate::menus::menu_items(&app).iter().filter(|it| it.id.starts_with("app.language.")) {
+            assert_eq!(it.checked, Some(it.id == "app.language.turkish"), "{}", it.id);
+        }
+        let items = crate::menus::menu_items(&app);
+        let label = |id: &str| items.iter().find(|it| it.id == id).map(|it| it.label.as_str());
+        assert_eq!(label("file.saveAs"), Some("Farklı Kaydet…"));
+        assert_eq!(label("app.language.turkish"), Some("Türkçe"));
+        let saved = serde_json::to_string(&app.ui).unwrap();
+        assert!(saved.contains("\"language\":\"tr\""), "{saved}");
+        let prefs = serde_json::to_string(&app.session.prefs).unwrap();
+        let mut restarted = filmcraft_engine::Session::default();
+        restarted.prefs = serde_json::from_str(&prefs).unwrap();
+        assert_eq!(crate::FilmcraftApp::new(restarted).ui.language, Language::Tr);
         crate::menus::invoke(&mut app, &ctx, "app.language.english", serde_json::json!({})).unwrap();
         assert_eq!(app.ui.language, Language::En);
         set_current(Language::En);
@@ -977,6 +1020,9 @@ mod tests {
         }
         for tag in ["id", "ID", "id-ID", "id_ID.UTF-8", "id_ID", "in", "in-ID", "in_ID.UTF-8"] {
             assert_eq!(l(&[tag]), Language::Id, "{tag}");
+        }
+        for tag in ["tr", "TR", "tr-TR", "tr_TR.UTF-8", "tr_TR"] {
+            assert_eq!(l(&[tag]), Language::Tr, "{tag}");
         }
         assert_eq!(l(&["jv-ID", "ms-MY", "id-ID", "en"]), Language::Id, "Javanese and Malay have no catalog");
         for none in [&["ind"][..], &["i"], &["-id"], &["ms"], &["ms-ID"], &["jv"]] {

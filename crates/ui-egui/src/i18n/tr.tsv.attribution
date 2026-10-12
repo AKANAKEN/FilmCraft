@@ -1,0 +1,8 @@
+asset:        tr.tsv
+title:        Turkish interface translation catalog
+author:       FilmCraft contributors
+source:       original work
+license:      MIT OR Apache-2.0
+license-file: LICENSE-MIT OR LICENSE-APACHE
+added:        2026-10-13 by OpenAI Codex for İdris
+notes:        Original English-to-Turkish interface translations using clean-room video-editing vocabulary.
