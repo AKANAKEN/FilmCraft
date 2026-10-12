@@ -209,6 +209,42 @@ fn subclip(m: &Value, available: &BTreeMap<[u8; 32], Tick>) -> Result<(SubclipPl
     }
     Ok((SubclipPlan { name, parent, start, duration, evidence: m.clone() }, clamped))
 }
+/// A rendered motion effect carries its retime in media of its own, produced when the effect was
+/// rendered. Its component points at that precompute through a source clip, whose identity is the
+/// precompute master. Find that master, so the effect can be transferred as the baked clip it is
+/// and bound to the render like any other managed master.
+fn precompute_master<'a>(m: &Value, mobs: &'a [Value]) -> Option<&'a Value> {
+    fn find(v: &Value, out: &mut Vec<[u8; 32]>, depth: usize) {
+        if depth > 24 || out.len() > 64 {
+            return;
+        }
+        match v {
+            Value::Object(o) => {
+                if let Some(p) = o.get("properties").and_then(|p| p.get("precomputed"))
+                    && let Some(id) = p.get("source_id").and_then(|i| full_identity(i).ok())
+                {
+                    out.push(id);
+                }
+                for x in o.values() {
+                    find(x, out, depth + 1);
+                }
+            }
+            Value::Array(a) => {
+                for x in a {
+                    find(x, out, depth + 1);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut found = Vec::new();
+    find(m.get("tracks")?, &mut found, 0);
+    // One effect, one render. Tracks naming different precomputes are not a single baked clip,
+    // and picking one of them would bind the item to the wrong media.
+    let id = *found.first()?;
+    found.iter().all(|x| *x == id).then_some(())?;
+    mobs.iter().find(|x| x["kind"] == "MasterMob" && full_identity(&x["id"]).ok() == Some(id))
+}
 fn membership(m: &Value) -> Result<bool> {
     m.get("user_placed").and_then(Value::as_bool).ok_or_else(|| bad("missing master bin membership"))
 }
@@ -323,6 +359,37 @@ pub fn plan_scoped(bytes: &[u8], mode: TransferMode) -> Result<Plan> {
                 }
             }
         }
+        // A placed motion effect is a baked clip: its retime lives in media the render produced.
+        // Claim that precompute master for it, so the bin shows the effect at its baked length
+        // bound to its own render, and the master is not also imported as a separate source.
+        let mut baked: BTreeMap<[u8; 32], Option<String>> = BTreeMap::new();
+        let mut unrendered = 0usize;
+        let mut contested = 0usize;
+        for m in mobs.iter().filter(|m| m["kind"] == "CompositionMob" && m["user_placed"] == true && m["usage_code"] == 6) {
+            match precompute_master(m, mobs).and_then(|p| full_identity(&p["id"]).ok()) {
+                Some(id) => {
+                    // Two effects sharing one render cannot both be it; neither is claimed, and
+                    // the precompute stays an ordinary source rather than taking one of the names.
+                    if baked.insert(id, Some(text(m, "name")?.to_owned())).is_some() {
+                        baked.insert(id, None);
+                        contested += 1;
+                    }
+                }
+                // Not rendered, so there is no baked media to show.
+                None => unrendered += 1,
+            }
+        }
+        if contested > 0 {
+            result.warnings.push(format!(
+                "{}: {contested} rendered media are each claimed by more than one motion effect; none was transferred as a baked clip.",
+                out.name
+            ));
+        }
+        if unrendered > 0 {
+            result
+                .warnings
+                .push(format!("{}: {unrendered} motion effects have not been rendered, so they have no media of their own and were not imported.", out.name));
+        }
         let rate_evidence = crate::avid_sequence::offline_rate_evidence(mobs)?;
         let mut sources = BTreeMap::new();
         for m in mobs.iter().filter(|m| m["kind"] == "SourceMob" && m["live"] == true) {
@@ -403,8 +470,13 @@ pub fn plan_scoped(bytes: &[u8], mode: TransferMode) -> Result<Plan> {
                     }
                 }
                 let picture_rate_evidence = full_identity(&c["id"]).ok().and_then(|id| rate_evidence.get(&id)).cloned().flatten();
-                let clip = ClipPlan { name, duration, evidence: c.clone(), source_descriptors, picture_rate_evidence };
-                if placed { out.clips.push(clip) } else { out.referenced.push(clip) }
+                // A claimed precompute is the motion effect's own media: it belongs in the bin
+                // under the effect's name, not among the sources the bin merely references.
+                // A master the bin placed is already its own item and keeps its own name; only an
+                // unplaced precompute is claimed, and only when exactly one effect claims it.
+                let claimed = if placed { None } else { full_identity(&c["id"]).ok().and_then(|id| baked.get(&id)).cloned().flatten() };
+                let clip = ClipPlan { name: claimed.clone().unwrap_or(name), duration, evidence: c.clone(), source_descriptors, picture_rate_evidence };
+                if placed || claimed.is_some() { out.clips.push(clip) } else { out.referenced.push(clip) }
             } else {
                 result.warnings.push(format!("{}: referenced master {name} was not imported as a bin item", out.name));
             }
@@ -440,6 +512,12 @@ pub fn plan_scoped(bytes: &[u8], mode: TransferMode) -> Result<Plan> {
                                 continue;
                             }
                         }
+                    }
+                    // Count only what sequence conversion will take. A saved effect template,
+                    // group clip or motion effect is a composition mob but not a timeline, and
+                    // counting one asks the engine to convert a bin that has nothing to convert.
+                    if matches!(m["usage_code"].as_i64(), Some(3 | 4 | 6)) {
+                        continue;
                     }
                     out.compositions += 1; // bounded by MAX_MOBS
                     if mode == TransferMode::Sequences {
@@ -755,6 +833,103 @@ mod tests {
             let master = project.item(parent).unwrap().as_media().unwrap();
             assert!(range.end() <= master.info.duration, "the range stays inside its master");
         }
+    }
+    /// A rendered motion effect: the placed effect points through a source clip at a precompute
+    /// master, which is what carries the baked media.
+    fn motion_effect_fixture(rendered: bool) -> Value {
+        let mut v = fixture();
+        let master = v["bins"][0]["catalog"]["clips"][0].clone();
+        let rate = master["rate"].clone();
+        let precompute = json!({"kind":"MasterMob","name":"Clip,Motion_Effect+1","user_placed":false,
+            "id":{"raw":"0a".repeat(32),"byte_order":"little"},"length":24,"rate":rate,"usage_code":1,
+            "user":{},"tracks":[{"index":1,"status":"unresolved","component":{"class":"SCLP","media_kind":1,"length":24,"rate":rate},"references":[]}]});
+        let pointer = if rendered { json!({"class_raw":[83,67,76,80],"object_index":9,"source_id":precompute["id"]}) } else { Value::Null };
+        let effect = json!({"kind":"CompositionMob","name":"Fast (48.00 FPS)","live":true,"user_placed":true,
+            "id":{"raw":"0b".repeat(32),"byte_order":"little"},"length":24,"rate":rate,"usage_code":6,
+            "tracks":[{"index":1,"component":{"class":"SPED","media_kind":1,"length":24,"rate":rate,
+                "properties":{"effect_id":"EFF_ADV_MOTION_CTL","precomputed":pointer}}}]});
+        v["bins"][0]["catalog"]["clips"].as_array_mut().unwrap().push(precompute.clone());
+        v["bins"][0]["catalog"]["summary"]["master_count"] = json!(2);
+        v["bins"][0]["mobs"].as_array_mut().unwrap().push(precompute);
+        v["bins"][0]["mobs"].as_array_mut().unwrap().push(effect);
+        v
+    }
+    #[test]
+    fn a_rendered_motion_effect_is_its_baked_clip() {
+        // The effect is a baked clip: it belongs in the bin at its retimed length, carrying the
+        // media the render produced, so it binds and plays like any other managed master.
+        let v = motion_effect_fixture(true);
+        let plan = plan_scoped(&serde_json::to_vec(&v).unwrap(), TransferMode::Sequences).unwrap();
+        let mut project = Project::default();
+        let bins = apply(&mut project, plan, None).unwrap();
+        // The precompute is bin contents under the effect's name, not a referenced source.
+        assert_eq!((bins[0].clips, bins[0].referenced), (2, 0));
+        let item = project.items.values().find(|i| i.name == "Fast (48.00 FPS)").expect("the effect, named as the bin shows it");
+        let media = item.as_media().expect("a media item carrying the baked render");
+        // The baked length, from the fixture's 2997/125 rate: the retime is already in the media.
+        assert_eq!(media.info.duration.0, (24i128 * 125 * i128::from(TICKS_PER_SECOND) / 2997) as i64, "the effect shows its retimed length");
+        // Its evidence is the precompute's, so identity binding finds the rendered file.
+        let provenance: Value = serde_json::from_str(&item.metadata[SOURCE_KEY]).unwrap();
+        assert_eq!(provenance["clip"]["id"]["raw"], json!("0a".repeat(32)), "bound through the precompute master");
+        assert!(project.items.values().all(|i| i.name != "Clip,Motion_Effect+1"), "the precompute is not also imported separately");
+    }
+    #[test]
+    fn a_contested_or_placed_precompute_is_never_renamed_or_claimed() {
+        // Two effects cannot both be one render: neither claims it, and it keeps its own name.
+        let mut v = motion_effect_fixture(true);
+        let mut second = v["bins"][0]["mobs"].as_array().unwrap().last().unwrap().clone();
+        second["name"] = json!("Also fast");
+        second["id"]["raw"] = json!("0c".repeat(32));
+        v["bins"][0]["mobs"].as_array_mut().unwrap().push(second);
+        let plan = plan_scoped(&serde_json::to_vec(&v).unwrap(), TransferMode::Sequences).unwrap();
+        assert!(plan.warnings.iter().any(|w| w.contains("claimed by more than one motion effect")), "{:?}", plan.warnings);
+        let mut project = Project::default();
+        apply(&mut project, plan, None).unwrap();
+        assert!(project.items.values().any(|i| i.name == "Clip,Motion_Effect+1"), "the render keeps its own name");
+        for name in ["Fast (48.00 FPS)", "Also fast"] {
+            assert!(project.items.values().all(|i| i.name != name), "{name} must not have claimed it");
+        }
+
+        // A master the bin placed keeps its own name even if an effect points at it.
+        let mut v = motion_effect_fixture(true);
+        let last = v["bins"][0]["catalog"]["clips"].as_array().unwrap().len() - 1;
+        v["bins"][0]["catalog"]["clips"][last]["user_placed"] = json!(true);
+        let mobs = v["bins"][0]["mobs"].as_array().unwrap().len();
+        for m in 0..mobs {
+            if v["bins"][0]["mobs"][m]["name"] == json!("Clip,Motion_Effect+1") {
+                v["bins"][0]["mobs"][m]["user_placed"] = json!(true);
+            }
+        }
+        let plan = plan_scoped(&serde_json::to_vec(&v).unwrap(), TransferMode::Sequences).unwrap();
+        let mut project = Project::default();
+        apply(&mut project, plan, None).unwrap();
+        assert!(project.items.values().any(|i| i.name == "Clip,Motion_Effect+1"), "a placed master is not renamed");
+    }
+    #[test]
+    fn tracks_naming_different_renders_are_not_one_baked_clip() {
+        // Picking one of them would bind the item to the wrong media.
+        let mut v = motion_effect_fixture(true);
+        let effect = v["bins"][0]["mobs"].as_array().unwrap().len() - 1;
+        let mut other = v["bins"][0]["mobs"][effect]["tracks"][0].clone();
+        other["index"] = json!(2);
+        other["component"]["properties"]["precomputed"]["source_id"]["raw"] = json!("0f".repeat(32));
+        v["bins"][0]["mobs"][effect]["tracks"].as_array_mut().unwrap().push(other);
+        let plan = plan_scoped(&serde_json::to_vec(&v).unwrap(), TransferMode::Sequences).unwrap();
+        assert!(plan.warnings.iter().any(|w| w.contains("have not been rendered")), "{:?}", plan.warnings);
+        let mut project = Project::default();
+        apply(&mut project, plan, None).unwrap();
+        assert!(project.items.values().all(|i| i.name != "Fast (48.00 FPS)"));
+    }
+    #[test]
+    fn an_unrendered_motion_effect_has_no_media_to_show() {
+        let v = motion_effect_fixture(false);
+        let plan = plan_scoped(&serde_json::to_vec(&v).unwrap(), TransferMode::Sequences).unwrap();
+        assert!(plan.warnings.iter().any(|w| w.contains("have not been rendered")), "{:?}", plan.warnings);
+        let mut project = Project::default();
+        let bins = apply(&mut project, plan, None).unwrap();
+        assert!(project.items.values().all(|i| i.name != "Fast (48.00 FPS)"));
+        // Nothing claimed the precompute, so it stays an ordinary referenced source.
+        assert_eq!(bins[0].referenced, 1);
     }
     #[test]
     fn a_subclip_reaching_past_its_master_is_bounded_by_it() {

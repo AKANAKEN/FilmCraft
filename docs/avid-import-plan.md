@@ -33,6 +33,12 @@ Avid placed in it. FilmCraft binds media to an item rather than to a timeline cl
 those items a converted timeline could neither play nor be relinked. Metadata and media
 transfers are unchanged: they import placed bin contents only.
 
+A rendered motion effect transfers as the baked clip it is. Rendering an effect produces media of
+its own, and the effect points at that precompute, so the bin shows the effect at its retimed
+length bound to its own render and playing at normal speed: the retime is already in the media, and
+none is applied on top. The master it was made from is a separate source, at its own length. An
+effect that has not been rendered has no media to show and is reported rather than imported.
+
 Only timelines become sequences. A bin's placed compositions also include subclips, saved effect
 templates, group clips and motion effects; each is reported by kind and count rather than
 converted into a sequence item that is not a sequence. Saved effect templates, group clips and

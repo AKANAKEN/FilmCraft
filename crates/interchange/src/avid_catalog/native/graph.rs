@@ -29,10 +29,25 @@ impl Graph<'_, '_> {
             Some(o) => json!({"object_index":r,"class_raw":o.class}),
         })
     }
+    /// A rendered effect points at the precompute that holds its baked media, through a source
+    /// clip. Carry that clip's identity, so a transfer can reach the render without decoding the
+    /// bin again. Anything else stays the plain reference it already was.
+    fn precompute(&self, r: u32) -> Result<Value> {
+        let mut value = self.reference(r)?;
+        if value["class_raw"] == json!(*b"SCLP")
+            && let Ok(Decoded::SourceClip { length, id: source, track, start, .. }) = self.evidence.bin.decode(r)
+        {
+            value["source_id"] = id(source);
+            value["length"] = json!(length);
+            value["source_track"] = json!(track);
+            value["start"] = json!(start);
+        }
+        Ok(value)
+    }
     fn properties(&mut self, c: &Component<'_>) -> Result<Value> {
         Ok(json!({"effect_id":c.effect.as_ref().map(|t|t.value.as_ref()),"attributes":self.evidence.attributes(c.attributes,0)?,
             "name":c.name.as_ref().map(|t|t.value.as_ref()),"left_bob":self.reference(c.left)?,"right_bob":self.reference(c.right)?,
-            "param_list":self.reference(c.parameters.unwrap_or(0))?,"precomputed":self.reference(c.precomputed)?,
+            "param_list":self.reference(c.parameters.unwrap_or(0))?,"precomputed":self.precompute(c.precomputed)?,
             "raw_rate":{"mantissa":c.rate.mantissa,"exponent":c.rate.exponent}}))
     }
     fn track(&mut self, t: &Track, depth: usize) -> Result<Value> {
