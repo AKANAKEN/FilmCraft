@@ -21,6 +21,15 @@ use crate::{EngineError, Result, Session};
 
 type Run = fn(&mut Session, &Value) -> Result<Value>;
 
+/// The mask whose shape and handles the Program monitor shows: the selected mask while its clip
+/// is still selected in the Timeline. Selecting another clip or nothing hides them (#1341); the
+/// mask stays selected for Effect Controls.
+impl crate::EditorState {
+    pub fn monitor_mask(&self) -> Option<MaskSel> {
+        self.selected_mask.filter(|m| self.selection.contains(&m.clip))
+    }
+}
+
 /// The mask selected for on-monitor editing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MaskSel {

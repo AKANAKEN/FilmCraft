@@ -231,7 +231,7 @@ pub fn monitor_overlay(app: &mut FilmcraftApp, ui: &mut egui::Ui, pic: Rect, fra
         pen_overlay(app, ui, pic, frame);
         return;
     }
-    let Some(sel) = app.session.state.selected_mask else { return };
+    let Some(sel) = app.session.state.monitor_mask() else { return };
     let Some(seq) = app.session.active_sequence() else { return };
     let ph = app.session.playhead();
     let Some((_, it)) = seq.find_item(sel.clip) else { return };

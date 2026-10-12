@@ -399,3 +399,17 @@ fn path_json_round_trip_keeps_tangents() {
     // the serialized project form still parses
     assert_eq!(crate::masks::path_from_json(&serde_json::to_value(&path).unwrap()), Some(path));
 }
+
+/// #1341: the mask's outline and handles on the Program monitor go away when its clip is no
+/// longer selected, and come back with the clip; the mask itself stays selected.
+#[test]
+fn monitor_mask_follows_the_clip_selection() {
+    let (mut s, clip) = demo();
+    s.execute("masks.add", json!({"clip": clip.0, "shape": "ellipse"})).unwrap();
+    assert_eq!(s.state.monitor_mask().map(|m| m.clip), Some(clip));
+    s.state.selection.clear();
+    assert!(s.state.monitor_mask().is_none(), "no clip selected: no mask guides");
+    assert!(s.state.selected_mask.is_some(), "the mask stays selected for Effect Controls");
+    s.state.selection = vec![clip];
+    assert!(s.state.monitor_mask().is_some());
+}
