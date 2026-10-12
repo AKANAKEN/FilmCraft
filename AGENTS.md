@@ -134,6 +134,12 @@ Shared real-file test corpora (Photoshop-authored PSDs, etc.) live in
 Never commit large binary fixtures to this repo; fetch them pinned by commit and sha256-verified,
 as PhotoCraft does with `cargo xtask corpus`.
 
+## 4. User docs
+
+User docs live in `docs/user/` and are published at https://getartcraft.com/docs/filmcraft. If a change
+alters something a user sees or does (menu and dialog labels, shortcuts, install, export settings,
+errors), update the matching page in `docs/user/` in the same PR, or add one. Rules: `docs/user/AGENTS.md`.
+
 ## See also
 
 - [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/contributing.md](docs/contributing.md): setup, gates, commits, how to add things
