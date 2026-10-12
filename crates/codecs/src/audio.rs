@@ -768,9 +768,13 @@ impl AudioFileSource {
         let mss = MediaSourceStream::new(Box::new(std::io::Cursor::new(bytes.clone())), Default::default());
         let mut hint = Hint::new();
         hint.with_extension(&ext);
-        let probed = symphonia::default::get_probe()
-            .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
-            .map_err(|e| CodecError::Unsupported(e.to_string()))?;
+        let mut fmt_opts = FormatOptions::default();
+        // #1137: LAME records its encoder delay/padding in the LAME tag; without gapless
+        // trimming symphonia emits those ~576+512 leading samples and every MP3 import plays
+        // late against a ffmpeg-decoded reference.
+        fmt_opts.enable_gapless = true;
+        let probed =
+            symphonia::default::get_probe().format(&hint, mss, &fmt_opts, &MetadataOptions::default()).map_err(|e| CodecError::Unsupported(e.to_string()))?;
         let mut format = probed.format;
         let track = format.default_track().ok_or_else(|| CodecError::Unsupported("no audio track".into()))?.clone();
         let rate = track.codec_params.sample_rate.unwrap_or(48_000);
