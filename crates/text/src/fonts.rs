@@ -6,8 +6,9 @@
 //! [`resolve`] maps a family + style name (as stored in projects) to a face and the synthetic
 //! bold/italic needed when the family lacks that style. Unknown families fall back to Inter.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError, RwLock};
 
 use skrifa::instance::{LocationRef, Size};
 use skrifa::{FontRef, MetadataProvider};
@@ -487,7 +488,27 @@ pub fn fallback_for(c: char, prefer: FaceId) -> FaceId {
             return f.id;
         }
     }
-    prefer
+    system_fallback(c).unwrap_or(prefer)
+}
+
+/// An installed face for a character no loaded face covers (Arabic in Inter text on Windows,
+/// #1475). The system folders are scanned on first need and probed with [`Face::covers_text`],
+/// upright regular faces first; the answer, found or not, is kept per character so each one costs
+/// the probe once per process.
+fn system_fallback(c: char) -> Option<FaceId> {
+    static FOUND: Mutex<BTreeMap<char, Option<FaceId>>> = Mutex::new(BTreeMap::new());
+    if let Some(found) = FOUND.lock().unwrap_or_else(PoisonError::into_inner).get(&c) {
+        return *found;
+    }
+    scan_system();
+    let mut buf = [0u8; 4];
+    let s = c.encode_utf8(&mut buf);
+    let faces = all_faces();
+    let mut unloaded: Vec<&Arc<Face>> = faces.iter().filter(|f| f.info.origin == "system" && f.bytes.get().is_none()).collect();
+    unloaded.sort_by_key(|f| (f.info.italic, f.info.weight.abs_diff(400)));
+    let found = unloaded.into_iter().find(|f| f.covers_text(s)).map(|f| f.id);
+    FOUND.lock().unwrap_or_else(PoisonError::into_inner).insert(c, found);
+    found
 }
 
 #[cfg(test)]
@@ -567,6 +588,21 @@ mod tests {
         // and laid out with real glyphs (no tofu)
         let l = crate::layout("日本語の文字", &crate::TextStyle { size: 40.0, ..Default::default() }, &Default::default());
         assert_eq!(l.glyphs.len(), 6);
+        assert!(l.glyphs.iter().all(|g| g.id != 0), "{:?}", l.glyphs);
+    }
+
+    /// Without craft-fonts, Arabic in Inter text is drawn with an installed face that covers it
+    /// (Arial / Tahoma / Segoe UI on Windows, Geeza Pro on macOS), even one never loaded before (#1475).
+    #[test]
+    fn arabic_falls_back_to_an_installed_font() {
+        let text = "مرحبا بالعالم";
+        let l = crate::layout(text, &crate::TextStyle { size: 40.0, ..Default::default() }, &Default::default());
+        scan_system();
+        if !all_faces().iter().any(|f| f.info.origin != "bundled" && f.covers_text("مرحبابالعلم")) {
+            eprintln!("SKIPPED: no installed or craft-fonts face covers Arabic");
+            return;
+        }
+        assert!(!l.glyphs.is_empty());
         assert!(l.glyphs.iter().all(|g| g.id != 0), "{:?}", l.glyphs);
     }
 
