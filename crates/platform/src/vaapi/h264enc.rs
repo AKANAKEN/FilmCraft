@@ -8,7 +8,7 @@
 //! 0, CABAC for Main / High and no 8×8 transform (AMD's encoders never use it, so a PPS that
 //! allows it makes High-profile streams undecodable). The SPS and PPS are written by
 //! `filmcraft_h264enc`'s own writers from the same values the driver is given and go into the
-//! `avcC`; parameter sets and delimiters the driver writes itself are left out of the samples. A
+//! `avcC`; parameter sets, delimiters and SEI the driver writes itself are left out of the samples. A
 //! hardware failure after the first picture ends the export with an error: the software encoder
 //! cannot continue a stream the hardware started.
 //!
@@ -148,7 +148,7 @@ fn annexb_nals(data: &[u8]) -> Vec<&[u8]> {
 }
 
 /// A length-prefixed sample from an Annex B access unit, without the SPS / PPS / AUD (the `avcC`
-/// carries ours). Mesa's radeonsi writes each slice with a zero NAL header byte when the
+/// carries ours) or SEI the driver wrote. Mesa's radeonsi writes each slice with a zero NAL header byte when the
 /// application supplies no packed headers; such a byte (nal_unit_type 0 is never a slice) is set
 /// to what the picture is: an IDR slice (`0x65`) or a reference non-IDR slice (`0x41`; every
 /// picture here is a reference). Slices whose header byte the driver writes are left alone.
@@ -156,7 +156,8 @@ fn sample(annexb: &[u8], idr: bool) -> Vec<u8> {
     let mut out = Vec::with_capacity(annexb.len() + 16);
     for nal in annexb_nals(annexb) {
         let Some(&h) = nal.first() else { continue };
-        if matches!(h & 0x1f, 7..=9) {
+        // SEI (6): written against the driver's own SPS (HRD, picture timing) that ours does not signal
+        if matches!(h & 0x1f, 6..=9) {
             continue;
         }
         let Ok(len) = u32::try_from(nal.len()) else { continue };
@@ -395,6 +396,9 @@ impl VideoEncoder for VaH264Encoder {
             return Err(ExportError::Encode(format!("VA-API: a {}x{} picture for a {}x{} encoder", f.width, f.height, self.cfg.width, self.cfg.height)));
         }
         let (w, h) = (self.cfg.width as usize, self.cfg.height as usize);
+        if f.rgba.len() < w.saturating_mul(h).saturating_mul(4) {
+            return Err(ExportError::Encode(format!("VA-API: a {}-byte RGBA picture for {w}x{h}", f.rgba.len())));
+        }
         filmcraft_export::rgba_to_yuv420_8(f.rgba, w, h, &mut self.y, &mut self.u, &mut self.v);
         let fail = |e: String| ExportError::Encode(format!("VA-API: {e} (turn Export ▸ Hardware encoding off to use the software encoder)"));
         self.session.upload(&self.y, &self.u, &self.v, w, h).map_err(fail)?;
@@ -553,9 +557,10 @@ mod tests {
         let au = [0, 0, 0, 1, 0x09, 0xf0, 0, 0, 0, 1, 0x67, 7, 0, 0, 1, 0x68, 8, 0, 0, 1, 0x00, 0xaa, 0xbb];
         assert_eq!(sample(&au, true), vec![0, 0, 0, 3, 0x65, 0xaa, 0xbb], "IDR slice");
         assert_eq!(sample(&au, false), vec![0, 0, 0, 3, 0x41, 0xaa, 0xbb], "reference non-IDR slice");
-        // a driver that writes the byte itself is left alone; SEI is kept
+        // a driver that writes the byte itself is left alone; its SEI (written against its own SPS,
+        // whose HRD / picture timing ours does not signal) is dropped
         let au = [0, 0, 1, 0x06, 1, 0, 0, 1, 0x25, 0xcc];
-        assert_eq!(sample(&au, true), vec![0, 0, 0, 2, 0x06, 1, 0, 0, 0, 2, 0x25, 0xcc]);
+        assert_eq!(sample(&au, true), vec![0, 0, 0, 2, 0x25, 0xcc]);
         assert!(sample(&[0, 0, 1, 0x67, 1], true).is_empty(), "parameter sets only");
     }
 

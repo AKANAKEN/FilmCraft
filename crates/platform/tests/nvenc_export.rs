@@ -123,9 +123,11 @@ fn hardware_export_matches_the_software_export() {
 #[test]
 fn what_nvenc_does_not_take_goes_to_the_software_encoder() {
     let _one = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    // the decline counts below are NVENC's alone: VA-API (this machine's encoder, or a second GPU
+    // next to an NVIDIA one) declines and counts the same requests too
     #[cfg(target_os = "linux")]
-    if !filmcraft_platform::nvenc::available() && filmcraft_platform::vaapi::h264enc::available() {
-        eprintln!("SKIPPED: VA-API is this machine's hardware encoder (tests/vaapi_export.rs)");
+    if filmcraft_platform::vaapi::h264enc::available() {
+        eprintln!("SKIPPED: VA-API also encodes here, so the decline counts include it (tests/vaapi_export.rs)");
         return;
     }
     filmcraft_platform::register();

@@ -176,3 +176,59 @@ fn what_vaapi_does_not_take_goes_to_the_software_encoder() {
     // the software export of a declined request is fine
     assert_eq!(decode(&tmp("crf.mp4")).len(), 24);
 }
+
+#[test]
+fn a_short_picture_is_an_error_not_a_panic() {
+    let _one = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !ready() {
+        return;
+    }
+    let s = settings(tmp("short.mp4"), HardwareEncoding::Auto);
+    let mut enc = match filmcraft_platform::vaapi::h264enc::factory(Format::H264, 640, 360, FrameRate::FPS_24, &s) {
+        Some(Ok(e)) => e,
+        Some(Err(e)) => panic!("factory error: {e}"),
+        None => panic!("VA-API declined a plain 640x360 H.264 export"),
+    };
+    let short = vec![0u8; 640 * 4 * 10];
+    let frame = filmcraft_export::EncoderFrame { width: 640, height: 360, rgba: &short, hdr: None, index: 0 };
+    assert!(enc.encode(&frame).is_err(), "a picture with too few bytes is an export error");
+    // the encoder still works afterwards
+    let full = vec![128u8; 640 * 360 * 4];
+    let frame = filmcraft_export::EncoderFrame { width: 640, height: 360, rgba: &full, hdr: None, index: 0 };
+    assert_eq!(enc.encode(&frame).unwrap().len(), 1);
+}
+
+#[test]
+fn every_profile_and_rate_control_encodes_with_keyframes_where_asked() {
+    let _one = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !ready() {
+        return;
+    }
+    use filmcraft_export::H264Profile;
+    let (p, seq, m) = project(640, 360, 48);
+    let soft_path = tmp("matrix_soft.mp4");
+    run(&p, seq, &m, &settings(soft_path.clone(), HardwareEncoding::Off));
+    let soft = decode(&soft_path);
+    for (profile, name) in [(H264Profile::Baseline, "Constrained Baseline"), (H264Profile::Main, "Main"), (H264Profile::High, "High")] {
+        for mode in [BitrateMode::Cbr, BitrateMode::Vbr1Pass] {
+            let path = tmp(&format!("matrix_{profile:?}_{mode:?}.mp4"));
+            let s = ExportSettings { h264_profile: profile, bitrate_mode: mode, keyframe_distance: Some(12), ..settings(path.clone(), HardwareEncoding::Auto) };
+            assert_eq!(run(&p, seq, &m, &s), (1, 48), "{profile:?} {mode:?}: every picture through VA-API");
+            let bytes = std::fs::read(&path).unwrap();
+            let file = filmcraft_isobmff::open(bytes.as_slice()).unwrap();
+            assert_eq!(file.tracks[0].sync_samples(), &[0, 12, 24, 36], "{profile:?} {mode:?}: an IDR every keyframe distance");
+            let hard = decode(&path);
+            assert_eq!(hard.len(), 48, "{profile:?} {mode:?}");
+            let worst = soft.iter().zip(&hard).map(|(a, b)| luma_psnr(a, b)).fold(99.0, f64::min);
+            assert!(worst > 30.0, "{profile:?} {mode:?}: {worst:.1} dB from the software export");
+            ffmpeg_decodes_cleanly(&path);
+            if let Some(probe) = filmcraft_testkit::ffprobe() {
+                let out = std::process::Command::new(probe)
+                    .args(["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=profile", "-of", "default=nw=1:nk=1", &path])
+                    .output()
+                    .unwrap();
+                assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), name, "{profile:?} {mode:?}");
+            }
+        }
+    }
+}
