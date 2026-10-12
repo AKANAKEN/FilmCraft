@@ -1,14 +1,10 @@
 //! Clean-room transform coefficient entropy encoding for AV1 tiles (spec 5.11.37 / 7.13.3).
 
 /// 4x4 zigzag scan order (spec Table 7.13.1).
-pub const SCAN_4X4: [usize; 16] = [
-    0, 1, 4, 8, 5, 2, 3, 6, 9, 12, 13, 10, 7, 11, 14, 15,
-];
+pub const SCAN_4X4: [usize; 16] = [0, 1, 4, 8, 5, 2, 3, 6, 9, 12, 13, 10, 7, 11, 14, 15];
 
 /// Inverse scan mapping: gives the scan index (0..15) for a raster position (0..15).
-pub const INV_SCAN_4X4: [usize; 16] = [
-    0, 1, 5, 6, 2, 4, 7, 12, 3, 8, 11, 13, 9, 10, 14, 15,
-];
+pub const INV_SCAN_4X4: [usize; 16] = [0, 1, 5, 6, 2, 4, 7, 12, 3, 8, 11, 13, 9, 10, 14, 15];
 
 /// End-of-block position mapping for 4x4 blocks (multisize 0, eob in 1..=16).
 /// Returns (eob_pt_sym, eob_extra_opt, literal_bits).
@@ -72,11 +68,12 @@ pub static DEFAULT_EOB_EXTRA_CDF: [u16; 3] = [16384, 32768, 0];
 
 /// Write a transform block skip flag (`txb_skip`) using qindex tier, transform size context, and skip context.
 pub fn write_txb_skip(sym: &mut SymbolEncoder, qindex: u8, tx_sz_ctx: usize, ctx: usize, all_zero: bool) {
-    let tier = qindex_to_tier(qindex);
+    let tier = qindex_to_tier(qindex).min(3);
     let s_ctx = tx_sz_ctx.min(4);
     let c_ctx = ctx.min(12);
-    let cdf = &tables::DEFAULT_TXB_SKIP_CDF[tier][s_ctx][c_ctx];
-    sym.write_symbol_no_update(if all_zero { 1 } else { 0 }, cdf);
+    if let Some(cdf) = tables::DEFAULT_TXB_SKIP_CDF.get(tier).and_then(|t| t.get(s_ctx)).and_then(|s| s.get(c_ctx)) {
+        sym.write_symbol_no_update(if all_zero { 1 } else { 0 }, cdf);
+    }
 }
 
 /// Write EOB syntax for a 4x4 transform block into the symbol stream.
@@ -94,46 +91,45 @@ pub fn write_eob_4x4(sym: &mut SymbolEncoder, eob: usize) {
 }
 
 /// Encode a single DC residual for a transform block (e.g. 64x64, 32x32, or 4x4).
-pub fn encode_dc_residual(
-    sym: &mut SymbolEncoder,
-    qindex: u8,
-    tx_sz_ctx: usize,
-    ctx: usize,
-    level: u32,
-    is_negative: bool,
-) {
+pub fn encode_dc_residual(sym: &mut SymbolEncoder, qindex: u8, tx_sz_ctx: usize, ctx: usize, level: u32, is_negative: bool) {
     if level == 0 {
         write_txb_skip(sym, qindex, tx_sz_ctx, ctx, true);
         return;
     }
 
-    let tier = qindex_to_tier(qindex);
+    let tier = qindex_to_tier(qindex).min(3);
     let s_ctx = tx_sz_ctx.min(4);
 
     // 1. txb_skip = 0 (block is not skipped)
     write_txb_skip(sym, qindex, tx_sz_ctx, ctx, false);
 
     // 2. eob = 1: eob_pt symbol 0 (no extra bits)
-    match s_ctx {
-        4 => sym.write_symbol_no_update(0, &tables::DEFAULT_EOB_PT_1024_CDF_BY_TIER[tier]),
-        3 => sym.write_symbol_no_update(0, &tables::DEFAULT_EOB_PT_512_CDF_BY_TIER[tier]),
-        _ => sym.write_symbol_no_update(0, &tables::DEFAULT_EOB_PT_16_CDF_BY_TIER[tier]),
+    let eob_cdf: Option<&[u16]> = match s_ctx {
+        4 => tables::DEFAULT_EOB_PT_1024_CDF_BY_TIER.get(tier).map(|a| a.as_slice()),
+        3 => tables::DEFAULT_EOB_PT_512_CDF_BY_TIER.get(tier).map(|a| a.as_slice()),
+        _ => tables::DEFAULT_EOB_PT_16_CDF_BY_TIER.get(tier).map(|a| a.as_slice()),
+    };
+    if let Some(cdf) = eob_cdf {
+        sym.write_symbol_no_update(0, cdf);
     }
 
     // 3. coeff_base_eob: symbol = (level - 1).min(2) (NUM_BASE_LEVELS = 2)
     let base_sym = ((level - 1).min(2)) as usize;
-    sym.write_symbol_no_update(base_sym, &tables::DEFAULT_COEFF_BASE_EOB_CDF_BY_TIER[tier][s_ctx]);
+    if let Some(base_cdf) = tables::DEFAULT_COEFF_BASE_EOB_CDF_BY_TIER.get(tier).and_then(|t| t.get(s_ctx)) {
+        sym.write_symbol_no_update(base_sym, base_cdf);
+    }
 
     // 4. If level > 2 (i.e. > NUM_BASE_LEVELS), write extra br-levels
     if level > 2 {
         let mut rem = level - 3;
-        let br_cdf = &tables::DEFAULT_COEFF_BR_DC_CDF_BY_TIER[tier][s_ctx.min(3)];
-        for _ in 0..(tables::COEFF_BASE_RANGE / (tables::BR_CDF_SIZE - 1)) {
-            let br = rem.min(3);
-            sym.write_symbol_no_update(br as usize, br_cdf);
-            rem = rem.saturating_sub(br);
-            if br < 3 {
-                break;
+        if let Some(br_cdf) = tables::DEFAULT_COEFF_BR_DC_CDF_BY_TIER.get(tier).and_then(|t| t.get(s_ctx.min(3))) {
+            for _ in 0..(tables::COEFF_BASE_RANGE / (tables::BR_CDF_SIZE - 1)) {
+                let br = rem.min(3);
+                sym.write_symbol_no_update(br as usize, br_cdf);
+                rem = rem.saturating_sub(br);
+                if br < 3 {
+                    break;
+                }
             }
         }
     }

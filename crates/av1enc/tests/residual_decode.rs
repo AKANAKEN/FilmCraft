@@ -1,6 +1,4 @@
-use filmcraft_av1enc::{
-    coeff, frame_header, obu, symbol, tables, Encoder, EncoderConfig, YuvFrame,
-};
+use filmcraft_av1enc::{Encoder, EncoderConfig, YuvFrame, coeff, frame_header, obu, symbol, tables};
 
 #[test]
 fn test_residual_decode_non_skip_block() {
@@ -10,13 +8,7 @@ fn test_residual_decode_non_skip_block() {
     // Create a block with high constant value (e.g. 200) so there's a strong DC residual
     let y_plane = vec![200u8; (w * h) as usize];
     let uv_plane = vec![128u8; ((w / 2) * (h / 2)) as usize];
-    let frame = YuvFrame {
-        y: &y_plane,
-        u: &uv_plane,
-        v: &uv_plane,
-        y_stride: w as usize,
-        uv_stride: (w / 2) as usize,
-    };
+    let frame = YuvFrame { y: &y_plane, u: &uv_plane, v: &uv_plane, y_stride: w as usize, uv_stride: (w / 2) as usize };
 
     let packet = enc.encode(&frame, 0).unwrap();
     assert!(!packet.data.is_empty());
@@ -29,21 +21,13 @@ fn test_residual_decode_non_skip_block() {
     assert_eq!(pics[0].height, h);
     let decoded_val = pics[0].planes[0][0];
     println!("Decoded Y for constant 200 source: {decoded_val}");
-    assert!(
-        decoded_val > 180,
-        "Decoded value should be close to 200 with non-skip DC residual, got {decoded_val}"
-    );
+    assert!(decoded_val > 180, "Decoded value should be close to 200 with non-skip DC residual, got {decoded_val}");
 }
 
 #[test]
 fn test_raw_non_skip_residual_tile() {
     let (w, h) = (64u32, 64u32);
-    let seq_cfg = obu::SequenceConfig {
-        width: w,
-        height: h,
-        bit_depth: 8,
-        mono_chrome: false,
-    };
+    let seq_cfg = obu::SequenceConfig { width: w, height: h, bit_depth: 8, mono_chrome: false };
     let fh_cfg = frame_header::FrameHeaderConfig {
         frame_type: frame_header::KEY_FRAME,
         show_frame: true,
@@ -55,10 +39,7 @@ fn test_raw_non_skip_residual_tile() {
     let mut tu = Vec::new();
     tu.extend_from_slice(&obu::write_temporal_delimiter());
     tu.extend_from_slice(&obu::write_sequence_header(&seq_cfg));
-    tu.extend_from_slice(&obu::write_obu(
-        obu::OBU_FRAME_HEADER,
-        &frame_header::write_frame_header(&fh_cfg, &seq_cfg),
-    ));
+    tu.extend_from_slice(&obu::write_obu(obu::OBU_FRAME_HEADER, &frame_header::write_frame_header(&fh_cfg, &seq_cfg)));
 
     let mut sym = symbol::SymbolEncoder::new();
     // 1. Partition 64x64
@@ -109,10 +90,7 @@ fn test_raw_non_skip_residual_tile() {
     let mut tu_neg = Vec::new();
     tu_neg.extend_from_slice(&obu::write_temporal_delimiter());
     tu_neg.extend_from_slice(&obu::write_sequence_header(&seq_cfg));
-    tu_neg.extend_from_slice(&obu::write_obu(
-        obu::OBU_FRAME_HEADER,
-        &frame_header::write_frame_header(&fh_cfg, &seq_cfg),
-    ));
+    tu_neg.extend_from_slice(&obu::write_obu(obu::OBU_FRAME_HEADER, &frame_header::write_frame_header(&fh_cfg, &seq_cfg)));
     tu_neg.extend_from_slice(&obu::write_obu(obu::OBU_TILE_GROUP, &tile_bytes_neg));
 
     let mut dec_neg = filmcraft_av1::Decoder::new();

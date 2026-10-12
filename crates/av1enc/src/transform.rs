@@ -98,12 +98,12 @@ use crate::tables::{AC_QLOOKUP_8BIT, DC_QLOOKUP_8BIT};
 
 /// Look up spec-compliant DC quantization step for 8-bit AV1.
 pub fn qstep_dc(qindex: u8) -> i32 {
-    DC_QLOOKUP_8BIT[qindex as usize] as i32
+    DC_QLOOKUP_8BIT.get(qindex as usize).copied().unwrap_or(1) as i32
 }
 
 /// Look up spec-compliant AC quantization step for 8-bit AV1.
 pub fn qstep_ac(qindex: u8) -> i32 {
-    AC_QLOOKUP_8BIT[qindex as usize] as i32
+    AC_QLOOKUP_8BIT.get(qindex as usize).copied().unwrap_or(1) as i32
 }
 
 /// Quantise 4x4 DCT coefficients with separate DC and AC quantization steps according to AV1 spec.

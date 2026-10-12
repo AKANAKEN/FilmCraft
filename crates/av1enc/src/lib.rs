@@ -171,54 +171,59 @@ impl Encoder {
         let total_sbs = (sb_cols as usize).saturating_mul(sb_rows as usize);
         let mut sym = symbol::SymbolEncoder::with_capacity(total_sbs.saturating_mul(4).max(64));
 
-        use rayon::prelude::*;
+        // Row Analysis (Wavefront/Row parallelism):
+        // If Preset != Speed, compute the best intra mode for each superblock row.
+        // When `threads` feature is enabled, rows are analyzed concurrently across cores using Rayon.
+        let analyze_row = |r: u32| -> Vec<u8> {
+            let y0 = (r as usize) * 64;
+            let block_h = 64.min((self.config.height as usize).saturating_sub(y0));
+            let avail_u = r > 0;
 
-        // Parallel Row Analysis (Wavefront/Row parallelism):
-        // If Preset != Speed, compute the best intra mode for each superblock row concurrently
-        // using rayon, taking advantage of multi-core CPUs.
-        let precomputed_modes: Vec<Vec<u8>> = if self.config.preset != Preset::Speed {
-            (0..sb_rows)
-                .into_par_iter()
-                .map(|r| {
-                    let y0 = (r as usize) * 64;
-                    let block_h = 64.min((self.config.height as usize).saturating_sub(y0));
-                    let avail_u = r > 0;
+            let mut row_modes = Vec::with_capacity(sb_cols as usize);
+            for c in 0..sb_cols {
+                let avail_l = c > 0;
+                let x0 = (c as usize) * 64;
+                let block_w = 64.min((self.config.width as usize).saturating_sub(x0));
 
-                    let mut row_modes = Vec::with_capacity(sb_cols as usize);
-                    for c in 0..sb_cols {
-                        let avail_l = c > 0;
-                        let x0 = (c as usize) * 64;
-                        let block_w = 64.min((self.config.width as usize).saturating_sub(x0));
+                let above_slice = if avail_u && y0 > 0 {
+                    let row_offset = (y0 - 1) * frame.y_stride + x0;
+                    frame.y.get(row_offset..row_offset + block_w)
+                } else {
+                    None
+                };
 
-                        let above_slice = if avail_u && y0 > 0 {
-                            let row_offset = (y0 - 1) * frame.y_stride + x0;
-                            frame.y.get(row_offset..row_offset + block_w)
-                        } else {
-                            None
-                        };
-
-                        let mut left_col = [0u8; 64];
-                        let left_slice = if avail_l && x0 > 0 {
-                            for i in 0..block_h {
-                                if let Some(&p) = frame.y.get((y0 + i) * frame.y_stride + x0 - 1) {
-                                    left_col[i] = p;
-                                }
-                            }
-                            Some(&left_col[..block_h])
-                        } else {
-                            None
-                        };
-
-                        let mode = if let Some(src_sub) = frame.y.get(y0 * frame.y_stride + x0..) {
-                            intra::choose_best_intra_mode(src_sub, frame.y_stride, block_w, block_h, above_slice, left_slice)
-                        } else {
-                            intra::DC_PRED
-                        };
-                        row_modes.push(mode);
+                let mut left_col = [0u8; 64];
+                let left_slice = if avail_l && x0 > 0 {
+                    for i in 0..block_h {
+                        if let Some(&p) = frame.y.get((y0 + i) * frame.y_stride + x0 - 1) {
+                            left_col[i] = p;
+                        }
                     }
-                    row_modes
-                })
-                .collect()
+                    Some(&left_col[..block_h])
+                } else {
+                    None
+                };
+
+                let mode = if let Some(src_sub) = frame.y.get(y0 * frame.y_stride + x0..) {
+                    intra::choose_best_intra_mode(src_sub, frame.y_stride, block_w, block_h, above_slice, left_slice)
+                } else {
+                    intra::DC_PRED
+                };
+                row_modes.push(mode);
+            }
+            row_modes
+        };
+
+        let precomputed_modes: Vec<Vec<u8>> = if self.config.preset != Preset::Speed {
+            #[cfg(feature = "threads")]
+            {
+                use rayon::prelude::*;
+                (0..sb_rows).into_par_iter().map(analyze_row).collect()
+            }
+            #[cfg(not(feature = "threads"))]
+            {
+                (0..sb_rows).map(analyze_row).collect()
+            }
         } else {
             Vec::new()
         };
@@ -456,10 +461,7 @@ fn compute_and_reconstruct_plane_dc(
     let pred_mean = match mode {
         intra::V_PRED if avail_u && y0 > 0 => {
             let row_offset = (y0 - 1) * recon_stride + x0;
-            recon_plane
-                .get(row_offset..row_offset + block_w)
-                .map(|row| row.iter().map(|&p| p as i64).sum::<i64>() / block_w.max(1) as i64)
-                .unwrap_or(128)
+            recon_plane.get(row_offset..row_offset + block_w).map(|row| row.iter().map(|&p| p as i64).sum::<i64>() / block_w.max(1) as i64).unwrap_or(128)
         }
         intra::H_PRED if avail_l && x0 > 0 => {
             let mut left_sum = 0i64;
@@ -488,11 +490,7 @@ fn compute_and_reconstruct_plane_dc(
                     }
                 }
             }
-            if n > 0 {
-                (sum + (n / 2)) / n
-            } else {
-                128
-            }
+            if n > 0 { (sum + (n / 2)) / n } else { 128 }
         }
     };
 
@@ -511,12 +509,8 @@ fn compute_and_reconstruct_plane_dc(
     for i in 0..block_h {
         for j in 0..block_w {
             let pred_pixel = match mode {
-                intra::V_PRED if avail_u && y0 > 0 => {
-                    recon_plane.get((y0 - 1) * recon_stride + x0 + j).copied().unwrap_or(128) as i64
-                }
-                intra::H_PRED if avail_l && x0 > 0 => {
-                    recon_plane.get((y0 + i) * recon_stride + x0.saturating_sub(1)).copied().unwrap_or(128) as i64
-                }
+                intra::V_PRED if avail_u && y0 > 0 => recon_plane.get((y0 - 1) * recon_stride + x0 + j).copied().unwrap_or(128) as i64,
+                intra::H_PRED if avail_l && x0 > 0 => recon_plane.get((y0 + i) * recon_stride + x0.saturating_sub(1)).copied().unwrap_or(128) as i64,
                 _ => pred_mean,
             };
             let recon_pixel = (pred_pixel + recon_shift).clamp(0, 255) as u8;
