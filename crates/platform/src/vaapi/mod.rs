@@ -13,6 +13,7 @@
 pub mod ffi;
 pub mod h264;
 pub mod hevc;
+pub(crate) mod nv12;
 #[cfg(target_os = "linux")]
 #[allow(unsafe_code)]
 pub mod va;
