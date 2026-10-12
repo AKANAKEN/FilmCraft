@@ -141,6 +141,22 @@ fn clip_context_menu_offers_nest_and_make_subsequence() {
     assert_eq!(d.sequences().len(), before + 1);
 }
 
+
+#[test]
+fn clip_context_menu_adds_marker_to_sequence() {
+    let mut d = Driver::new();
+    let a = d.v1(0);
+    let before = d.app().session.active_sequence().unwrap().markers.len();
+    let playhead = d.app().session.playhead();
+    d.ok("ui.click", json!({"id": format!("timeline.clip.{}", a.id.0), "button": "right"}));
+    d.frames(3);
+    assert!(d.has("timeline.clipMenu.markers.add"));
+    d.click("timeline.clipMenu.markers.add");
+    let seq = d.app().session.active_sequence().unwrap();
+    assert_eq!(seq.markers.len(), before + 1);
+    assert!(seq.markers.iter().any(|marker| marker.start == playhead));
+}
+
 #[test]
 fn timeline_has_a_tab_per_open_sequence() {
     let mut d = Driver::new();

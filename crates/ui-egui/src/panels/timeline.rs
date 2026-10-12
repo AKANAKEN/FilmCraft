@@ -1873,6 +1873,7 @@ pub(crate) const CLIP_MENU: &[&[(&str, &str)]] = &[
         ("Multi-Camera", "clip.multicam"),
     ],
     &[("Label", "edit.label")],
+    &[("Add Marker", "markers.add")],
     &[("Speed/Duration…", "clip.speedDuration"), ("Scene Edit Detection…", "clip.sceneEditDetection")],
     &[
         ("Frame Hold Options…", "clip.frameHoldOptions"),
@@ -2673,7 +2674,8 @@ fn interact(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence, layout: &
                 let r = ui.add_enabled(!sel.is_empty() && app.session.is_enabled(cmd), egui::Button::new(label));
                 app.auto.add(&format!("timeline.clipMenu.{cmd}"), r.rect, label);
                 if r.clicked() {
-                    match crate::menus::invoke(app, &ctx, cmd, json!({})) {
+                    let params = if cmd == "markers.add" { json!({"target": "program"}) } else { json!({}) };
+                    match crate::menus::invoke(app, &ctx, cmd, params) {
                         // Unlink (#220): the clips were selected together because they were linked;
                         // keep only the one right-clicked, so it can be dragged away from the others
                         Ok(v) if cmd == "clip.link" && v["linked"] == json!(false) => {
