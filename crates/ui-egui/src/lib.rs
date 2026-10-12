@@ -747,6 +747,9 @@ impl FilmcraftApp {
             self.workspace_restored = true;
             if let Some(w) = dock::find(&self.workspaces, &self.workspaces.current) {
                 self.set_workspace(&w);
+                if let Some(layout) = self.workspaces.current_layout.as_ref().and_then(dock::checked_layout) {
+                    self.ui.dock = layout;
+                }
             }
         }
         self.applied_prefs = Some(p);
@@ -812,11 +815,11 @@ impl FilmcraftApp {
 
     /// Replace the saved workspaces and write them to the data directory.
     pub fn set_workspaces(&mut self, w: dock::WorkspacePrefs) -> Result<(), String> {
-        self.workspaces = w;
-        match self.workspaces_path() {
-            Some(p) => self.workspaces.save(&p).map_err(|e| format!("saving workspaces: {e}")),
-            None => Ok(()),
+        if let Some(p) = self.workspaces_path() {
+            w.save(&p).map_err(|e| format!("saving workspaces: {e}"))?;
         }
+        self.workspaces = w;
+        Ok(())
     }
 
     pub fn set_workspace(&mut self, name: &str) {

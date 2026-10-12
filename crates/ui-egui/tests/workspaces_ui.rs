@@ -25,8 +25,14 @@ struct Driver {
 impl Driver {
     /// The demo project with its preferences (and workspaces) in `data`.
     fn launch(data: &Path) -> Self {
+        Self::launch_with_demo(data, true)
+    }
+
+    fn launch_with_demo(data: &Path, demo: bool) -> Self {
         let mut session = Session::default();
-        session.execute("file.openDemoProject", json!({})).expect("demo project");
+        if demo {
+            session.execute("file.openDemoProject", json!({})).expect("demo project");
+        }
         session.prefs_path = Some(data.join("preferences.json"));
         let (tx, rx) = channel();
         let app = FilmcraftApp::new(session).with_control(rx);
@@ -143,6 +149,72 @@ fn data_dir(name: &str) -> PathBuf {
 
 fn saved_file(data: &Path) -> Value {
     serde_json::from_slice(&std::fs::read(data.join("workspaces.json")).expect("workspaces.json written")).unwrap()
+}
+
+#[test]
+fn dragged_working_layout_autosaves_restarts_and_reset_restores_checkpoint() {
+    const EXPECTED_PANELS: usize = 18;
+
+    let data = data_dir("drag-restore");
+    let mut d = Driver::launch(&data);
+    let checkpoint = d.app().ui.dock.clone();
+    d.ok("ui.drag", json!({"from": {"id": "panel.drag.Project"}, "to": {"id": "panel.Program", "fx": 0.5, "fy": 0.5}, "steps": 8}));
+    d.frames(3);
+    let moved = d.app().ui.dock.clone();
+    assert_ne!(checkpoint, moved);
+    assert!(moved.is_visible(PanelKind::Project));
+    let mut panels = Vec::new();
+    moved.panels(&mut panels);
+    panels.sort_by_key(|panel| panel.id().len() * 31 + panel.id().as_bytes()[0] as usize);
+    panels.dedup();
+    assert!(moved.contains(PanelKind::Project) && moved.contains(PanelKind::Program));
+    assert_eq!(panels.len(), EXPECTED_PANELS, "drag must not duplicate or drop a panel");
+    assert_eq!(saved_file(&data)["currentLayout"], serde_json::to_value(&moved).unwrap());
+    drop(d);
+
+    let mut d = Driver::launch(&data);
+    assert_eq!(d.app().ui.dock, moved, "no explicit Save needed before relaunch");
+    d.menu("window.workspace.reset", json!({}));
+    assert_eq!(d.app().ui.dock, checkpoint, "autosave must not overwrite explicit reset checkpoint");
+}
+
+#[test]
+fn autosave_failure_keeps_last_good_layout_and_retries() {
+    let data = data_dir("retry");
+    let mut d = Driver::launch(&data);
+    let original = saved_file(&data);
+    // A regular file as the parent produces a deterministic failure even when tests run as root.
+    d.app().session.prefs_path = Some(data.join("workspaces.json/preferences.json"));
+    d.ok("ui.panel.close", json!({"panel": "Metadata"}));
+    assert!(d.app().ui.status.contains("saving workspaces"));
+    assert_eq!(saved_file(&data), original);
+    d.app().session.prefs_path = Some(data.join("preferences.json"));
+    let time = d.harness.ctx.input(|i| i.time);
+    d.harness.input_mut().time = Some(time + 3.0);
+    d.frames(3);
+    assert_eq!(saved_file(&data)["currentLayout"], serde_json::to_value(&d.app().ui.dock).unwrap());
+    drop(d);
+    assert!(!Driver::launch(&data).shows(PanelKind::Metadata));
+}
+
+#[test]
+fn intentionally_empty_workspace_survives_restart_and_can_reopen_panels() {
+    let data = data_dir("empty");
+    // Opening a project intentionally reopens Timeline via OpenSequence (#284), independently
+    // of saved layout. Check a launch without that separate project-open command here.
+    let mut d = Driver::launch_with_demo(&data, false);
+    let mut panels = Vec::new();
+    d.app().ui.dock.panels(&mut panels);
+    for panel in panels {
+        d.app().ui.dock.close(panel);
+    }
+    d.frames(3);
+    let empty = d.app().ui.dock.clone();
+    drop(d);
+    let mut d = Driver::launch_with_demo(&data, false);
+    assert_eq!(d.app().ui.dock, empty);
+    d.ok("ui.panel.show", json!({"panel": "Program"}));
+    assert!(d.shows(PanelKind::Program));
 }
 
 #[test]
