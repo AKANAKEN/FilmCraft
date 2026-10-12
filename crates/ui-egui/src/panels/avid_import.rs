@@ -1,5 +1,5 @@
 //! Native Avid bin preview. Parsing runs in an engine job; applying is one edit.
-use crate::{FilmcraftApp, state::AvidImportDraft};
+use crate::{FilmcraftApp, native_dialogs::FileDialog, state::AvidImportDraft};
 use egui::{Color32, RichText};
 use serde_json::{Value, json};
 
@@ -216,20 +216,36 @@ pub fn show(app: &mut FilmcraftApp, ctx: &egui::Context) {
     if response.should_close() {
         open = false;
     }
-    if browse && let Some(path) = app.hooks.pick_files.as_mut().and_then(|pick| pick(&["avb"]).into_iter().next()) {
-        cancel(app, draft.job.take());
-        draft.path = path;
-        draft.report = None;
-        draft.error.clear();
+    if browse {
+        let previous_path = draft.path.clone();
+        app.pick_ui(FileDialog::open_files(&["avb"]), move |app, paths| {
+            let (Some(path), Some(current)) = (paths.into_iter().next(), app.ui.avid_import.as_mut()) else { return };
+            if current.path != previous_path || current.completed {
+                return;
+            }
+            let job = current.job.take();
+            current.path = path;
+            current.report = None;
+            current.error.clear();
+            cancel(app, job);
+        });
     }
-    if let Some(index) = browse_media
-        && let Some(folder) = app.hooks.pick_folder.as_mut().and_then(|pick| pick())
-        && let Some(value) = draft.media_folders.get_mut(index)
-    {
-        *value = folder;
-        cancel(app, draft.job.take());
-        draft.report = None;
-        draft.error.clear();
+    if let Some(index) = browse_media {
+        let previous_path = draft.path.clone();
+        let previous_folders = draft.media_folders.clone();
+        app.pick_ui(FileDialog::Folder { at: None }, move |app, paths| {
+            let (Some(folder), Some(current)) = (paths.into_iter().next(), app.ui.avid_import.as_mut()) else { return };
+            // A delayed folder choice must not move to another row after removal/reordering.
+            if current.path != previous_path || current.media_folders != previous_folders || current.completed {
+                return;
+            }
+            let Some(value) = current.media_folders.get_mut(index) else { return };
+            *value = folder;
+            let job = current.job.take();
+            current.report = None;
+            current.error.clear();
+            cancel(app, job);
+        });
     }
     if read {
         draft.report = None;

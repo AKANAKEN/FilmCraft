@@ -12,6 +12,9 @@ fn scalar_rate(r: DecimalRate) -> Result<Value> {
     let (n, d) = r.rational()?;
     Ok(if n % d == 0 { json!(n / d) } else { json!(n as f64 / d as f64) })
 }
+// Expansion budgets are independent of the borrowed AVB input and object index. The compact
+// native path does not spend this budget on a duplicate master catalog.
+const MAX_GRAPH_BYTES: usize = 512 * 1024 * 1024;
 struct Graph<'a, 'b> {
     evidence: Evidence<'a, 'b>,
     nodes: usize,
@@ -20,6 +23,7 @@ struct Graph<'a, 'b> {
 }
 impl Graph<'_, '_> {
     fn charge(&mut self, bytes: usize) -> Result<()> {
+        (self.evidence.checkpoint)()?;
         self.bytes_left = self.bytes_left.checked_sub(bytes).ok_or_else(|| bad("native graph byte budget exceeded"))?;
         Ok(())
     }
@@ -107,6 +111,18 @@ impl Graph<'_, '_> {
             Decoded::Filler { common, length } => json!({"class":"FILL","length":length,"rate":rate(common.rate)?,"media_kind":common.media_kind}),
             Decoded::Timecode { common, length, flags, fps, start } => {
                 json!({"class":"TCCP","length":length,"rate":rate(common.rate)?,"media_kind":common.media_kind,"flags":flags,"fps":fps,"start":start})
+            }
+            Decoded::Selector { common, mode, length, tracks, selection_raw, trailing_raw } => {
+                let mut properties = self.properties(&common)?;
+                properties["mc_mode"] = json!(mode);
+                properties["selection_raw"] = json!(selection_raw);
+                properties["trailing_raw"] = json!(trailing_raw);
+                let alternatives = tracks.iter().map(|t| self.track(t, depth + 1)).collect::<Result<Vec<_>>>()?;
+                // Alternatives are choices, not simultaneous inputs or consecutive edits.
+                // In particular, best-effort effect bypass must not choose the first one.
+                // The active-choice field is not yet established by paired Avid fixtures.
+                json!({"class":"SLCT","length":length,"rate":rate(common.rate)?,"media_kind":common.media_kind,
+                    "properties":properties,"alternatives":alternatives,"unsupported":"selector_selection"})
             }
             Decoded::Group(g) => {
                 let mut properties = self.properties(&g.common)?;
@@ -232,17 +248,56 @@ fn sources(c: &Value, out: &mut Vec<Value>, depth: usize) -> Result<()> {
 /// Native normalized catalog with an explicitly empty media scan. References authorize offline
 /// structure only when a unique live source descriptor and its managed locator agree.
 pub fn document(bytes: &[u8], path: &str) -> Result<Value> {
-    let bin = avid_bin::index(bytes)?;
+    let mut doc = read_native(bytes, path)?;
+    let mut b = doc.bins.pop().ok_or_else(|| bad("missing native bin"))?;
+    let mut budget = MAX_GRAPH_BYTES;
+    let mut clips = Vec::new();
+    for m in array(&b, "mobs")?.iter().filter(|m| m["kind"] == "MasterMob") {
+        budget = budget.checked_sub(value_cost(m, 0)?).ok_or_else(|| bad("expanded master catalog exceeds byte budget"))?;
+        clips.push(m.clone());
+    }
+    // Keep the expanded schema-2 export's original split: decoded mobs carry source evidence,
+    // while the catalog copy carries derived availability and source-descriptor joins.
+    for m in b["mobs"].as_array_mut().ok_or_else(|| bad("missing native mobs"))?.iter_mut().filter(|m| m["kind"] == "MasterMob") {
+        let master = m.as_object_mut().ok_or_else(|| bad("invalid native master"))?;
+        for key in ["availability", "location_scope", "workflow_evidence"] {
+            master.remove(key);
+        }
+        for track in master.get_mut("tracks").and_then(Value::as_array_mut).ok_or_else(|| bad("missing master tracks"))? {
+            let track = track.as_object_mut().ok_or_else(|| bad("invalid master track"))?;
+            track.remove("status");
+            track.remove("references");
+        }
+    }
+    let mut catalog = json!({"summary":{"master_count":clips.len()}});
+    catalog["clips"] = Value::Array(clips);
+    b["catalog"] = catalog;
+    let mut result = json!({"schema_version":2,"workflow":"avid_managed_mxf"});
+    result["bins"] = Value::Array(vec![b]);
+    Ok(result)
+}
+/// Native snapshots need no second copy of each master for external-report cross-checking.
+pub fn read_native(bytes: &[u8], path: &str) -> Result<Document> {
+    read_native_with_checkpoint(bytes, path, &|| Ok(()))
+}
+/// Same snapshot, with cancellation during object indexing, graph and attribute expansion.
+pub fn read_native_with_checkpoint(bytes: &[u8], path: &str, checkpoint: &dyn Fn() -> Result<()>) -> Result<Document> {
+    // A checkpoint failure must escape best-effort track recovery even if a callback only
+    // reports it once. Do not classify cancellation by an error-message string.
+    let checkpoint_failed = std::cell::Cell::new(false);
+    let checked = || checkpoint().inspect_err(|_| checkpoint_failed.set(true));
+    let bin = avid_bin::index_with_checkpoint(bytes, &checked)?;
     let membership = bin.membership()?;
     let mut graph = Graph {
-        evidence: Evidence { bin: &bin, remaining: 1_000_000, bytes_left: 128 * 1024 * 1024, visiting: BTreeSet::new() },
+        evidence: Evidence { bin: &bin, remaining: 1_000_000, bytes_left: 128 * 1024 * 1024, visiting: BTreeSet::new(), checkpoint: &checked },
         nodes: 0,
-        bytes_left: 128 * 1024 * 1024,
+        bytes_left: MAX_GRAPH_BYTES,
         visiting: BTreeSet::new(),
     };
     let mut mobs = Vec::new();
     let mut seen = BTreeSet::new();
     for member in membership.members {
+        checkpoint()?;
         if !seen.insert(member.object_index) {
             return Err(bad("duplicate bin member"));
         }
@@ -256,6 +311,10 @@ pub fn document(bytes: &[u8], path: &str) -> Result<Value> {
             match graph.track(t, 0) {
                 Ok(v) => tracks.push(v),
                 Err(e) => {
+                    // Cancellation is never converted into an unsupported track.
+                    if checkpoint_failed.get() {
+                        return Err(e);
+                    }
                     // The composition/master's declared range bounds a failed top-level track.
                     // Keep other tracks and bin items available for best-effort conversion.
                     graph.visiting.clear();
@@ -267,6 +326,7 @@ pub fn document(bytes: &[u8], path: &str) -> Result<Value> {
                             | Decoded::SourceClip { common, .. }
                             | Decoded::Filler { common, .. }
                             | Decoded::Timecode { common, .. }
+                            | Decoded::Selector { common, .. }
                             | Decoded::Auxiliary { common, .. },
                         ) => Some(common),
                         Some(Decoded::Group(g)) => Some(&g.common),
@@ -296,15 +356,17 @@ pub fn document(bytes: &[u8], path: &str) -> Result<Value> {
         );
     }
     let mut source_map = BTreeMap::new();
-    for m in mobs.iter().filter(|m| m["kind"] == "SourceMob") {
+    for (index, m) in mobs.iter().enumerate().filter(|(_, m)| m["kind"] == "SourceMob") {
         if let Ok(key) = full_identity(&m["id"]) {
-            source_map.entry(key).and_modify(|v| *v = None).or_insert(Some(m));
+            source_map.entry(key).and_modify(|v| *v = None).or_insert(Some(index));
         }
     }
-    let mut clips = Vec::new();
-    for m in mobs.iter().filter(|m| m["kind"] == "MasterMob") {
-        graph.charge(value_cost(m, 0)?)?;
-        let mut clip = m.clone();
+    for index in 0..mobs.len() {
+        checkpoint()?;
+        if mobs.get(index).is_none_or(|m| m["kind"] != "MasterMob") {
+            continue;
+        }
+        let mut clip = mobs.get_mut(index).ok_or_else(|| bad("missing master"))?.take();
         let tracks = clip["tracks"].as_array_mut().ok_or_else(|| bad("invalid tracks"))?;
         for t in tracks {
             let mut refs = Vec::new();
@@ -313,7 +375,7 @@ pub fn document(bytes: &[u8], path: &str) -> Result<Value> {
                 if let Ok(key) = full_identity(&r["source_id"])
                     && let Some(Some(source)) = source_map.get(&key)
                 {
-                    let descriptor = &source["descriptor"];
+                    let descriptor = &mobs.get(*source).ok_or_else(|| bad("missing source"))?["descriptor"];
                     let locator = &descriptor["locator"]["properties"]["mob_id"];
                     let locator_id = json!({"raw":locator["id_raw"],"byte_order":locator["byte_order"]});
                     if descriptor["locator"]["class"] == "MSML" && full_identity(&locator_id).ok() == Some(key) {
@@ -335,12 +397,18 @@ pub fn document(bytes: &[u8], path: &str) -> Result<Value> {
         }
         clip["availability"] = json!("unresolved");
         clip["location_scope"] = json!("no_media_locations_scanned");
-        clips.push(clip);
+        *mobs.get_mut(index).ok_or_else(|| bad("missing master"))? = clip;
     }
-    Ok(json!({"schema_version":2,"workflow":"avid_managed_mxf","bins":[{"path":path,"backend":"native_rust","status":"parsed","snapshot_stable":true,
-        "diagnostics":[],"summary":{"bin_uid":format!("{:016x}",membership.uid)},"mobs":mobs,"catalog":{"summary":{"master_count":clips.len()},"clips":clips},
-        "coverage":"supported_native_objects; unknown descriptor classes remain explicit","media_locations_scanned":[]}]}))
+    let mut result = json!({"path":path,"backend":"native_rust","status":"parsed","snapshot_stable":true,
+        "diagnostics":[],"summary":{"bin_uid":format!("{:016x}",membership.uid)},
+        "coverage":"supported_native_objects; unknown descriptor classes remain explicit","media_locations_scanned":[]});
+    // json! serializes borrowed expressions: passing the entire tree there duplicates it.
+    result["mobs"] = Value::Array(mobs);
+    Ok(Document { schema_version: 2, workflow: "avid_managed_mxf".into(), compact_native: true, bins: vec![result] })
 }
+
+#[cfg(test)]
+mod selector_tests;
 
 #[cfg(test)]
 mod tests {
@@ -369,7 +437,7 @@ mod tests {
             objects: vec![avid_bin::Object { index: 1, class: *b"TRKR", offset: 0, payload: &payload }],
         };
         let mut graph = Graph {
-            evidence: Evidence { bin: &bin, remaining: 100, bytes_left: 4096, visiting: BTreeSet::new() },
+            evidence: Evidence { bin: &bin, remaining: 100, bytes_left: 4096, visiting: BTreeSet::new(), checkpoint: &|| Ok(()) },
             nodes: 0,
             bytes_left: 512 + payload.len() * 8 + 4096,
             visiting: BTreeSet::new(),
@@ -439,7 +507,7 @@ mod tests {
         };
         for (nodes, bytes_left, expected) in [(0, 4096, "cyclic"), (200_000, 4096, "budget"), (0, 0, "budget")] {
             let mut graph = Graph {
-                evidence: Evidence { bin: &bin, remaining: 100, bytes_left: 4096, visiting: BTreeSet::new() },
+                evidence: Evidence { bin: &bin, remaining: 100, bytes_left: 4096, visiting: BTreeSet::new(), checkpoint: &|| Ok(()) },
                 nodes,
                 bytes_left,
                 visiting: BTreeSet::new(),

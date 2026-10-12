@@ -510,3 +510,99 @@ fn native_large_bin_indexes_before_binding_and_verifies_audio_ranges() {
     assert_eq!(std::fs::read(path).unwrap(), original);
     eprintln!("Phase 6: 1280 linked masters / 2163 verified components; 673 diagnosed unbound; sample/range, undo/redo and roundtrip checks pass");
 }
+
+#[test]
+fn native_shared_snapshot_matches_external_catalog_and_cancels_during_decode() {
+    let bytes = fixture();
+    let path = "Shared.avb";
+    let compact = avid_catalog::read_native(&bytes, path).unwrap();
+    assert!(compact.bins()[0].get("catalog").is_none());
+    let expanded = avid_catalog::native_document(&bytes, path).unwrap();
+    assert!(expanded["bins"][0]["mobs"][0].get("availability").is_none());
+    assert!(expanded["bins"][0]["mobs"][0]["tracks"][0].get("references").is_none());
+    let serialized = serde_json::to_vec(&expanded).unwrap();
+    let external = avid_catalog::read_document(&serialized).unwrap();
+    let project = Project::default();
+    for mode in [TransferMode::Metadata, TransferMode::Media, TransferMode::Sequences] {
+        let options = crate::avid_catalog::ImportOptions { mode, allow_missing: true, best_effort: true };
+        let a = crate::avid_catalog::prepare_parsed_with_index(&project, &crate::FsServices, &compact, options, None, &|| Ok(()), None).unwrap();
+        let b = crate::avid_catalog::prepare_parsed_with_index(&project, &crate::FsServices, &external, options, None, &|| Ok(()), None).unwrap();
+        assert_eq!(a.project, b.project);
+        assert_eq!(a.result, b.result);
+    }
+    let calls = std::cell::Cell::new(0);
+    let total = std::cell::Cell::new(0);
+    avid_catalog::read_native_with_checkpoint(&bytes, path, &|| {
+        total.set(total.get() + 1);
+        Ok(())
+    })
+    .unwrap();
+    // Fail once at every checkpoint, including track recovery. A later successful check must
+    // never turn that cancellation into a partially decoded bin.
+    for stop in 1..=total.get() {
+        calls.set(0);
+        let result = avid_catalog::read_native_with_checkpoint(&bytes, path, &|| {
+            calls.set(calls.get() + 1);
+            if calls.get() == stop { Err(filmcraft_interchange::Error::Other("cancelled test".into())) } else { Ok(()) }
+        });
+        assert!(result.err().unwrap().to_string().contains("cancelled test"));
+    }
+}
+
+#[test]
+fn oversized_native_bin_is_rejected_before_reading_or_editing() {
+    struct Oversized;
+    impl crate::Services for Oversized {
+        fn file_size(&self, _: &str) -> std::io::Result<u64> {
+            Ok(filmcraft_interchange::avid_bin::MAX_BYTES as u64 + 1)
+        }
+        fn read_file(&self, _: &str) -> std::io::Result<Vec<u8>> {
+            panic!("must not read oversized file")
+        }
+        fn write_file(&self, _: &str, _: &[u8]) -> std::io::Result<()> {
+            panic!("must not write source")
+        }
+    }
+    let mut s = Session::new(Arc::new(Oversized));
+    let before = s.project.clone();
+    let job = prepare(&mut s);
+    assert!(s.execute("file.avidBinPreparation", job.clone()).unwrap_err().to_string().contains("512 MiB"));
+    assert!(s.execute("file.importAvidBin", job).is_err());
+    assert_eq!(s.project, before);
+    assert!(s.history.undo.is_empty());
+}
+
+#[test]
+#[ignore = "explicit private large-bin manifest; no corpus discovery or media writes"]
+fn native_large_bins_prepare_import_and_roundtrip() {
+    let path = std::env::var("FILMCRAFT_AVID_LARGE_BIN_MANIFEST").unwrap();
+    let manifest: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    let entries = manifest.as_array().unwrap();
+    assert!(!entries.is_empty());
+    for entry in entries {
+        let mut s = Session::default();
+        let before = s.project.clone();
+        let job = s.execute("file.prepareAvidBin", json!({"path":entry["path"],"wait":true})).unwrap();
+        let preview = s.execute("file.avidBinPreparation", job.clone()).unwrap();
+        assert_eq!(s.project, before);
+        assert!(s.history.undo.is_empty());
+        let result = s.execute("file.importAvidBin", job).unwrap();
+        assert_eq!(result, preview["report"]);
+        assert_eq!(result["bins"][0]["clips"], entry["clips"]);
+        assert_eq!(result["bins"][0]["referenced"], entry["referenced"]);
+        assert_eq!(result["sequences"].as_array().unwrap().len() as u64, entry["sequences"].as_u64().unwrap());
+        assert_eq!(filmcraft_format::decode(&filmcraft_format::encode(&s.project, false)).unwrap().project, *s.project);
+        let after = s.project.clone();
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(s.project, before);
+        s.execute("edit.redo", json!({})).unwrap();
+        assert_eq!(s.project, after);
+        eprintln!(
+            "large bin: {} clips, {} referenced, {} sequences; {} reported import errors",
+            entry["clips"],
+            entry["referenced"],
+            entry["sequences"],
+            result["errors"].as_array().unwrap().len()
+        );
+    }
+}

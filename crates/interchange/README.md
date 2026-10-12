@@ -173,6 +173,13 @@ adapter retains only unique live SourceMob descriptor evidence, cross-checks cop
 and associates adapter clocks by full master identity. Runtime media validation and pending
 picture-format hydration belong to the engine; this crate performs no file access or relinking.
 
+Native bin preparation uses an opaque `avid_catalog::Document` from `read_native` (or
+`read_native_with_checkpoint`) across catalog and sequence planning. Masters are normalized once;
+the importer does not serialize the full graph to JSON and parse it again. `read_document` keeps
+the 256 MiB external-report limit and independent catalog/mob validation; external JSON cannot
+select the compact native representation. `native_document` remains the expanded schema-2 export
+interface and allocates a separate, bounded catalog copy.
+
 ## Native AVB structural inspection (development foundation)
 
 `avid_bin::index` reads the document header and object table, borrowing opaque object payloads
@@ -191,7 +198,7 @@ Earlier decoder-derived research and the JSON catalog contract retain their sepa
 
 All 25 observed files are little-endian. Big-endian framing has synthetic coverage only; that
 does not establish compatibility with legacy Mac files or another platform/version. Future
-document/root variants are explicit errors. The parser caps input at 256 MiB and one million
+document/root variants are explicit errors. The parser caps native input at 512 MiB and two million
 objects, checks lengths/references before allocation or access, and rejects unindexed trailing
 bytes. Tests cover both byte orders, non-ASCII raw strings, truncations, corrupt lengths/counts,
 dangling references, unknown classes/versions, exhaustive single-bit mutations of a small fixture,
@@ -204,11 +211,17 @@ are separate entry points below; root display settings remain opaque.
 ## Native AVB semantic transfer
 
 `Bin::decode` independently decodes the observed versions of CMPO, ATTR, SEQU, SCLP, FILL,
-TCCP, FILE, MSML, MCBR, empty URLL, MDES, PCMA, CDCI, TKFX, SPED, MASK, ECCP and TRKR.
+TCCP, FILE, MSML, MCBR, empty URLL, MDES, PCMA, CDCI, TKFX, SPED, MASK, ECCP, TRKR and SLCT.
 It preserves raw strings and identifiers while exposing typed references, decimal rate fields,
 descriptors and effect parameters. Each object must be consumed exactly; unknown semantic
 classes/extensions fail explicitly. Unknown objects remain borrowed raw payloads in the index.
 Decoding an effect's fields does not imply that its rendering semantics are supported.
+
+SLCT group selectors retain ordered `alternatives`, per-alternative track properties and raw
+selection fields in the normalized graph. Alternatives are neither sequential edits nor
+simultaneous effect inputs. They deliberately stay outside generic effect bypass: the saved
+active-choice semantics still need paired Avid fixtures. This is evidence preservation, not
+group-clip playback support; no angle or audio source is inferred from a selector's ordinal.
 
 Text uses pinned `encoding_rs` 0.8.42 for MacRoman. The relevant published character mapping is
 Unicode's Apple ROMAN.TXT revision c02 (2005-04-05); UTF-8 locator extensions are validated

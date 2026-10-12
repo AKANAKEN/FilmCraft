@@ -151,3 +151,35 @@ fn local_corpus_matches_oracle_index_and_membership() {
     }
     eprintln!("{} bins / {objects} objects: native index, bin UID and membership match oracle", manifest.as_array().unwrap().len());
 }
+
+#[test]
+fn large_object_indexes_are_bounded_and_cancellable() {
+    let source = fixture(ByteOrder::Little);
+    let header = index(&source).unwrap().objects[0].offset;
+    let make = |count: usize| {
+        let mut bytes = source[..header].to_vec();
+        bytes[43..47].copy_from_slice(&(count as u32).to_le_bytes());
+        bytes[47..51].copy_from_slice(&1u32.to_le_bytes());
+        for _ in 0..count {
+            bytes.extend_from_slice(b"zzzz\0\0\0\0");
+        }
+        bytes
+    };
+    // An actual object table above the former million-object cap, not just a forged count.
+    let bytes = make(1_000_001);
+    let bin = index(&bytes).unwrap();
+    assert_eq!(bin.objects.len(), 1_000_001);
+    assert!(bin.object(1_000_002).is_err());
+    drop(bin);
+    let calls = std::cell::Cell::new(0);
+    let result = index_with_checkpoint(&bytes, &|| {
+        calls.set(calls.get() + 1);
+        if calls.get() >= 3 { Err(bad("cancelled index")) } else { Ok(()) }
+    });
+    assert!(result.unwrap_err().to_string().contains("cancelled index"));
+    assert_eq!(calls.get(), 3);
+    let mut truncated = bytes.clone();
+    truncated.pop();
+    assert!(index(&truncated).is_err());
+    assert!(index(&make(MAX_OBJECTS + 1)).unwrap_err().to_string().contains("excessive object count"));
+}

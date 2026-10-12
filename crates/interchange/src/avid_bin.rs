@@ -15,8 +15,10 @@ pub use locations::*;
 mod semantic;
 pub use semantic::*;
 
-pub const MAX_BYTES: usize = 256 * 1024 * 1024;
-const MAX_OBJECTS: usize = 1_000_000;
+/// Native file cap is separate from the smaller external JSON-report cap.
+/// Payloads stay borrowed; at most two million object-index entries are allocated.
+pub const MAX_BYTES: usize = 512 * 1024 * 1024;
+const MAX_OBJECTS: usize = 2_000_000;
 
 fn bad(message: impl std::fmt::Display) -> Error {
     Error::Other(format!("Avid bin: {message}"))
@@ -102,8 +104,13 @@ pub struct Membership<'a> {
 /// Index exactly the declared object stream. Unknown classes remain available as raw payloads.
 /// Bounds checks precede allocation; no payload is copied and no file I/O takes place here.
 pub fn index(bytes: &[u8]) -> Result<Bin<'_>> {
+    index_with_checkpoint(bytes, &|| Ok(()))
+}
+/// Index with cancellation checkpoints before allocation and every 4096 objects.
+pub fn index_with_checkpoint<'a>(bytes: &'a [u8], checkpoint: &dyn Fn() -> Result<()>) -> Result<Bin<'a>> {
+    checkpoint()?;
     if bytes.len() > MAX_BYTES {
-        return Err(bad("file exceeds 256 MiB"));
+        return Err(bad("file exceeds 512 MiB"));
     }
     let order = match bytes.get(..2) {
         Some([6, 0]) => ByteOrder::Little,
@@ -129,6 +136,9 @@ pub fn index(bytes: &[u8]) -> Result<Bin<'_>> {
     let mut objects = Vec::new();
     objects.try_reserve_exact(count).map_err(|e| bad(format!("cannot allocate object index: {e}")))?;
     for i in 0..count {
+        if i.is_multiple_of(4096) {
+            checkpoint()?;
+        }
         let offset = c.at;
         let class = c.tag()?;
         let size = c.number(4)? as usize;

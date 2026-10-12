@@ -41,15 +41,28 @@ effect that has not been rendered has no media to show and is reported rather th
 
 Only timelines become sequences. A bin's placed compositions also include subclips, saved effect
 templates, group clips and motion effects; each is reported by kind and count rather than
-converted into a sequence item that is not a sequence. Saved effect templates, group clips and
-motion effect clips are recognized and deliberately not transferred.
+converted into a sequence item that is not a sequence. Saved effect templates and group clips
+are reported as unsupported even when the bin contains no timelines. Motion effects transfer
+only when their render can be claimed as described above; otherwise their omission is reported.
 
 Subclips transfer as subclips. A placed Avid subclip becomes a FilmCraft subclip restricting the
 master it points at, and a sequence that cuts from one keeps referencing it. Avid records a
 subclip's range in two forms and both are read; a range reaching past the end of the master it
 restricts is shortened to that master and reported. A subclip binds media through its master, not
-on its own. Composition mobs that are not a plain range of one available master — several masters,
-an empty range, a start with no usable end — are reported by name instead of approximated.
+on its own. A timeline may also reference an unplaced subclip: these dependencies are retained
+in `Referenced Sources`, with separate `referenced_subclips` report counts. Unused unplaced
+subclips are not added. Sequence conversion resolves each subclip track through its recorded
+parent-track mapping; a missing or ambiguous mapping produces a reported placeholder. The
+range and routing evidence survive save/reopen. This routing applies to imported timeline edits;
+FilmCraft's general subclip source-viewer/channel-selection model has not been extended here.
+
+A plain range requires a direct source clip or single-child sequence wrappers that preserve rate,
+kind and duration. Repeated intervals, unknown effects, truncated components, incompatible
+track offsets/rates and missing or ambiguous track maps cannot establish one linear subclip.
+They are reported by name instead of silently flattened. Nested subclip range composition and
+multicam conversion remain outside this correction.
+Ranges must stay within the component's exposed interval. Sequence conversion also rechecks
+saved subclip ranges for negative starts, overflow and parent bounds before using them.
 
 Imported sources use FilmCraft's **Link Media…** dialog when components need reconnecting.
 Search only finds candidates. Choose **Link N files** to apply the selected replacement and,
@@ -114,9 +127,17 @@ are kept separate; unexplained rates do not receive a blanket NTSC substitution.
 
 ## Bounds, cancellation and atomicity
 
-AVBs are capped at 256 MiB and one million indexed objects. Native graph expansion has separate
-node, depth, attribute and byte budgets. Malformed references, cycles and truncated payloads
-produce errors. Parsing runs in a guarded background job and makes no project edits.
+Native AVBs are capped at 512 MiB and two million indexed objects; object payloads remain borrowed.
+The native import pipeline shares one parsed snapshot, normalizes each master once and avoids
+whole-document JSON serialization/reparsing. External JSON reports retain their 256 MiB limit
+and independent catalog/mob cross-checks.
+
+Native graph expansion has a 512 MiB accounting budget, with separate limits of 200,000 component
+expansions, one million attributes and 128 MiB of attribute accounting. These are work/allocation
+estimates, not a process RSS ceiling; the budgets are cumulative across the bin. Depth/cycle checks
+remain enforced. Malformed references and truncated payloads produce errors. Parsing runs in a
+guarded background job and makes no project edits. Native media/sequence preparation checks
+cancellation during indexing and graph/attribute expansion.
 
 Up to 32 media roots share a limit of 32 directory levels, 1,024 directories and 20,000 entries.
 Canonical directory keys deduplicate repeated, aliased and overlapping selections. Distinct file
@@ -271,13 +292,18 @@ nonzero phase offsets observed in the 23.976 sample (2, 109 and 55) retain their
 
 ## Remaining work
 
-The current update belongs to the existing Avid import PR. Freeze further feature additions
-pending review. Persistent Avid-style media databasing and modular project storage remain
-separate work. A shareable Avid-authored fixture project is deferred until a maintainer requests
+The current submission boundary is the existing Avid import PR: native bin import, supported
+sequence/subclip transfer, component relinking, large-bin resource fixes and selector evidence
+preservation. Feature development pauses after this update while maintainers review it; group
+playback and the other items below remain follow-ups rather than expanding this submission.
+Persistent Avid-style media databasing and modular project storage remain separate work. A shareable Avid-authored fixture project is deferred until a maintainer requests
 it. No routine database rebuilds or additional screenshots are needed for this tested subset.
 
 - Test sequences containing grouped media (group clips/multicam): selected angles and audio,
   synchronization, edit boundaries, relinking and unsupported-structure diagnostics.
+  Native SLCT alternatives and raw selection fields are now retained for that work. The
+  [group test procedure](avid-group-tests.md) isolates saved picture and audio choices. Avid
+  MultiGroup clips with changing available angles across time remain a separate coverage item.
 - Establish exact nonzero adapter phase semantics; preserve current approximation warnings.
 - Examine remaining audio timing profiles, sparse channel slots and missing live-source evidence
   separately, preserving missing A1 independently from present A2.
@@ -285,7 +311,27 @@ it. No routine database rebuilds or additional screenshots are needed for this t
   field rendering, without treating defaults as faithful transfers.
 - Add AMA binding/remapping, broader codecs/descriptors, Windows AVB samples, multiple-bin
   selection, color presentation and further timeline semantics in separately validated work.
-- Keep Phase 13's complex feature-film bins deferred until after the initial PR.
+- Use Phase 13 as the robustness and resource-use corpus. Comprehensive interpretation of its
+  complex effects and grouped media remains separate from large-bin structural import.
+- Close the four remaining structural bin failures (unsupported field markers/picture
+  extensions), with small synthetic regression cases. Large-bin resource rejections are
+  resolved for the measured corpus; that does not close these format gaps.
+- Extend subclip handling separately for nested ranges and AutoSync sources, and reconcile
+  imported per-track mappings with the general source viewer and subsequent editing commands.
+- Investigate unsupported offline picture descriptors, limit/group very large diagnostic
+  reports, and narrow referenced-source imports to the dependencies actually required by
+  placed content. Preserve useful error details and deterministic identity matching.
+- Continue the standalone reader's native MDB migration using existing samples and comparison
+  evidence. Keep disposable AVB write probes and PMR/MDB encoding research secondary; production
+  writers and database generation are not requirements for bin import.
+- Address review feedback on the existing PR before opening further feature PRs. Each update
+  needs an audited diff, coherent commits, current coverage/limitations documentation and the
+  required validation gates.
+
+Persistent media cataloging follows importer work as its own feature. Optional modular storage
+and `Convert Project to Modular` remain last: independently addressable bins/sequences, robust
+saves/recovery and bounded loading are intended to improve reliability on feature-film-scale
+projects. Neither project modularity nor persistent cataloging is implied by importing an AVB.
 
 Research artifacts, generated projects and test launchers remain in ignored
 `target/avid-local-followups/`. The [audit record](avid-code-audit.md) distinguishes private

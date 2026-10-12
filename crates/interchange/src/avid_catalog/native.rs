@@ -3,13 +3,14 @@ use super::*;
 use crate::avid_bin::{self, AttributeValue, Bin, Decoded, Mob};
 use serde_json::json;
 mod graph;
-pub use graph::document as native_document;
+pub use graph::{document as native_document, read_native, read_native_with_checkpoint};
 
 struct Evidence<'a, 'b> {
     bin: &'b Bin<'a>,
     remaining: usize,
     bytes_left: usize,
     visiting: BTreeSet<u32>,
+    checkpoint: &'b dyn Fn() -> Result<()>,
 }
 impl Evidence<'_, '_> {
     fn attributes(&mut self, id: u32, depth: usize) -> Result<Value> {
@@ -30,6 +31,9 @@ impl Evidence<'_, '_> {
         };
         let mut values = serde_json::Map::new();
         for entry in entries {
+            if self.remaining.is_multiple_of(256) {
+                (self.checkpoint)()?;
+            }
             self.remaining = self.remaining.checked_sub(1).ok_or_else(|| bad("attribute expansion budget exceeded"))?;
             let value_bytes = match &entry.value {
                 AttributeValue::Text(Some(t)) => t.value.len(),
@@ -105,7 +109,7 @@ pub fn plan_native(bytes: &[u8], path: &str) -> Result<Plan> {
     let bin = avid_bin::index(bytes)?;
     let membership = bin.membership()?;
     let name = bin_name(path)?;
-    let mut evidence = Evidence { bin: &bin, remaining: 1_000_000, bytes_left: 64 * 1024 * 1024, visiting: BTreeSet::new() };
+    let mut evidence = Evidence { bin: &bin, remaining: 1_000_000, bytes_left: 64 * 1024 * 1024, visiting: BTreeSet::new(), checkpoint: &|| Ok(()) };
     let mut out = BinPlan {
         name: name.clone(),
         uid: format!("{:016x}", membership.uid),
@@ -168,7 +172,7 @@ mod tests {
             reserved_raw: &[],
             objects: vec![avid_bin::Object { index: 1, class: *b"WINF", offset: 7, payload: &[0, 1] }],
         };
-        let mut evidence = Evidence { bin: &bin, remaining: 8, bytes_left: 1024, visiting: BTreeSet::new() };
+        let mut evidence = Evidence { bin: &bin, remaining: 8, bytes_left: 1024, visiting: BTreeSet::new(), checkpoint: &|| Ok(()) };
         let v = evidence.attributes(1, 0).unwrap();
         assert_eq!(v["class_raw"], json!(*b"WINF"));
         assert_eq!(v["object_index"], json!(1));

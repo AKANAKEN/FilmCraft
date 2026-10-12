@@ -99,8 +99,9 @@ pub enum Decoded<'a> {
         components: Vec<u32>,
     },
     /// A group clip's per-track selector. Each track is one alternative this track can play, one
-    /// per angle carrying its media kind. `selection_raw` is the only field that could name the
-    /// active angle; it is 1 in every selector observed, so its meaning is unestablished.
+    /// per angle carrying its media kind. `selection_raw` is a candidate selection field; it
+    /// is 1 in every selector observed, so its meaning is unestablished. Alternative ordering
+    /// or other composition metadata could also participate in the saved choice.
     Selector {
         common: Component<'a>,
         mode: u8,
@@ -360,9 +361,9 @@ impl<'a> Bin<'a> {
                     Decoded::Sequence { common, components }
                 }
                 // A group clip's selector is a track group: each of its tracks is one alternative
-                // this track can play, one per angle carrying its media kind. The trailing byte is
-                // the only field that could name the active angle, and it is 1 in every selector
-                // observed, so it is preserved rather than interpreted.
+                // this track can play, one per angle carrying its media kind. The trailing byte
+                // is 1 in every selector observed. Its selection/flag semantics are not
+                // established, so it is preserved rather than interpreted.
                 b"SLCT" => {
                     let (mode, length, tracks) = d.group()?;
                     d.expect(&[2, 1])?;

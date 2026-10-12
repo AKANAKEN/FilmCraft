@@ -278,7 +278,8 @@ impl Walk<'_> {
                 let item = *self.sources.get(&id).ok_or_else(|| bad("source master is missing from selected bin"))?;
                 // A source may be a subclip. Resolve to the media it restricts, keeping its range:
                 // clips of a subclip are expressed in the parent's media time.
-                let (_, m, span) = self.project.resolve_media(item).ok_or_else(|| bad("source is not media, or its subclip chain does not reach any"))?;
+                let (master_item, m, span) =
+                    self.project.resolve_media(item).ok_or_else(|| bad("source is not media, or its subclip chain does not reach any"))?;
                 let MediaRef::Components { channels, picture } = &m.media else {
                     return Err(bad(if span.is_some() {
                         "the master this subclip restricts must be bound to managed components first"
@@ -286,16 +287,40 @@ impl Walk<'_> {
                         "source master must be bound to managed components first"
                     }));
                 };
-                let source_in = match span {
-                    Some(range) => add(range.start, self.clock.ticks(c, "start")?)?,
-                    None => self.clock.ticks(c, "start")?,
+                // Saved project ranges are untrusted too. Resolve_media finds the parent, but
+                // does not validate range bounds; never let an invalid span authorize an edit.
+                let (source_in, limit) = match span {
+                    Some(range) => {
+                        if range.start < Tick::ZERO || range.duration <= Tick::ZERO {
+                            return Err(bad("invalid saved subclip range"));
+                        }
+                        let end = add(range.start, range.duration)?;
+                        if end > m.info.duration {
+                            return Err(bad("saved subclip range exceeds master duration"));
+                        }
+                        (add(range.start, self.clock.ticks(c, "start")?)?, end)
+                    }
+                    None => (self.clock.ticks(c, "start")?, m.info.duration),
                 };
                 // A cut from a subclip stays inside that subclip, not merely inside its master.
-                let limit = span.map_or(m.info.duration, |range| range.end());
                 if add(source_in, length)? > limit {
                     return Err(bad(if span.is_some() { "source range exceeds the subclip" } else { "source range exceeds master duration" }));
                 }
-                let track = u32::try_from(number(c, "source_track")?).map_err(|_| bad("source track overflow"))?;
+                let mut track = u32::try_from(number(c, "source_track")?).map_err(|_| bad("source track overflow"))?;
+                if span.is_some() {
+                    let raw = self
+                        .project
+                        .item(item)
+                        .and_then(|i| i.metadata.get(avid_catalog::SOURCE_KEY))
+                        .filter(|s| s.len() <= 16 * 1024 * 1024)
+                        .ok_or_else(|| bad("subclip source evidence missing or excessive"))?;
+                    let evidence: Value = serde_json::from_str(raw).map_err(|e| bad(e.to_string()))?;
+                    let (parent, parent_track) = avid_catalog::subclip_track(&evidence["clip"], expected, track)?;
+                    if self.sources.get(&parent) != Some(&master_item) {
+                        return Err(bad("subclip routing disagrees with its parent media"));
+                    }
+                    track = parent_track;
+                }
                 let mapping = if self.kind == TrackKind::Audio {
                     let indexes: Vec<_> = channels.iter().enumerate().filter(|(_, ch)| ch.track == track).map(|(i, _)| i).collect();
                     if indexes.len() != 1 {
@@ -519,10 +544,12 @@ pub fn plan_best_effort(p: &Project, bytes: &[u8], bin: BinId) -> Result<Plan> {
     plan_inner(p, bytes, bin, true)
 }
 fn plan_inner(p: &Project, bytes: &[u8], bin: BinId, best_effort: bool) -> Result<Plan> {
-    // Validate the catalog without metadata-only omission warnings trying to decode malformed
-    // sequence names first. Sequence eligibility is checked individually below.
-    let _ = avid_catalog::plan_scoped(bytes, avid_catalog::TransferMode::Sequences)?;
-    let doc = avid_catalog::read_document(bytes)?;
+    plan_document(p, &avid_catalog::read_document(bytes)?, bin, best_effort)
+}
+/// Convert a shared parsed snapshot. The catalog is still validated; a caller cannot bypass
+/// identity/membership checks by using this entry point instead of JSON.
+pub fn plan_document(p: &Project, doc: &avid_catalog::Document, bin: BinId, best_effort: bool) -> Result<Plan> {
+    let _ = avid_catalog::plan_document(doc, avid_catalog::TransferMode::Sequences)?;
     let (uid, ids) = match sources(p, bin) {
         Ok(v) => v,
         Err(_) if best_effort && doc.bins.len() == 1 && p.root.find_bin(bin).is_some_and(|b| b.children.is_empty()) => {
@@ -551,7 +578,7 @@ fn plan_inner(p: &Project, bytes: &[u8], bin: BinId, best_effort: bool) -> Resul
             Some(2) => *skipped.entry("subclips").or_default() += 1,
             // An Avid effect template does not describe FilmCraft's own effects.
             Some(3) => *skipped.entry("saved effect templates").or_default() += 1,
-            // Grouped media: the selector that chooses an angle is not yet decoded.
+            // Grouped media: selector decoding exists, but multicam conversion is not implemented.
             Some(4) => *skipped.entry("group clips").or_default() += 1,
             // A retime, with its own rendered media when the effect has been rendered.
             Some(6) => *skipped.entry("motion effect clips").or_default() += 1,

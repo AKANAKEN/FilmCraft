@@ -11,7 +11,11 @@ impl Walk<'_> {
                 }
                 add(start, length)?;
                 let class = c["class"].as_str().unwrap_or("unknown");
-                if let Some(inputs) = c["input_tracks"].as_array().filter(|v| v.len() == 1) {
+                // A group selector chooses media; it is never a transparent effect, even
+                // when an external report describes its sole alternative as an input.
+                if class != "SLCT"
+                    && let Some(inputs) = c["input_tracks"].as_array().filter(|v| v.len() == 1)
+                {
                     let child = &inputs[0]["component"];
                     if self.clock.ticks(child, "length").ok() == Some(length)
                         && self.clock.rate(child).ok() == Some(self.rate)

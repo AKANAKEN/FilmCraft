@@ -148,6 +148,42 @@ fn an_unbindable_referenced_source_never_fails_a_strict_import() {
 }
 
 #[test]
+fn subclip_routing_and_hidden_dependencies_survive_import_undo_and_reopen() {
+    for placed in [true, false] {
+        let (mut v, media) = fixture();
+        let master = v["bins"][0]["catalog"]["clips"][0].clone();
+        let sub = json!({"kind":"CompositionMob","name":"A2 only","live":true,"user_placed":placed,
+            "id":{"raw":"05".repeat(32),"byte_order":"little"},"length":4800,"rate":master["rate"],"usage_code":2,
+            "attributes":{"_START":0,"_END":4800},
+            "tracks":[{"index":1,"component":{"class":"SCLP","media_kind":2,"length":4800,"rate":master["rate"],
+                "source_id":master["id"],"source_track":2,"start":0}}]});
+        let cut = &mut v["bins"][0]["mobs"][1]["tracks"][1]["component"]["components"][1];
+        cut["source_id"] = sub["id"].clone();
+        cut["source_track"] = json!(1);
+        v["bins"][0]["mobs"].as_array_mut().unwrap().push(sub);
+        let (mut s, _) = session(&v, media);
+        let before = s.project.clone();
+        let out = s.execute("file.importAvidCatalog", params("sequences")).unwrap();
+        assert_eq!(out["bins"][0]["subclips"], json!(usize::from(placed)));
+        assert_eq!(out["bins"][0]["referenced_subclips"], json!(usize::from(!placed)));
+        assert!(out["errors"].as_array().unwrap().is_empty(), "{out}");
+        let seq = s.project.sequence(ItemId(out["sequences"][0]["item"].as_u64().unwrap())).unwrap();
+        let clip = &seq.audio_tracks[1].items[0];
+        assert_eq!(clip.source_channels, vec![1]);
+        assert!(matches!(s.project.item(clip.item).unwrap().kind, filmcraft_project::ItemKind::Subclip { .. }));
+        let source = s.media.full_res_source(&s.project, clip.item, &*s.services).unwrap();
+        let audio = source.audio(2000, 8, 48000).unwrap();
+        assert_eq!(audio.channels[usize::from(clip.source_channels[0])], vec![-8000.0 / 32768.0; 8]);
+        let after = s.project.clone();
+        assert_eq!(filmcraft_format::decode(&filmcraft_format::encode(&after, false)).unwrap().project, *after);
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(s.project, before);
+        s.execute("edit.redo", json!({})).unwrap();
+        assert_eq!(s.project, after);
+    }
+}
+
+#[test]
 fn avid_import_combined_preview_commit_undo_and_reopen() {
     let (v, media) = fixture();
     let (mut s, input) = session(&v, media);

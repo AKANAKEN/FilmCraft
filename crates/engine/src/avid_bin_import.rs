@@ -78,8 +78,8 @@ pub(crate) fn prepare(s: &mut Session, p: &Value) -> Result<Value> {
         let read = || -> Result<Prepared> {
             cancelled(&progress)?;
             let size = services.file_size(&path).map_err(bad)?;
-            if size > avid_catalog::MAX_BYTES as u64 {
-                return Err(bad("file exceeds 256 MiB"));
+            if size > filmcraft_interchange::avid_bin::MAX_BYTES as u64 {
+                return Err(bad("file exceeds 512 MiB"));
             }
             let size = usize::try_from(size).map_err(bad)?;
             let mut bytes = Vec::new();
@@ -104,12 +104,15 @@ pub(crate) fn prepare(s: &mut Session, p: &Value) -> Result<Value> {
                 let bins = avid_catalog::apply(&mut project, plan, parent).map_err(bad)?;
                 Prepared { project, result: json!({"bins":bins,"warnings":warnings,"mode":"metadata","mediaBinding":"unbound"}), first_sequence: None }
             } else {
-                let document = avid_catalog::native_document(&bytes, &path).map_err(bad)?;
+                let document = avid_catalog::read_native_with_checkpoint(&bytes, &path, &|| {
+                    cancelled(&progress).map_err(|e| filmcraft_interchange::Error::Other(e.to_string()))
+                })
+                .map_err(bad)?;
                 if !folders.is_empty() {
                     *lock(&progress.status) = "Finding media by Avid identity".into();
                     let mut identities = std::collections::BTreeSet::new();
-                    for bin in document["bins"].as_array().into_iter().flatten() {
-                        for clip in bin["catalog"]["clips"].as_array().into_iter().flatten() {
+                    for bin in document.bins() {
+                        for clip in bin["mobs"].as_array().into_iter().flatten().filter(|m| m["kind"] == "MasterMob") {
                             for track in clip["tracks"].as_array().into_iter().flatten() {
                                 for reference in track["references"].as_array().into_iter().flatten() {
                                     if let Ok(id) = avid_catalog::full_identity(&reference["source_id"]) {
@@ -126,8 +129,7 @@ pub(crate) fn prepare(s: &mut Session, p: &Value) -> Result<Value> {
                     cancelled(&progress)?;
                     *lock(&progress.status) = "Binding Avid media".into();
                 }
-                let document = serde_json::to_vec(&document).map_err(bad)?;
-                crate::avid_catalog::prepare_document_with_index(
+                crate::avid_catalog::prepare_parsed_with_index(
                     &source_project,
                     &*services,
                     &document,

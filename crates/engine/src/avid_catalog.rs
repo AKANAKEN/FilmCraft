@@ -68,10 +68,23 @@ pub(crate) fn prepare_document_with_index(
     checkpoint: &dyn Fn() -> Result<()>,
     index: Option<&crate::component_relink::IdentityIndex>,
 ) -> Result<Prepared> {
+    checkpoint()?;
+    let doc = adapter::read_document(bytes).map_err(failure)?;
+    prepare_parsed_with_index(original, services, &doc, options, parent, checkpoint, index)
+}
+pub(crate) fn prepare_parsed_with_index(
+    original: &Project,
+    services: &dyn crate::Services,
+    doc: &adapter::Document,
+    options: ImportOptions,
+    parent: Option<BinId>,
+    checkpoint: &dyn Fn() -> Result<()>,
+    index: Option<&crate::component_relink::IdentityIndex>,
+) -> Result<Prepared> {
     let ImportOptions { mode, allow_missing, best_effort } = options;
     checkpoint()?;
     let mut errors = Vec::new();
-    let plan = adapter::plan_scoped(bytes, mode).map_err(failure)?;
+    let plan = adapter::plan_document(doc, mode).map_err(failure)?;
     let mut warnings = plan.warnings.clone();
     let mut project = original.clone();
     let bins = adapter::apply(&mut project, plan, parent).map_err(failure)?;
@@ -108,7 +121,7 @@ pub(crate) fn prepare_document_with_index(
             }
         }
         if mode == TransferMode::Sequences && b.compositions > 0 {
-            let plan = if best_effort { avid_sequence::plan_best_effort(&project, bytes, b.bin) } else { avid_sequence::plan(&project, bytes, b.bin) };
+            let plan = avid_sequence::plan_document(&project, doc, b.bin, best_effort);
             let plan = match plan {
                 Ok(v) => v,
                 Err(e) if best_effort => {
