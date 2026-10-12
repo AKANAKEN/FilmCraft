@@ -1042,3 +1042,137 @@ fn negative_place_and_marker_times_are_refused() {
     s.execute("markers.add", json!({"frame": 0, "name": "start"})).unwrap();
     assert!(s.active_sequence().unwrap().markers.iter().any(|m| m.start == Tick::ZERO && m.name == "start"));
 }
+
+/// A generated clip isolated from its neighbour; the playhead is away from either edge (#1124).
+fn selected_transition_fixture() -> (Session, ClipId) {
+    let mut s = Session::default();
+    s.execute("file.newSequence", json!({"name":"Selected transitions","width":160,"height":90,"fps":24,"video":2,"audio":1})).unwrap();
+    let item = s.execute("file.newColorMatte", json!({"color":"#6699cc","seconds":20})).unwrap()["item"].as_u64().unwrap();
+    let duration = Tick::from_seconds_f64(4.0).0;
+    let placed = s.execute("timeline.place", json!({"item":item,"track":"V1","frame":120,"duration":duration})).unwrap();
+    let clip = ClipId(placed["clips"][0].as_u64().unwrap());
+    s.execute("timeline.place", json!({"item":item,"track":"V1","frame":360,"duration":duration})).unwrap();
+    s.execute("timeline.select", json!({"clips":[]})).unwrap();
+    s.execute("playhead.set", json!({"frame":0})).unwrap();
+    (s, clip)
+}
+
+#[test]
+fn selected_transition_applies_both_video_edges_in_one_undo() {
+    let (mut s, clip) = selected_transition_fixture();
+    s.execute("timeline.select", json!({"clips":[clip.0]})).unwrap();
+    s.execute("prefs.set", json!({"key":"timeline.videoTransitionDuration","value":10})).unwrap();
+    let before = serde_json::to_value(&*s.project).unwrap();
+    let undo = s.history.undo.len();
+    let ph = s.playhead();
+    let result = s.execute("sequence.applyVideoTransition", json!({}));
+    assert!(result.is_ok(), "a selected clip needs no playhead edit: {result:?}");
+    let q = s.active_sequence().unwrap();
+    let tr = &q.video_tracks[0].transitions;
+    assert_eq!(tr.len(), 2);
+    assert!(tr.iter().any(|t| t.from.is_none() && t.to == Some(clip)));
+    assert!(tr.iter().any(|t| t.from == Some(clip) && t.to.is_none()));
+    assert!(tr.iter().all(|t| t.effect.effect == "cross_dissolve" && t.duration == q.settings.frame_rate.tick_of(10)));
+    assert!(q.audio_tracks[0].transitions.is_empty());
+    assert_eq!(s.history.undo.len(), undo + 1);
+    assert_eq!(s.playhead(), ph);
+    let after = serde_json::to_value(&*s.project).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(serde_json::to_value(&*s.project).unwrap(), before);
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(serde_json::to_value(&*s.project).unwrap(), after);
+}
+
+#[test]
+fn selected_transition_uses_only_the_selected_edit_point() {
+    let (mut s, clip) = selected_transition_fixture();
+    s.execute("trim.selectEditPoint", json!({"clip":clip.0,"edge":"out","kind":"trim"})).unwrap();
+    let result = s.execute("sequence.applyVideoTransition", json!({}));
+    assert!(result.is_ok(), "a selected edge needs no playhead edit: {result:?}");
+    let tr = &s.active_sequence().unwrap().video_tracks[0].transitions;
+    assert_eq!(tr.len(), 1);
+    assert_eq!(tr[0].from, Some(clip));
+    assert_eq!(tr[0].to, None);
+}
+
+#[test]
+fn selected_transition_deduplicates_adjacent_cuts_and_replaces_defaults() {
+    let (mut s, first) = selected_transition_fixture();
+    let item = s.active_sequence().unwrap().find_item(first).unwrap().1.item.0;
+    let placed = s.execute("timeline.place", json!({"item":item,"track":"V1","frame":216,"duration":4 * filmcraft_time::TICKS_PER_SECOND})).unwrap();
+    let second = ClipId(placed["clips"][0].as_u64().unwrap());
+    s.execute("timeline.select", json!({"clips":[first.0,second.0]})).unwrap();
+    s.state.default_video_transition = "wipe".into();
+    let undo = s.history.undo.len();
+    let result = s.execute("sequence.applyVideoTransition", json!({})).unwrap();
+    assert_eq!(result["transitions"].as_array().unwrap().len(), 3);
+    let q = s.active_sequence().unwrap();
+    let tr = &q.video_tracks[0].transitions;
+    assert_eq!(tr.len(), 3);
+    assert_eq!(tr.iter().filter(|t| t.from == Some(first) && t.to == Some(second)).count(), 1);
+    assert!(tr.iter().all(|t| t.effect.effect == "wipe"));
+    assert_eq!(s.history.undo.len(), undo + 1);
+    s.execute("sequence.applyVideoTransition", json!({})).unwrap();
+    assert_eq!(s.active_sequence().unwrap().video_tracks[0].transitions.len(), 3, "repeating the shortcut replaces the same cuts");
+}
+
+#[test]
+fn selected_transition_rejects_locked_tracks_without_partial_edit() {
+    let (mut s, first) = selected_transition_fixture();
+    let item = s.active_sequence().unwrap().find_item(first).unwrap().1.item.0;
+    let placed = s.execute("timeline.place", json!({"item":item,"track":"V2","frame":150,"duration":4 * filmcraft_time::TICKS_PER_SECOND})).unwrap();
+    let second = placed["clips"][0].as_u64().unwrap();
+    s.execute("timeline.select", json!({"clips":[first.0,second]})).unwrap();
+    s.execute("timeline.setTrack", json!({"track":"V2","locked":true})).unwrap();
+    let before = s.project.clone();
+    let state = s.state.clone();
+    let undo = s.history.undo.len();
+    let redo = s.history.redo.len();
+    assert!(s.execute("sequence.applyVideoTransition", json!({})).is_err());
+    assert!(std::sync::Arc::ptr_eq(&before, &s.project), "the unlocked selected clip is not changed first");
+    assert_eq!(s.state.selection, state.selection);
+    assert_eq!(s.history.undo.len(), undo);
+    assert_eq!(s.history.redo.len(), redo);
+}
+
+#[test]
+fn selected_transition_audio_shortcut_is_scoped_to_linked_audio() {
+    let mut s = demo();
+    let item = s.active_sequence().unwrap().video_tracks[0].items[0].item.0;
+    s.execute("file.newSequence", json!({"name":"Audio transitions","width":160,"height":90,"fps":24,"video":1,"audio":1})).unwrap();
+    let placed = s.execute("timeline.place", json!({"item":item,"frame":120,"duration":4 * filmcraft_time::TICKS_PER_SECOND})).unwrap();
+    let clip = placed["clips"][0].as_u64().unwrap();
+    s.execute("timeline.select", json!({"clips":[clip]})).unwrap();
+    assert_eq!(s.state.selection.len(), 2, "linked sound is selected with the picture");
+    let duration = s.prefs.timeline.audio_transition_duration(s.sequence_rate());
+    let before = serde_json::to_value(&*s.project).unwrap();
+    let undo = s.history.undo.len();
+    s.execute("playhead.set", json!({"frame":0})).unwrap();
+    s.execute("sequence.applyAudioTransition", json!({})).unwrap();
+    let q = s.active_sequence().unwrap();
+    assert!(q.video_tracks[0].transitions.is_empty());
+    assert_eq!(q.audio_tracks[0].transitions.len(), 2);
+    assert!(q.audio_tracks[0].transitions.iter().all(|t| t.effect.effect == "constant_power" && t.duration == duration));
+    assert_eq!(s.history.undo.len(), undo + 1);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(serde_json::to_value(&*s.project).unwrap(), before);
+}
+
+#[test]
+fn selected_transition_keeps_explicit_requests_and_playhead_fallback() {
+    let (mut s, first) = selected_transition_fixture();
+    s.execute("playhead.set", json!({"frame":120})).unwrap();
+    let result = s.execute("sequence.applyVideoTransition", json!({})).unwrap();
+    assert!(result["transition"].as_u64().is_some());
+    assert_eq!(s.active_sequence().unwrap().video_tracks[0].transitions.len(), 1, "no selection retains the playhead target");
+    s.execute("edit.undo", json!({})).unwrap();
+    let second = s.active_sequence().unwrap().video_tracks[0].items[1].id;
+    s.execute("timeline.select", json!({"clips":[first.0]})).unwrap();
+    s.execute("sequence.applyVideoTransition", json!({"clip":second.0,"edge":"out","effect":"wipe","frames":4})).unwrap();
+    let tr = &s.active_sequence().unwrap().video_tracks[0].transitions;
+    assert_eq!(tr.len(), 1, "explicit clip requests do not expand the current selection");
+    assert_eq!(tr[0].from, Some(second));
+    assert_eq!(tr[0].to, None);
+    assert_eq!(tr[0].effect.effect, "wipe");
+    assert_eq!(tr[0].duration, s.sequence_rate().tick_of(4));
+}

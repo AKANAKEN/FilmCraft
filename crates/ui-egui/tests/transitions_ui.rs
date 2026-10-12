@@ -344,3 +344,72 @@ fn transition_timeline_in_effect_controls() {
     assert!(ph.is_some_and(|p| p > c.cut), "{ph:?}");
     assert!(d.find("effectControls.transition.timeline.playhead").is_some(), "the playhead shows in the transition's timeline");
 }
+
+#[test]
+fn selected_clip_shortcut_applies_both_edges_away_from_playhead() {
+    let mut d = Driver::demo();
+    d.exec("file.newSequence", json!({"name":"Selected transitions","width":160,"height":90,"fps":24,"video":1,"audio":1}));
+    let item = d.exec("file.newColorMatte", json!({"color":"#6699cc","seconds":20}))["item"].as_u64().unwrap();
+    let r = d.exec("timeline.place", json!({"item":item,"frame":120,"duration":4 * 254_016_000_000_i64}));
+    let clip = r["clips"][0].as_u64().unwrap();
+    d.exec("timeline.place", json!({"item":item,"frame":360,"duration":4 * 254_016_000_000_i64}));
+    d.exec("view.zoomToSequence", json!({}));
+    d.frames(40);
+    d.click(&format!("timeline.clip.{clip}"));
+    assert!(d.harness.state().session.state.selection.iter().any(|c| c.0 == clip));
+    d.exec("playhead.set", json!({"frame":0}));
+    let undo = d.harness.state().session.history.undo.len();
+    d.snapshot("transition-selected-clip-before");
+    d.ok("ui.key", json!({"key":"Cmd+D"}));
+    d.frames(3);
+    let q = d.exec("sequence.inspect", json!({}));
+    assert_eq!(q["video"][0]["transitions"].as_array().unwrap().len(), 2, "the shortcut applies both selected clip edges away from the playhead");
+    assert_eq!(d.harness.state().session.history.undo.len(), undo + 1);
+    d.snapshot("transition-selected-clip-both-edges");
+    d.ok("ui.set", json!({"theme":"light"}));
+    d.snapshot("transition-selected-clip-both-edges-light");
+    d.ok("ui.key", json!({"key":"Cmd+Z"}));
+    assert!(d.exec("sequence.inspect", json!({}))["video"][0]["transitions"].as_array().unwrap().is_empty());
+    // Click the Out edge in the upper trim band, then invoke the same real shortcut.
+    let edge = d.ok("ui.timeline.locate", json!({"clip":clip,"edge":"out"}));
+    let (_, top, _, _, _) = d.find(&format!("timeline.clip.{clip}")).unwrap();
+    d.ok("ui.click", json!({"x":edge["x"],"y":top+8.0}));
+    d.frames(3);
+    let points = &d.harness.state().session.state.edit_points;
+    assert_eq!(points.len(), 1);
+    assert!(points[0].out && points[0].clip.0 == clip);
+    d.ok("ui.key", json!({"key":"Cmd+D"}));
+    d.frames(3);
+    let q = d.exec("sequence.inspect", json!({}));
+    let tr = q["video"][0]["transitions"].as_array().unwrap();
+    assert_eq!(tr.len(), 1);
+    assert_eq!(tr[0]["from"], clip);
+    assert!(tr[0]["to"].is_null());
+    d.snapshot("transition-selected-out-edge-only-light");
+}
+
+#[test]
+fn selected_linked_clip_audio_shortcut_changes_only_sound() {
+    let mut d = Driver::demo();
+    let demo = d.exec("sequence.inspect", json!({}));
+    let item = demo["video"][0]["items"][0]["item"].as_u64().unwrap();
+    d.exec("file.newSequence", json!({"name":"Selected audio transitions","width":160,"height":90,"fps":24,"video":1,"audio":1}));
+    let r = d.exec("timeline.place", json!({"item":item,"frame":120,"duration":4 * 254_016_000_000_i64}));
+    let clip = r["clips"][0].as_u64().unwrap();
+    d.exec("view.zoomToSequence", json!({}));
+    d.frames(40);
+    d.click(&format!("timeline.clip.{clip}"));
+    assert_eq!(d.harness.state().session.state.selection.len(), 2);
+    d.exec("playhead.set", json!({"frame":0}));
+    let before = serde_json::to_value(&*d.harness.state().session.project).unwrap();
+    let undo = d.harness.state().session.history.undo.len();
+    d.ok("ui.key", json!({"key":"Cmd+Shift+D"}));
+    d.frames(3);
+    let q = d.exec("sequence.inspect", json!({}));
+    assert_eq!(q["audio"][0]["transitions"].as_array().unwrap().len(), 2);
+    assert!(q["video"][0]["transitions"].as_array().unwrap().is_empty());
+    assert_eq!(d.harness.state().session.history.undo.len(), undo + 1);
+    d.snapshot("transition-selected-audio-both-edges");
+    d.ok("ui.key", json!({"key":"Cmd+Z"}));
+    assert_eq!(serde_json::to_value(&*d.harness.state().session.project).unwrap(), before);
+}
