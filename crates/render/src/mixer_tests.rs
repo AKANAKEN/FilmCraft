@@ -705,3 +705,87 @@ fn a_nest_trimmed_in_starts_later_in_its_sequence() {
     let mix = mix_graph(&p, p.sequence(outer).unwrap(), start, 4800, &map, None);
     assert!(worst(&mix, start, 8, |t| tone.at(t + 3.0)) < 0.01);
 }
+
+/// A 48 kHz sequence whose A1 holds one 5 s clip of the 500 Hz tone at `speed`, with or without
+/// Maintain Audio Pitch.
+fn tone_clip(speed: f64, keep_pitch: bool) -> (Project, ItemId, SourceMap, Arc<Tone>) {
+    let (mut p, outer, map, tone) = nested_tone(48_000);
+    // the nest's inner clip is the tone itself; put a clip of the media on the outer sequence instead
+    let media = *map.0.keys().next().unwrap();
+    let five = TimeRange::new(Tick::ZERO, Tick(5 * TICKS_PER_SECOND));
+    let mut clip = p.make_track_item(media, TrackKind::Audio, Tick::ZERO, five, FrameRate::FPS_24).unwrap();
+    clip.speed = speed;
+    clip.maintain_pitch = keep_pitch;
+    let q = p.sequence_mut(outer).unwrap();
+    q.audio_tracks[0].items.clear();
+    q.audio_tracks[0].items.push(clip);
+    (p, outer, map, tone)
+}
+
+fn zero_crossings_per_second(v: &[f32]) -> f64 {
+    v.windows(2).filter(|w| (w[0] < 0.0) != (w[1] < 0.0)).count() as f64 / (v.len() as f64 / 48_000.0)
+}
+
+/// `blocks` blocks of `n` samples from sample `from`, mixed as one reader (`live`).
+fn run(p: &Project, outer: ItemId, map: &SourceMap, live: Option<&LiveMix>, from: i64, n: i64, blocks: i64) -> Vec<f32> {
+    let mut out = Vec::new();
+    for b in 0..blocks {
+        out.extend_from_slice(&mix_graph(p, p.sequence(outer).unwrap(), from + b * n, n as usize, map, live).channels[0]);
+    }
+    out
+}
+
+#[test]
+fn maintain_audio_pitch_keeps_the_tone_while_the_clip_runs_faster() {
+    // without it, 1.5x is a fifth up (750 Hz = 1500 crossings/s); with it, still 500 Hz
+    let (p, outer, map, _) = tone_clip(1.5, false);
+    let plain = run(&p, outer, &map, Some(&LiveMix::new()), 48_000, 480, 100);
+    assert!((zero_crossings_per_second(&plain) - 1500.0).abs() < 60.0, "resampled: {}", zero_crossings_per_second(&plain));
+    let (p, outer, map, _) = tone_clip(1.5, true);
+    let live = LiveMix::new();
+    let kept = run(&p, outer, &map, Some(&live), 48_000, 480, 100);
+    let zc = zero_crossings_per_second(&kept[2400..]);
+    assert!((zc - 1000.0).abs() < 60.0, "stretched: {zc} crossings/s");
+    let peak = kept.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+    assert!(peak > 0.42 && peak < 0.52, "level kept: {peak}");
+    // the stream continues across blocks: no gaps (a long run of near-zero samples)
+    let longest_silence = kept[2400..].split(|v| v.abs() > 0.01).map(<[f32]>::len).max().unwrap_or(0);
+    assert!(longest_silence < 200, "longest near-silent run {longest_silence} samples");
+    assert_eq!(live.stretch().len(), 1, "one stream for the one clip");
+    // a seek restarts the stream rather than playing on from where it was
+    let a = mix_graph(&p, p.sequence(outer).unwrap(), 10 * 480, 480, &map, Some(&live));
+    let b = mix_graph(&p, p.sequence(outer).unwrap(), 10 * 480, 480, &map, Some(&live));
+    assert_eq!(a.channels[0], b.channels[0], "the same block twice is the same sound");
+}
+
+#[test]
+fn a_stretched_clip_sounds_the_same_however_the_reader_cuts_its_blocks() {
+    // the mixer renders tracks in parallel and readers ask for any block size: the grain chain
+    // continues from the position it left off at, so 100 blocks of 480 equal 10 blocks of 4800
+    let (p, outer, map, _) = tone_clip(1.5, true);
+    let small = run(&p, outer, &map, Some(&LiveMix::new()), 48_000, 480, 100);
+    let large = run(&p, outer, &map, Some(&LiveMix::new()), 48_000, 4_800, 10);
+    assert_eq!(small.len(), large.len());
+    let diff = small.iter().zip(&large).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+    assert!(diff < 1e-6, "block size changed the output by {diff}");
+    // two readers at once (playback beside an export) each keep their own stream
+    let (one, two) = (LiveMix::new(), LiveMix::new());
+    let mut a = Vec::new();
+    let mut b = Vec::new();
+    for blk in 0..20 {
+        a.extend_from_slice(&mix_graph(&p, p.sequence(outer).unwrap(), 48_000 + blk * 480, 480, &map, Some(&one)).channels[0]);
+        b.extend_from_slice(&mix_graph(&p, p.sequence(outer).unwrap(), 96_000 + blk * 480, 480, &map, Some(&two)).channels[0]);
+    }
+    assert_eq!(a, small[..a.len()], "reader one is undisturbed by reader two");
+    assert_eq!(b, run(&p, outer, &map, Some(&LiveMix::new()), 96_000, 480, 20), "and reader two by reader one");
+}
+
+#[test]
+fn without_a_reader_a_maintain_pitch_clip_resamples() {
+    // mix_sequence (analysis, waveforms, tests) has no LiveMix to continue a stream in, so the clip
+    // is resampled like one without the flag: a fifth up, never a chopped stream
+    let (p, outer, map, _) = tone_clip(1.5, true);
+    let plain = run(&p, outer, &map, None, 48_000, 480, 100);
+    let zc = zero_crossings_per_second(&plain);
+    assert!((zc - 1500.0).abs() < 60.0, "resampled: {zc} crossings/s");
+}

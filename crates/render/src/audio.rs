@@ -1,6 +1,14 @@
 //! Clip-level audio: clip gain → clip effects → Volume / Channel Volume / Panner, audio transitions
-//! and speed changes (varispeed resampling), summed per track. The track/submix/Mix graph that
-//! consumes it is [`crate::mixer`].
+//! and speed changes (varispeed resampling, or a pitch-keeping time stretch with the clip's
+//! Maintain Audio Pitch: [`filmcraft_audio_dsp::stretch`]), summed per track. The track/submix/Mix
+//! graph that consumes it is [`crate::mixer`].
+//!
+//! The mixer is stateless per block, but a time stretch carries its grain chain from block to
+//! block. That state belongs to the reader: a [`StretchPool`] inside the reader's
+//! [`crate::mixer::LiveMix`] (playback's, an export's, a preview render's) holds one stream per
+//! clip and the position it continues from, so the next block picks it up whichever thread mixes
+//! the track, and two readers never share a stream. A seek starts a new one. A caller without a
+//! `LiveMix` ([`mix_sequence`], analysis, waveforms) gets the clip resampled instead.
 //!
 //! Stereo, mono and adaptive tracks carry two channels. 5.1 tracks carry six (L, R, C, LFE, Ls,
 //! Rs): their clips play the source's first six channels (or the six `source_channels` picked with
@@ -9,8 +17,10 @@
 //! 5.1 clips, and Channel Volume's left/right levels apply to L and R.
 
 use std::collections::HashMap;
+use std::sync::Mutex;
 
 use filmcraft_audio_dsp::channels::{self as chans, Layout, Mixdown};
+use filmcraft_audio_dsp::stretch::Stretcher;
 use filmcraft_frame::AudioBuffer;
 use filmcraft_project::{AudioChannels, Project, Sequence, Track, TrackId, TrackItem};
 use filmcraft_time::{Tick, TimeRange};
@@ -67,7 +77,7 @@ pub fn master_layout(seq: &Sequence) -> Layout {
 /// audio transitions) for sequence samples `[start, start + frames)`: the track's mixer input
 /// (2 channels, or 6 for a 5.1 track).
 pub fn track_input(project: &Project, track: &Track, start: i64, frames: usize, sr: u32, sources: &dyn SourceProvider) -> AudioBuffer {
-    track_input_live(project, track, start, frames, sr, sources, &HashMap::new())
+    track_input_live(project, track, start, frames, sr, sources, &HashMap::new(), None)
 }
 
 /// [`track_input`] with the live mixer overrides: held Clip Mixer controls ([`CLIP_LANE_VOLUME`],
@@ -80,8 +90,9 @@ pub fn track_input_live(
     sr: u32,
     sources: &dyn SourceProvider,
     ovs: &HashMap<(TrackId, String), Override>,
+    stretch: Option<&StretchPool>,
 ) -> AudioBuffer {
-    track_input_at(project, track, start, frames, sr, sources, ovs, 0)
+    track_input_at(project, track, start, frames, sr, sources, ovs, stretch, 0)
 }
 
 /// [`track_input_live`] for a track `depth` nested sequences down from the one being mixed.
@@ -94,11 +105,16 @@ pub(crate) fn track_input_at(
     sr: u32,
     sources: &dyn SourceProvider,
     ovs: &HashMap<(TrackId, String), Override>,
+    stretch: Option<&StretchPool>,
     depth: u32,
 ) -> AudioBuffer {
     let w = crate::mixer::width_of(track.channels);
-    let live =
-        ClipLive { vol: ovs.get(&(track.id, CLIP_LANE_VOLUME.to_string())).copied(), pan: ovs.get(&(track.id, CLIP_LANE_PAN.to_string())).copied(), depth };
+    let live = ClipLive {
+        vol: ovs.get(&(track.id, CLIP_LANE_VOLUME.to_string())).copied(),
+        pan: ovs.get(&(track.id, CLIP_LANE_PAN.to_string())).copied(),
+        depth,
+        stretch,
+    };
     let range = TimeRange::from_bounds(Tick::from_units(start, sr as i64), Tick::from_units(start + frames as i64, sr as i64));
     let mut tbuf = AudioBuffer::silence(sr, w, frames);
     for item in track.items.iter().filter(|i| i.enabled && i.range().overlaps(&range)) {
@@ -143,13 +159,15 @@ pub(crate) fn track_input_at(
     tbuf
 }
 
-/// Held Clip Mixer controls of one track.
+/// Held Clip Mixer controls of one track, and the reader's stretch streams.
 #[derive(Default)]
-struct ClipLive {
+struct ClipLive<'a> {
     vol: Option<Override>,
     pan: Option<Override>,
     /// How many nested sequences deep this track is ([`crate::MAX_NEST_DEPTH`] ends the descent).
     depth: u32,
+    /// The reader's time-stretch streams (Maintain Audio Pitch); `None` resamples instead.
+    stretch: Option<&'a StretchPool>,
 }
 
 /// Balance for stereo signals (clip Panner, stereo track pan): centre = unity on both sides, turning
@@ -201,14 +219,14 @@ fn mix_item(
         };
         // The nested sequence is the clip's source: speed, reverse and clip effects apply to its
         // mix exactly as they do to a media clip's sound.
-        let read = |m0: i64, len: usize| Some(nested_mix(project, &q, m0, len, sr, sources, w, live.depth));
-        effected(item, &read, a0, n, sr, w)
+        let read = |m0: i64, len: usize| Some(nested_mix(project, &q, m0, len, sr, sources, w, live.depth, live.stretch));
+        effected(item, &read, a0, n, sr, w, live.stretch)
     } else {
         let Some(src) = sources.source(item.item) else { return };
         if !src.info().has_audio() {
             return;
         }
-        effected(item, &|m0, len| src.audio_stream(item.audio_stream, m0, len, sr).ok(), a0, n, sr, w)
+        effected(item, &|m0, len| src.audio_stream(item.audio_stream, m0, len, sr).ok(), a0, n, sr, w, live.stretch)
     };
     // gains: clip gain × Volume (keyframed, per 64-sample block) × channel volume × panner
     let clip_gain = db_to_gain(item.gain_db);
@@ -262,9 +280,20 @@ fn mix_item(
 /// `len` samples of a nested sequence's mix starting at sample `m0` of its own time, counted at
 /// `sr` (the rate of the sequence the nest is in), as `w` channels. The nested sequence is mixed at
 /// its own sample rate and converted when the two differ; time before its start is silent.
-/// `depth` is the nesting depth of the sequence the nest is in.
+/// `depth` is the nesting depth of the sequence the nest is in; `stretch` is the reader's pool of
+/// time-stretch streams, which the clips inside the nest continue in too.
 #[allow(clippy::too_many_arguments)]
-fn nested_mix(project: &Project, nested: &Sequence, m0: i64, len: usize, sr: u32, sources: &dyn SourceProvider, w: usize, depth: u32) -> AudioBuffer {
+fn nested_mix(
+    project: &Project,
+    nested: &Sequence,
+    m0: i64,
+    len: usize,
+    sr: u32,
+    sources: &dyn SourceProvider,
+    w: usize,
+    depth: u32,
+    stretch: Option<&StretchPool>,
+) -> AudioBuffer {
     // a damaged project can claim any rate: keep the buffer below sized by a real one
     let own = nested.settings.sample_rate.clamp(1_000, 768_000);
     let sr = sr.max(1);
@@ -276,7 +305,7 @@ fn nested_mix(project: &Project, nested: &Sequence, m0: i64, len: usize, sr: u32
     let lead = first.min(0).unsigned_abs().min(count as u64) as usize;
     let mut mix = AudioBuffer::silence(own, w, count);
     if count > lead {
-        let b = crate::mixer::mix_graph_at(project, nested, first + lead as i64, count - lead, sources, None, depth + 1);
+        let b = crate::mixer::mix_graph_at(project, nested, first + lead as i64, count - lead, sources, None, stretch, depth + 1);
         let b = to_layout(b, Layout::from_channels(w), Mixdown::FrontRear);
         for (dst, src) in mix.channels.iter_mut().zip(&b.channels) {
             let m = src.len().min(count - lead);
@@ -307,8 +336,8 @@ type SourceAudio<'a> = &'a dyn Fn(i64, usize) -> Option<AudioBuffer>;
 
 /// The clip's audio after speed/reverse and clip effects (before clip gain, Volume and Panner) for
 /// timeline samples `[a0, a0 + n)`, `w` channels.
-fn effected(item: &TrackItem, src: SourceAudio, a0: i64, n: usize, sr: u32, w: usize) -> Vec<Vec<f32>> {
-    let read = |x0: i64, len: usize| raw_channels(item, src, x0, len, sr, w);
+fn effected(item: &TrackItem, src: SourceAudio, a0: i64, n: usize, sr: u32, w: usize, stretch: Option<&StretchPool>) -> Vec<Vec<f32>> {
+    let read = |x0: i64, len: usize| raw_channels(item, src, x0, len, sr, w, stretch);
     if crate::audio_fx::has_effects(item) { crate::audio_fx::process(item, a0, n, sr, &read) } else { read(a0, n) }
 }
 
@@ -328,7 +357,7 @@ pub fn clip_signal(item: &TrackItem, start: i64, frames: usize, sr: u32, sources
         let n = (a1 - a0) as usize;
         let off = (a0 - start) as usize;
         let g = db_to_gain(item.gain_db);
-        let buf = effected(item, &|m0, len| src.audio_stream(item.audio_stream, m0, len, sr).ok(), a0, n, sr, 2);
+        let buf = effected(item, &|m0, len| src.audio_stream(item.audio_stream, m0, len, sr).ok(), a0, n, sr, 2, None);
         for (dst, b) in out.iter_mut().zip(&buf) {
             for (d, x) in dst[off..off + n].iter_mut().zip(b) {
                 *d = x * g;
@@ -352,8 +381,9 @@ pub fn clip_is_mono(item: &TrackItem, sources: &dyn SourceProvider) -> Option<bo
 
 /// The clip's audio (after speed/reverse) for timeline samples `[x0, x0 + len)` as `w` channels
 /// (2: stereo, mono sources on both sides, 5.1 sources folded down; 6: 5.1), with silence outside
-/// the clip.
-fn raw_channels(item: &TrackItem, src: SourceAudio, x0: i64, len: usize, sr: u32, w: usize) -> Vec<Vec<f32>> {
+/// the clip. With the clip's Maintain Audio Pitch and a reader's `stretch` pool, speed changes are
+/// time-stretched; without a pool there is nowhere to continue a stream, so they resample.
+fn raw_channels(item: &TrackItem, src: SourceAudio, x0: i64, len: usize, sr: u32, w: usize, stretch: Option<&StretchPool>) -> Vec<Vec<f32>> {
     let mut out = vec![vec![0.0f32; len]; w];
     let item_s0 = item.start.to_units_floor(sr as i64);
     let item_s1 = item.end().to_units_floor(sr as i64);
@@ -371,6 +401,11 @@ fn raw_channels(item: &TrackItem, src: SourceAudio, x0: i64, len: usize, sr: u32
         remixed
     } else if (speed - 1.0).abs() < 1e-9 && !item.reverse {
         src(src_start_ticks.to_units_floor(sr as i64), n)
+    } else if item.maintain_pitch
+        && !item.reverse
+        && let Some(pool) = stretch
+    {
+        stretched(item, src, a0, n, sr, item_s0, pool)
     } else {
         // varispeed: read a longer span and resample linearly
         let span = ((n as f64) * speed).ceil() as usize + 2;
@@ -424,6 +459,79 @@ fn raw_channels(item: &TrackItem, src: SourceAudio, x0: i64, len: usize, sr: u32
         dst[off..off + m].copy_from_slice(&ch[..m]);
     }
     out
+}
+
+/// One live stretch stream: which clip (id, sample rate) it is, the stream, and when it was last
+/// used (a counter, for eviction).
+struct StretchEntry {
+    key: (u64, u32),
+    stream: Stretcher,
+    used: u64,
+}
+
+/// Streams a pool keeps before the least recently used goes: enough for the clips of a dense
+/// sequence plus a seek's fresh start beside the stream it leaves behind.
+const STRETCHERS_KEPT: usize = 64;
+
+/// One reader's time-stretch streams (clips with Maintain Audio Pitch), owned by its
+/// [`crate::mixer::LiveMix`]. A stream is taken out while a block runs, so the tracks the mixer
+/// renders in parallel never share one; it goes back with the position it expects next, and the
+/// block that starts there continues it on whichever thread. A stream nobody continues (a seek, a
+/// clip that stopped playing) ages out.
+#[derive(Default)]
+pub struct StretchPool {
+    entries: Mutex<(Vec<StretchEntry>, u64)>,
+}
+
+impl StretchPool {
+    fn lock(&self) -> std::sync::MutexGuard<'_, (Vec<StretchEntry>, u64)> {
+        self.entries.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The stream for `key` that expects to continue at `at` and still matches the clip (`fits`),
+    /// taken out of the pool.
+    fn take(&self, key: (u64, u32), at: i64, fits: impl Fn(&Stretcher) -> bool) -> Option<Stretcher> {
+        let mut guard = self.lock();
+        let (pool, _) = &mut *guard;
+        let i = pool.iter().position(|e| e.key == key && e.stream.expect() == at && fits(&e.stream))?;
+        Some(pool.swap_remove(i).stream)
+    }
+
+    /// Put a stream back (newest), evicting the least recently used past the cap.
+    fn put(&self, key: (u64, u32), stream: Stretcher) {
+        let mut guard = self.lock();
+        let (pool, clock) = &mut *guard;
+        *clock = clock.wrapping_add(1);
+        pool.push(StretchEntry { key, stream, used: *clock });
+        if pool.len() > STRETCHERS_KEPT
+            && let Some(i) = pool.iter().enumerate().min_by_key(|(_, e)| e.used).map(|(i, _)| i)
+        {
+            pool.swap_remove(i);
+        }
+    }
+
+    /// How many streams the pool holds (tests).
+    pub fn len(&self) -> usize {
+        self.lock().0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+/// The clip's audio for timeline samples `a0 .. a0 + n` time-stretched to its speed with the pitch
+/// kept, continuing the reader's stream that left off at `a0`, else a new one starting there (a
+/// seek, or a changed speed or placement).
+fn stretched(item: &TrackItem, src: SourceAudio, a0: i64, n: usize, sr: u32, item_s0: i64, pool: &StretchPool) -> Option<AudioBuffer> {
+    let speed = item.speed.abs();
+    let src_origin = item.source_in.to_units_floor(sr as i64);
+    let key = (item.id.0, sr);
+    let fits = |s: &Stretcher| (s.speed() - speed).abs() < 1e-9 && s.origins() == (item_s0, src_origin);
+    let mut stream = pool.take(key, a0, fits).unwrap_or_else(|| Stretcher::new(speed, sr, item_s0, src_origin));
+    let channels = stream.process(a0, n, |pos, len| src(pos, len).map(|b| b.channels).unwrap_or_default());
+    pool.put(key, stream);
+    Some(AudioBuffer { sample_rate: sr, channels })
 }
 
 /// The source channels a clip on a 5.1 track plays: six picked channels (Modify ▸ Audio Channels),

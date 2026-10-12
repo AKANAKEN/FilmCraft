@@ -12,6 +12,7 @@ use filmcraft_audio_dsp::AudioEffect;
 use filmcraft_audio_dsp::effects::Limiter;
 use filmcraft_project::{ItemId, Project, Sequence};
 use filmcraft_render::SourceProvider;
+use filmcraft_render::mixer::LiveMix;
 use filmcraft_time::TimeRange;
 
 use crate::{ExportError, ExportSettings, Result};
@@ -40,6 +41,9 @@ pub(crate) struct AudioOut {
     /// End of the range (samples); input past it is silence.
     end: i64,
     pub loudness: Option<LoudnessReport>,
+    /// This export's reader state: clips with Maintain Audio Pitch continue their time stretch
+    /// from one chunk to the next.
+    live: LiveMix,
 }
 
 impl AudioOut {
@@ -61,7 +65,20 @@ impl AudioOut {
             l
         });
         let latency = limiter.as_ref().map(|l| l.latency() as i64).unwrap_or(0);
-        Ok(AudioOut { project, seq, sr, channels: r.channels as usize, gain: 1.0, limiter, latency, next_in: start, out: start, end, loudness: None })
+        Ok(AudioOut {
+            project,
+            seq,
+            sr,
+            channels: r.channels as usize,
+            gain: 1.0,
+            limiter,
+            latency,
+            next_in: start,
+            out: start,
+            end,
+            loudness: None,
+            live: LiveMix::new(),
+        })
     }
 
     /// The loudness pass: measure the integrated loudness of the whole range and set the gain
@@ -149,12 +166,8 @@ impl AudioOut {
         let out_ch = if self.channels == 6 { 6 } else { 2 };
         let mut st = if real > 0 {
             let layout = filmcraft_audio_dsp::channels::Layout::from_channels(out_ch);
-            filmcraft_render::audio::mix_sequence_layout(
-                &self.project,
-                &self.seq,
-                pos,
-                real,
-                sources,
+            filmcraft_render::audio::to_layout(
+                filmcraft_render::mixer::mix_graph(&self.project, &self.seq, pos, real, sources, Some(&self.live)),
                 layout,
                 filmcraft_audio_dsp::channels::Mixdown::FrontRear,
             )

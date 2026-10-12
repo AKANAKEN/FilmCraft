@@ -748,6 +748,8 @@ pub fn render_audio(s: &mut Session, p: &Value) -> Result<Value> {
         let mut bytes = 0u64;
         let mut outcome: std::result::Result<(), String> = Ok(());
         let Some(q) = project.sequence(seq) else { return };
+        // one reader: clips with Maintain Audio Pitch continue their stretch across the blocks
+        let live = filmcraft_render::mixer::LiveMix::new();
         'segs: for g in &todo {
             let mut inter = Vec::with_capacity(g.samples as usize * 2);
             let mut pos = g.first_sample;
@@ -757,7 +759,7 @@ pub fn render_audio(s: &mut Session, p: &Value) -> Result<Value> {
                     break 'segs;
                 }
                 let n = (g.first_sample + g.samples - pos).min(sr) as usize;
-                let buf = filmcraft_render::audio::mix_sequence(&project, q, pos, n, &provider);
+                let buf = to_layout(filmcraft_render::mixer::mix_graph(&project, q, pos, n, &provider, Some(&live)), Layout::Stereo, Mixdown::FrontRear);
                 for i in 0..n {
                     inter.push(buf.channels[0][i]);
                     inter.push(buf.channels[buf.channels.len().min(2) - 1][i]);
