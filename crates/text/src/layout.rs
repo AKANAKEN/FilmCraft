@@ -13,7 +13,7 @@
 //! the centre (centre) or the right edge (right). For **area text** (`width == Some(w)`) the
 //! origin is the top-left of the text box and lines wrap at `w`.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -44,6 +44,8 @@ pub enum Align {
 /// Character formatting.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextStyle {
+    /// Additional pair spacing in 1/1000 em. Keys contain exactly two Unicode characters.
+    pub pair_spacing: BTreeMap<String, f32>,
     pub family: String,
     pub style: String,
     /// Font size in pixels.
@@ -65,6 +67,7 @@ pub struct TextStyle {
 impl Default for TextStyle {
     fn default() -> Self {
         Self {
+            pair_spacing: BTreeMap::new(),
             family: fonts::DEFAULT_FAMILY.into(),
             style: "Regular".into(),
             size: 100.0,
@@ -104,6 +107,10 @@ fn hf(h: &mut impl Hasher, v: f32) {
 
 impl Hash for TextStyle {
     fn hash<H: Hasher>(&self, h: &mut H) {
+        for (pair, amount) in &self.pair_spacing {
+            pair.hash(h);
+            hf(h, *amount);
+        }
         self.family.hash(h);
         self.style.hash(h);
         hf(h, self.size);
@@ -426,6 +433,23 @@ fn paragraph(text: &str, base: usize, sty: &Styles, para: &ParagraphStyle) -> Ve
         let sub: Vec<(usize, char, char)> = chars[i..j].iter().map(|c| (c.0, c.1, c.2)).collect();
         let size = if small { st.size * SMALL_CAPS_SCALE } else { st.size };
         let mut glyphs = shape_item(text, &sub, rtl, face, size, st, para.vertical);
+        // Only apply pair adjustments to adjacent, single-character clusters in an LTR item.
+        // Complex-script shaping, ligatures and fallback runs retain the shaper's positions.
+        if !rtl && !para.vertical && !sty.prim[si].missing && face == sty.prim[si].face && !st.pair_spacing.is_empty() {
+            for k in 0..glyphs.len().saturating_sub(1) {
+                let a = glyphs[k].cluster;
+                let b = glyphs[k + 1].cluster;
+                let Some(first) = text.get(a..).and_then(|s| s.chars().next()) else { continue };
+                let Some(second) = text.get(b..).and_then(|s| s.chars().next()) else { continue };
+                if a + first.len_utf8() != b {
+                    continue;
+                }
+                let pair: String = [first, second].iter().collect();
+                if let Some(amount) = st.pair_spacing.get(&pair).filter(|v| v.is_finite() && v.abs() <= 1000.0) {
+                    glyphs[k].adv += amount * size / 1000.0;
+                }
+            }
+        }
         // tracking after each cluster
         if st.tracking != 0.0 {
             let t = st.tracking * st.size / 1000.0;
@@ -859,6 +883,25 @@ mod tests {
         // tracking adds 1/1000 em per cluster
         let tracked = measure("AVAVAV", &TextStyle { tracking: 100.0, ..st(100.0) });
         assert!((tracked - kern - 6.0 * 10.0).abs() < 0.5, "{tracked} {kern}");
+    }
+
+    #[test]
+    fn pair_spacing_tracks_edited_text_and_scales_with_font_size() {
+        let base = TextStyle { ligatures: false, ..st(100.0) };
+        let custom = TextStyle { pair_spacing: BTreeMap::from([("AB".into(), -100.0)]), ..base.clone() };
+        for (text, count) in [("AB", 1.0), ("ABAB", 2.0), ("BA", 0.0), ("A B", 0.0)] {
+            assert!((measure(text, &base) - measure(text, &custom) - count * 10.0).abs() < 0.01);
+        }
+        let small = TextStyle { size: 50.0, ..custom.clone() };
+        let plain = TextStyle { size: 50.0, ..base };
+        assert!((measure("AB", &plain) - measure("AB", &small) - 5.0).abs() < 0.01);
+        let absent = TextStyle { family: "No Such Test Font 739".into(), ..custom.clone() };
+        let unadjusted = TextStyle { pair_spacing: BTreeMap::new(), ..absent.clone() };
+        assert_eq!(measure("AB", &absent), measure("AB", &unadjusted));
+        let a = layout("AB", &custom, &ParagraphStyle::default());
+        assert!(
+            (a.caret(1).0 - layout("AB", &TextStyle { pair_spacing: BTreeMap::new(), ..custom }, &ParagraphStyle::default()).caret(1).0 + 10.0).abs() < 0.01
+        );
     }
 
     #[test]

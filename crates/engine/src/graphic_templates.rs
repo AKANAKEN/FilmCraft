@@ -30,7 +30,7 @@ use filmcraft_time::Tick;
 use serde_json::{Value, json};
 
 use crate::commands::{CommandSpec, always, bad, bool_p, f64_p, has_seq, str_p, u64_p};
-use crate::graphics::{layer_effect_index, place_video_clip, set_props, target_clip};
+use crate::graphics::{apply_props, layer_effect_index, place_video_clip, target_clip};
 use crate::{EngineError, Result, Session};
 
 type Run = fn(&mut Session, &Value) -> Result<Value>;
@@ -132,7 +132,7 @@ fn register_fonts(t: &GraphicsTemplate) -> usize {
 }
 
 fn control_json(c: &TemplateControl) -> Value {
-    json!({"id": c.id, "name": c.name, "kind": c.kind.name(), "layer": c.layer, "param": c.param, "min": c.min, "max": c.max})
+    json!({"id": c.id, "name": c.name, "kind": c.kind.name(), "layer": c.layer, "param": c.param, "min": c.min, "max": c.max, "options": c.options})
 }
 
 fn entry_json(e: &LibraryEntry) -> Value {
@@ -254,12 +254,12 @@ fn mt_at_playhead(s: &Session, it: &TrackItem) -> Tick {
     it.source_time_at(s.playhead().clamp(it.start, it.end() - Tick(1)))
 }
 
-/// Set template controls `values` ({control id or name: value}) on `clip`, each as its own
-/// property change (callers fold the undo steps).
+/// Validate and stage every control before committing one undoable edit.
 fn set_controls(s: &mut Session, clip: ClipId, values: &serde_json::Map<String, Value>) -> Result<usize> {
-    let it = clip_item(s, clip)?;
+    let mut it = clip_item(s, clip)?;
     let link = it.graphic.as_ref().and_then(|m| m.template.clone()).ok_or_else(|| bad("graphics.template.set", "the graphic was not made from a template"))?;
     let tl = s.playhead().clamp(it.start, it.end() - Tick(1));
+    let mt = it.source_time_at(tl);
     let mut n = 0;
     for (k, v) in values {
         let c = link
@@ -268,6 +268,35 @@ fn set_controls(s: &mut Session, clip: ClipId, values: &serde_json::Map<String, 
             .find(|c| c.id == *k)
             .or_else(|| link.controls.iter().find(|c| c.name.eq_ignore_ascii_case(k)))
             .ok_or_else(|| bad("graphics.template.set", format!("the template has no property `{k}`")))?;
+        c.validate(&it.effects).map_err(|e| bad("graphics.template.set", e.to_string()))?;
+        if c.kind == ControlKind::Dropdown {
+            let option = c
+                .options
+                .iter()
+                .find(|o| v.as_u64() == Some(u64::from(o.value)) || v.as_str().is_some_and(|label| o.label.eq_ignore_ascii_case(label)))
+                .ok_or_else(|| bad("graphics.template.set", format!("`{k}`: choose an option label or value")))?;
+            for o in &option.overrides {
+                let e = it
+                    .effects
+                    .iter_mut()
+                    .find(|e| graphic::is_layer(e) && layer_uid(e) == o.layer)
+                    .ok_or_else(|| bad("graphics.template.set", "an option's layer is gone"))?;
+                if o.param == "enabled" {
+                    e.enabled = o.value.value.as_bool().ok_or_else(|| bad("graphics.template.set", "visibility must be a boolean"))?;
+                } else {
+                    e.params.insert(o.param.clone(), o.value.clone());
+                }
+            }
+            let prm = it
+                .effects
+                .iter_mut()
+                .find(|e| graphic::is_layer(e) && layer_uid(e) == c.layer)
+                .and_then(|e| e.params.get_mut(&c.param))
+                .ok_or_else(|| bad("graphics.template.set", "the property's layer is gone"))?;
+            prm.value = ParamValue::Choice(option.value);
+            n += 1;
+            continue;
+        }
         let ei = it
             .effects
             .iter()
@@ -291,8 +320,19 @@ fn set_controls(s: &mut Session, clip: ClipId, values: &serde_json::Map<String, 
                 props.insert(c.param.clone(), v.clone());
             }
         }
-        set_props(s, clip, ei, &props, tl, "Change Template Property", None)?;
+        let e = it.effects.get_mut(ei).ok_or_else(|| bad("graphics.template.set", "the property's layer is gone"))?;
+        if c.param == "enabled" && !v.is_boolean() {
+            return Err(bad("graphics.template.set", "visibility must be a boolean"));
+        }
+        apply_props(e, &props, mt)?;
         n += 1;
+    }
+    if n > 0 {
+        s.edit_sequence("Change Template Properties", move |q, _, _| {
+            let (_, target) = q.find_item_mut(clip).ok_or(filmcraft_edit::EditError::NoItem(clip))?;
+            target.effects = it.effects;
+            Ok(())
+        })?;
     }
     Ok(n)
 }
@@ -364,6 +404,19 @@ fn export_controls(it: &TrackItem, layers: &[EffectInstance], p: &Value) -> Resu
     let idx = layer_indices(&it.effects);
     let mut out: Vec<TemplateControl> = Vec::new();
     let Some(arr) = p.get("controls").and_then(Value::as_array) else {
+        if let Some(link) = it.graphic.as_ref().and_then(|m| m.template.as_ref()) {
+            let mut controls = link.controls.clone();
+            for c in &mut controls {
+                for option in &mut c.options {
+                    for o in &mut option.overrides {
+                        for key in &mut o.value.keyframes {
+                            key.time -= it.source_in;
+                        }
+                    }
+                }
+            }
+            return Ok(controls);
+        }
         // default: every text layer's text
         for (i, &ei) in idx.iter().enumerate() {
             let e = &it.effects[ei];
@@ -377,12 +430,34 @@ fn export_controls(it: &TrackItem, layers: &[EffectInstance], p: &Value) -> Resu
                     param: "text".into(),
                     min: None,
                     max: None,
+                    options: Vec::new(),
                 });
             }
         }
         return Ok(out);
     };
     for (n, c) in arr.iter().enumerate() {
+        if let Some(id) = str_p(c, "sourceControl") {
+            let mut control = it
+                .graphic
+                .as_ref()
+                .and_then(|m| m.template.as_ref())
+                .and_then(|t| t.controls.iter().find(|c| c.id == id))
+                .cloned()
+                .ok_or_else(|| bad("graphics.template.export", format!("no source control `{id}`")))?;
+            if let Some(name) = str_p(c, "name") {
+                control.name = name.to_string();
+            }
+            for option in &mut control.options {
+                for o in &mut option.overrides {
+                    for key in &mut o.value.keyframes {
+                        key.time -= it.source_in;
+                    }
+                }
+            }
+            out.push(control);
+            continue;
+        }
         let li = match c.get("layer") {
             Some(Value::Number(x)) => x.as_u64().unwrap_or(0) as usize,
             Some(Value::String(name)) => (0..idx.len())
@@ -416,7 +491,13 @@ fn export_controls(it: &TrackItem, layers: &[EffectInstance], p: &Value) -> Resu
                 max = max.or(Some(soft_max));
             }
         }
-        out.push(TemplateControl { id, name, kind, layer: layer_uid(layer), param, min, max });
+        let options = c
+            .get("options")
+            .map(|v| serde_json::from_value(v.clone()))
+            .transpose()
+            .map_err(|e| bad("graphics.template.export", format!("invalid dropdown options: {e}")))?
+            .unwrap_or_default();
+        out.push(TemplateControl { id, name, kind, layer: layer_uid(layer), param, min, max, options });
     }
     Ok(out)
 }
@@ -482,7 +563,7 @@ fn export_template(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
     }
-    let t = GraphicsTemplate {
+    let mut t = GraphicsTemplate {
         id: format!("user:{}", gtemplate::slug(&name)),
         name: name.clone(),
         category: str_p(p, "category").unwrap_or("My Templates").to_string(),
@@ -498,6 +579,17 @@ fn export_template(s: &mut Session, p: &Value) -> Result<Value> {
         resources: gtemplate::Resources { fonts },
         ..Default::default()
     };
+    if t.controls.iter().any(|c| c.kind == ControlKind::Dropdown)
+        || t.graphic.encoded_blending
+        || t.graphic.rig.is_some()
+        || t.layers.iter().any(|l| {
+            l.layer.as_ref().is_some_and(|x| {
+                !x.paths.is_empty() || x.clip_to.is_some() || x.pair_spacing.is_some() || !x.gradient_alpha.is_empty() || x.uppercase_pattern.is_some()
+            })
+        })
+    {
+        t.version = 2;
+    }
     t.validate().map_err(|e| EngineError::Other(e.to_string()))?;
     let path = match str_p(p, "path") {
         Some(x) => {
@@ -1147,7 +1239,7 @@ pub fn commands() -> Vec<CommandSpec> {
             "graphics.template.export",
             "Export As Motion Graphics Template…",
             G,
-            r#"{"clip":id?,"name":str,"category":str="My Templates","description":str?,"controls":[{"layer":n|name,"param":"text|fill_color|size|font|position|enabled|…","name":str?,"kind":"text|color|slider|checkbox|font|position"?,"min":f64?,"max":f64?,"id":str?}]? (default: each text layer's text),"path":str? (default: the user templates folder),"embedFonts":bool=false,"fontLicense":str?}"#,
+            r#"{"clip":id?,"name":str,"category":str="My Templates","description":str?,"controls":[{"layer":n|name,"param":str,"name":str?,"kind":"text|color|slider|checkbox|font|position|dropdown"?,"min":f64?,"max":f64?,"id":str?,"options":[{label,value,overrides:[{layer:uid,param,value:Param}]}]?}|{"sourceControl":id,"name":str?}]? (default: existing template controls, otherwise each text layer's text),"path":str? (default: the user templates folder),"embedFonts":bool=false,"fontLicense":str?}"#,
             has_graphic,
             export_template,
         ),

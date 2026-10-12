@@ -38,6 +38,7 @@ pub fn layer_matrix(spec: &LayerSpec) -> Affine {
 pub fn text_styles(t: &TextProps) -> (TextStyle, ParagraphStyle) {
     (
         TextStyle {
+            pair_spacing: t.pair_spacing.as_ref().filter(|p| p.family == t.font && p.style == t.style).map(|p| p.pairs.clone()).unwrap_or_default(),
             family: if t.font.is_empty() { filmcraft_text::fonts::DEFAULT_FAMILY.into() } else { t.font.clone() },
             style: if t.style.is_empty() { "Regular".into() } else { t.style.clone() },
             size: t.size,
@@ -82,6 +83,13 @@ pub fn text_runs(t: &TextProps, base: &TextStyle) -> Vec<StyleRun> {
         .map(|(r, c)| StyleRun {
             range: r.clone(),
             style: TextStyle {
+                pair_spacing: if c.font.as_ref().is_some_and(|f| !f.is_empty() && *f != base.family)
+                    || c.font_style.as_ref().is_some_and(|s| !s.is_empty() && *s != base.style)
+                {
+                    Default::default()
+                } else {
+                    base.pair_spacing.clone()
+                },
                 family: c.font.clone().filter(|f| !f.is_empty()).unwrap_or_else(|| base.family.clone()),
                 style: c.font_style.clone().filter(|f| !f.is_empty()).unwrap_or_else(|| base.style.clone()),
                 size: c.size.map_or(base.size, |s| s.max(0.1)),
@@ -106,6 +114,33 @@ pub fn text_layout(t: &TextProps) -> Arc<Layout> {
 
 /// A shape layer's outline in layer pixels (centred on the layer origin).
 pub fn shape_path(s: &ShapeProps) -> filmcraft_text::Path {
+    if !s.paths.is_empty() {
+        let mut path = filmcraft_text::Path::new();
+        path.detail = 4.0;
+        let mut remaining = 16384usize;
+        for contour in s.paths.iter().take(256) {
+            if contour.vertices.len() > remaining {
+                break;
+            }
+            remaining -= contour.vertices.len();
+            let Some(first) = contour.vertices.first() else { continue };
+            if contour
+                .vertices
+                .iter()
+                .any(|v| [v.p, v.t_in, v.t_out].iter().any(|p| !p.x.is_finite() || !p.y.is_finite() || p.x.abs() > 1e7 || p.y.abs() > 1e7))
+            {
+                continue;
+            }
+            path.move_to(first.p.x as f32, first.p.y as f32);
+            for (a, b) in contour.vertices.iter().zip(contour.vertices.iter().skip(1).chain(std::iter::once(first))) {
+                let c1 = a.p + a.t_out;
+                let c2 = b.p + b.t_in;
+                path.cubic_to(c1.x as f32, c1.y as f32, c2.x as f32, c2.y as f32, b.p.x as f32, b.p.y as f32);
+            }
+            path.close();
+        }
+        return path;
+    }
     let (w, h) = (s.size.0 / 2.0, s.size.1 / 2.0);
     match s.shape {
         1 => filmcraft_text::Path::ellipse(0.0, 0.0, w, h),
@@ -226,7 +261,16 @@ fn over_linear_gradient(px: &mut [f32], msk: &Mask, grad: &LinearGradient, lb: [
             }
             let (lx, ly) = apply(inv, origin.0 as f32 + col as f32 + 0.5, py);
             let t = (((((lx - cx) * ax + (ly - cy) * ay) / half) + 1.0) * 0.5).clamp(0.0, 1.0);
-            let c = premul_linear_lerp(start, end, t);
+            let c = if grad.alpha_curve.is_empty() {
+                premul_linear_lerp(start, end, t)
+            } else {
+                let alpha = filmcraft_project::graphic_design::gradient_alpha_at(&grad.alpha_curve, t);
+                let mut a = start;
+                let mut b = end;
+                a[3] = alpha;
+                b[3] = alpha;
+                premul_linear_lerp(a, b, t)
+            };
             let k = 1.0 - c[3] * cov;
             for i in 0..4 {
                 p[i] = c[i] * cov + p[i] * k;
@@ -567,9 +611,21 @@ fn content_bounds(specs: &[LayerSpec]) -> Option<[f64; 4]> {
 /// layers (their `enabled` is false).
 pub fn item_layer_specs(item: &TrackItem, mt: Tick, canvas: (u32, u32)) -> Vec<(usize, LayerSpec)> {
     let (t, u, d) = graphic_time(item, mt);
+    let evaluated = if let Some(rig) = item.graphic.as_ref().and_then(|m| m.rig.as_ref()) {
+        match rig.evaluate(&item.effects, t, |e| eval_layer(e, t, canvas).map(|s| layer_local_bounds(&s).map(f64::from)).unwrap_or([0.0; 4])) {
+            Ok(layers) => Some(layers),
+            Err(error) => {
+                log::warn!("graphic rig could not be evaluated: {error}");
+                return Vec::new();
+            }
+        }
+    } else {
+        None
+    };
+    let effects = evaluated.as_deref().unwrap_or(&item.effects);
     let mut idx = Vec::new();
     let mut specs = Vec::new();
-    for (i, e) in item.effects.iter().enumerate() {
+    for (i, e) in effects.iter().enumerate() {
         if filmcraft_project::graphic::is_layer(e)
             && let Some(s) = eval_layer(e, t, canvas)
         {
@@ -599,6 +655,12 @@ pub fn apply_roll(meta: &GraphicMeta, specs: &mut [LayerSpec], u: Tick, d: Tick,
 /// Draw all layers of a graphic clip at media time `mt` onto `out`; `m` maps graphic canvas
 /// pixels to `out` pixels.
 pub fn render_graphic(item: &TrackItem, mt: Tick, canvas: (u32, u32), m: &Affine, out: &mut Image) {
+    if item.graphic.as_ref().is_some_and(|g| g.encoded_blending) {
+        if let Some((img, x, y)) = render_graphic_tight(item, mt, canvas, m, out.w, out.h) {
+            composite_raster(out, &LayerRaster { img, x, y }, 0, 0);
+        }
+        return;
+    }
     let specs: Vec<LayerSpec> = item_layer_specs(item, mt, canvas).into_iter().map(|(_, s)| s).collect();
     draw_specs(&specs, m, out);
 }
@@ -610,17 +672,47 @@ pub fn render_graphic_layers(effects: &[EffectInstance], t: Tick, canvas: (u32, 
 
 fn draw_specs(specs: &[LayerSpec], m: &Affine, out: &mut Image) {
     for spec in specs {
-        let lm = xform(&m.then_apply(&layer_matrix(spec)));
-        if let Some(r) = raster_layer_cached(spec, &lm, out.w, out.h) {
+        if let Some(r) = raster_with_matte(spec, specs, m, out.w, out.h) {
             composite_raster(out, &r, 0, 0);
         }
     }
 }
 
+/// Matte chains are bounded; cycles and over-deep chains produce no pixels.
+fn raster_with_matte(spec: &LayerSpec, specs: &[LayerSpec], m: &Affine, w: usize, h: usize) -> Option<Arc<LayerRaster>> {
+    raster_matte_chain(spec, specs, m, w, h, &mut Vec::new())
+}
+
+fn raster_matte_chain(spec: &LayerSpec, specs: &[LayerSpec], m: &Affine, w: usize, h: usize, seen: &mut Vec<u64>) -> Option<Arc<LayerRaster>> {
+    if seen.len() >= 16 || seen.contains(&spec.uid) {
+        return None;
+    }
+    seen.push(spec.uid);
+    let raster = raster_layer_cached(spec, &xform(&m.then_apply(&layer_matrix(spec))), w, h)?;
+    let Some(uid) = spec.clip_to else { return Some(raster) };
+    let mut matte = specs.iter().find(|s| s.uid == uid && s.uid != spec.uid)?.clone();
+    matte.enabled = true;
+    let mask = raster_matte_chain(&matte, specs, m, w, h, seen)?;
+    let mut result = LayerRaster { x: raster.x, y: raster.y, img: raster.img.clone() };
+    for (i, pixel) in result.img.px.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+        let x = i % result.img.w;
+        let y = i / result.img.w;
+        let alpha = mask.img.get_or_clear(x as isize + (result.x - mask.x) as isize, y as isize + (result.y - mask.y) as isize)[3];
+        for c in pixel {
+            *c *= alpha;
+        }
+    }
+    Some(Arc::new(result))
+}
+
 /// All layers composed into one tight image (for the GPU plan): `(image, x, y)` in output pixels.
 pub fn render_graphic_tight(item: &TrackItem, mt: Tick, canvas: (u32, u32), m: &Affine, w: usize, h: usize) -> Option<(Image, i32, i32)> {
-    let rasters: Vec<Arc<LayerRaster>> =
-        item_layer_specs(item, mt, canvas).iter().filter_map(|(_, spec)| raster_layer_cached(spec, &xform(&m.then_apply(&layer_matrix(spec))), w, h)).collect();
+    let mut specs: Vec<LayerSpec> = item_layer_specs(item, mt, canvas).into_iter().map(|(_, s)| s).collect();
+    let encoded = item.graphic.as_ref().is_some_and(|g| g.encoded_blending);
+    if encoded {
+        specs.iter_mut().for_each(prepare_encoded_blending);
+    }
+    let rasters: Vec<Arc<LayerRaster>> = specs.iter().filter_map(|s| raster_with_matte(s, &specs, m, w, h)).collect();
     let x0 = rasters.iter().map(|r| r.x).min()?.max(0);
     let y0 = rasters.iter().map(|r| r.y).min()?.max(0);
     let x1 = rasters.iter().map(|r| r.x + r.img.w as i32).max()?.min(w as i32);
@@ -632,7 +724,50 @@ pub fn render_graphic_tight(item: &TrackItem, mt: Tick, canvas: (u32, u32), m: &
     for r in &rasters {
         composite_raster(&mut img, r, -x0, -y0);
     }
+    if encoded {
+        for p in img.px.as_chunks_mut::<4>().0 {
+            let alpha = p[3];
+            if alpha > 0.0 {
+                for c in &mut p[..3] {
+                    *c = filmcraft_color::srgb_to_linear(*c / alpha) * alpha;
+                }
+            }
+        }
+    }
     Some((img, x0, y0))
+}
+
+/// The rasterizer converts input colours to linear. Applying the inverse transfer here lets
+/// its existing coverage, gradients and over operations work in encoded space for this group.
+fn prepare_encoded_blending(spec: &mut LayerSpec) {
+    let encode = |c: &mut [f32; 4]| {
+        for v in &mut c[..3] {
+            *v = filmcraft_color::linear_to_srgb(*v);
+        }
+    };
+    if let Some(c) = &mut spec.appearance.fill {
+        encode(c);
+    }
+    for (c, _, _) in &mut spec.appearance.strokes {
+        encode(c);
+    }
+    if let Some((c, _, _)) = &mut spec.appearance.background {
+        encode(c);
+    }
+    if let Some(shadow) = &mut spec.appearance.shadow {
+        encode(&mut shadow.color);
+    }
+    if let Some(gradient) = &mut spec.appearance.gradient {
+        encode(&mut gradient.start);
+        encode(&mut gradient.end);
+    }
+    if let LayerContent::Text(t) = &mut spec.content {
+        for (_, style) in &mut t.runs {
+            if let Some(c) = &mut style.fill {
+                encode(c);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -947,5 +1082,63 @@ mod tests {
                 assert!((p[3] - q[3]).abs() < 1e-5);
             }
         }
+    }
+
+    #[test]
+    fn vector_hole_and_hidden_animated_matte_match_tight_output() {
+        use filmcraft_project::graphic_design::LayerExtra;
+        use filmcraft_project::mask::{MaskPath, MaskVertex};
+        let contour = |points: &[(f64, f64)]| MaskPath { vertices: points.iter().map(|&(x, y)| MaskVertex::corner(Vec2::new(x, y))).collect(), closed: true };
+        let mut shape = new_shape_layer(0, Vec2::new(100.0, 100.0), Vec2::new(80.0, 80.0), vec![]);
+        shape.layer = Some(Box::new(LayerExtra {
+            uid: 1,
+            clip_to: Some(2),
+            paths: vec![
+                contour(&[(-40.0, -40.0), (40.0, -40.0), (40.0, 40.0), (-40.0, 40.0)]),
+                contour(&[(-10.0, -10.0), (-10.0, 10.0), (10.0, 10.0), (10.0, -10.0)]),
+            ],
+            ..Default::default()
+        }));
+        let mut matte = new_shape_layer(0, Vec2::new(80.0, 100.0), Vec2::new(40.0, 80.0), vec![]);
+        matte.layer = Some(Box::new(LayerExtra { uid: 2, ..Default::default() }));
+        matte.enabled = false;
+        let item = graphic_item(vec![matte, shape]);
+        let mut full = Image::new(200, 200);
+        render_graphic(&item, Tick::ZERO, (200, 200), &Affine::IDENTITY, &mut full);
+        assert!(full.get(70, 100)[3] > 0.99, "left half visible");
+        assert_eq!(full.get(95, 100)[3], 0.0, "hole stays transparent");
+        assert_eq!(full.get(120, 100)[3], 0.0, "right half masked");
+        let (tight, x, y) = render_graphic_tight(&item, Tick::ZERO, (200, 200), &Affine::IDENTITY, 200, 200).unwrap();
+        for yy in 0..tight.h {
+            for xx in 0..tight.w {
+                assert_eq!(tight.get(xx, yy), full.get(xx + x as usize, yy + y as usize));
+            }
+        }
+        let mut moved = item.clone();
+        let mask = moved.effects.iter_mut().find(|e| e.layer.as_ref().is_some_and(|l| l.uid == 2)).unwrap();
+        set(mask, "position", ParamValue::Vec2(Vec2::new(120.0, 100.0)));
+        let mut shifted = Image::new(200, 200);
+        render_graphic(&moved, Tick::ZERO, (200, 200), &Affine::IDENTITY, &mut shifted);
+        assert_eq!(shifted.get(70, 100)[3], 0.0);
+        assert!(shifted.get(120, 100)[3] > 0.99);
+    }
+
+    #[test]
+    fn encoded_group_blending_matches_in_full_and_tight_render() {
+        let mut back = new_shape_layer(0, Vec2::new(50.0, 50.0), Vec2::new(80.0, 80.0), vec![]);
+        set(&mut back, "fill_color", ParamValue::Color([0.0, 0.0, 0.0, 1.0]));
+        let mut front = new_shape_layer(0, Vec2::new(50.0, 50.0), Vec2::new(60.0, 60.0), vec![]);
+        set(&mut front, "fill_color", ParamValue::Color([1.0, 1.0, 1.0, 1.0]));
+        set(&mut front, "opacity", ParamValue::Float(50.0));
+        let mut item = graphic_item(vec![back, front]);
+        let mut linear = Image::new(100, 100);
+        render_graphic(&item, Tick::ZERO, (100, 100), &Affine::IDENTITY, &mut linear);
+        assert!((linear.get(50, 50)[0] - 0.5).abs() < 1e-5);
+        item.graphic = Some(Box::new(GraphicMeta { encoded_blending: true, ..Default::default() }));
+        let mut encoded = Image::new(100, 100);
+        render_graphic(&item, Tick::ZERO, (100, 100), &Affine::IDENTITY, &mut encoded);
+        assert!((encoded.get(50, 50)[0] - filmcraft_color::srgb_to_linear(0.5)).abs() < 1e-5);
+        let (tight, x, y) = render_graphic_tight(&item, Tick::ZERO, (100, 100), &Affine::IDENTITY, 100, 100).unwrap();
+        assert_eq!(tight.get((50 - x) as usize, (50 - y) as usize), encoded.get(50, 50));
     }
 }

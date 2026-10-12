@@ -41,6 +41,7 @@ pub struct ExportControl {
     pub param: String,
     pub name: String,
     pub on: bool,
+    pub source_control: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -345,6 +346,10 @@ pub fn template_controls(
     let Some(link) = it.graphic.as_ref().and_then(|m| m.template.as_ref()) else { return false };
     ui.label(egui::RichText::new(tlf!("   Template: {name}", name = link.name)).color(t.text_faint).size(11.0));
     for c in &link.controls {
+        if let Err(error) = c.validate(&it.effects) {
+            ui.label(format!("{}: {}", c.name, error));
+            continue;
+        }
         let Some(e) = it.effects.iter().find(|e| graphic::is_layer(e) && filmcraft_project::gtemplate::layer_uid(e) == c.layer) else { continue };
         let id = format!("gfxTemplates.control.{}", c.id);
         let pv = e.params.get(&c.param).map(|p| p.value_at(mt));
@@ -406,12 +411,30 @@ pub fn template_controls(
             }
             ControlKind::Slider => {
                 let mut v = pv.and_then(|v| v.as_f64()).unwrap_or(0.0);
-                let (lo, hi) = (c.min.unwrap_or(0.0), c.max.unwrap_or(100.0));
+                let lo = c.min.unwrap_or(0.0_f64.min(c.max.unwrap_or(100.0)));
+                let hi = c.max.unwrap_or(100.0_f64.max(lo));
                 let r = vui.add(egui::Slider::new(&mut v, lo..=hi));
                 autos.push((id, r.rect, c.name.clone()));
                 if r.changed() {
                     set(json!(v), actions);
                 }
+            }
+            ControlKind::Dropdown => {
+                let selected = match pv {
+                    Some(ParamValue::Choice(v)) => Some(v),
+                    _ => None,
+                };
+                let label = c.options.iter().find(|o| Some(o.value) == selected).map_or("", |o| o.label.as_str());
+                let r = egui::ComboBox::from_id_salt(("gfx-tpl-dropdown", clip.0, &c.id)).selected_text(label).width(170.0).show_ui(&mut vui, |ui| {
+                    for option in &c.options {
+                        let r = ui.selectable_label(Some(option.value) == selected, &option.label);
+                        autos.push((format!("{id}.option.{}", option.value), r.rect, option.label.clone()));
+                        if r.clicked() {
+                            set(json!(option.value), actions);
+                        }
+                    }
+                });
+                autos.push((id, r.response.rect, c.name.clone()));
             }
             ControlKind::Checkbox => {
                 let mut b = pv.and_then(|v| v.as_bool()).unwrap_or(false);
@@ -610,17 +633,26 @@ pub fn route(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, params: &Val
             let it = app.session.active_sequence().and_then(|q| q.find_item(clip)).map(|(_, i)| i.clone())?;
             let idx = layer_indices(&it.effects);
             let mut controls = Vec::new();
+            if let Some(template) = it.graphic.as_ref().and_then(|m| m.template.as_ref()) {
+                for c in &template.controls {
+                    if let Some(layer) = idx.iter().position(|&ei| filmcraft_project::gtemplate::layer_uid(&it.effects[ei]) == c.layer) {
+                        controls.push(ExportControl { layer, param: c.param.clone(), name: c.name.clone(), on: true, source_control: Some(c.id.clone()) });
+                    }
+                }
+            }
             for (i, &ei) in idx.iter().enumerate() {
                 let e = &it.effects[ei];
                 let n = layer_display_name(e, i);
                 if e.effect == graphic::TEXT_LAYER {
-                    controls.push(ExportControl { layer: i, param: "text".into(), name: n.clone(), on: true });
-                    controls.push(ExportControl { layer: i, param: "font".into(), name: tlf!("{n} Font", n), on: false });
-                    controls.push(ExportControl { layer: i, param: "size".into(), name: tlf!("{n} Size", n), on: false });
+                    if !controls.iter().any(|c| c.layer == i && c.param == "text") {
+                        controls.push(ExportControl { layer: i, param: "text".into(), name: n.clone(), on: true, ..Default::default() });
+                    }
+                    controls.push(ExportControl { layer: i, param: "font".into(), name: tlf!("{n} Font", n), on: false, ..Default::default() });
+                    controls.push(ExportControl { layer: i, param: "size".into(), name: tlf!("{n} Size", n), on: false, ..Default::default() });
                 }
-                controls.push(ExportControl { layer: i, param: "fill_color".into(), name: tlf!("{n} Color", n), on: false });
-                controls.push(ExportControl { layer: i, param: "position".into(), name: tlf!("{n} Position", n), on: false });
-                controls.push(ExportControl { layer: i, param: "enabled".into(), name: tlf!("Show {n}", n), on: false });
+                controls.push(ExportControl { layer: i, param: "fill_color".into(), name: tlf!("{n} Color", n), on: false, ..Default::default() });
+                controls.push(ExportControl { layer: i, param: "position".into(), name: tlf!("{n} Position", n), on: false, ..Default::default() });
+                controls.push(ExportControl { layer: i, param: "enabled".into(), name: tlf!("Show {n}", n), on: false, ..Default::default() });
             }
             app.ui.gfx_templates.export =
                 Some(ExportDraft { clip: clip.0, name: it.name.clone(), category: tl!("My Templates").into(), controls, ..Default::default() });
@@ -701,7 +733,18 @@ fn export_dialog(app: &mut FilmcraftApp, ctx: &egui::Context) {
     }
     match action {
         Some(true) => {
-            let controls: Vec<Value> = d.controls.iter().filter(|c| c.on).map(|c| json!({"layer": c.layer, "param": c.param, "name": c.name})).collect();
+            let controls: Vec<Value> = d
+                .controls
+                .iter()
+                .filter(|c| c.on)
+                .map(|c| {
+                    if let Some(id) = &c.source_control {
+                        json!({"sourceControl": id, "name": c.name})
+                    } else {
+                        json!({"layer": c.layer, "param": c.param, "name": c.name})
+                    }
+                })
+                .collect();
             let p = json!({"clip": d.clip, "name": d.name, "category": d.category, "description": d.description, "controls": controls});
             match app.session.execute("graphics.template.export", p) {
                 Ok(v) => {

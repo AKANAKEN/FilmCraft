@@ -122,7 +122,7 @@ fn opendml_file_past_1_gb() {
     ];
     let Some(path) = fixture("large_opendml.avi", &args) else { return };
     let file = std::fs::File::open(&path).unwrap();
-    let src = FileSource(file);
+    let src = FileSource(std::sync::Mutex::new(file));
     let f = open(&src).unwrap();
     assert_eq!(f.index, IndexSource::OpenDml);
     assert_eq!(f.streams[0].chunks.len(), packets(&path, 0));
@@ -139,13 +139,16 @@ fn opendml_file_past_1_gb() {
 }
 
 /// A file on disk as a byte source, read where asked.
-struct FileSource(std::fs::File);
+struct FileSource(std::sync::Mutex<std::fs::File>);
 
 impl filmcraft_avi::ByteSource for FileSource {
     fn len(&self) -> u64 {
-        self.0.metadata().map(|m| m.len()).unwrap_or(0)
+        self.0.lock().unwrap().metadata().map(|m| m.len()).unwrap_or(0)
     }
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> std::io::Result<()> {
-        std::os::unix::fs::FileExt::read_exact_at(&self.0, buf, offset)
+        use std::io::{Read, Seek, SeekFrom};
+        let mut file = self.0.lock().unwrap();
+        file.seek(SeekFrom::Start(offset))?;
+        file.read_exact(buf)
     }
 }

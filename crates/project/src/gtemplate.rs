@@ -24,8 +24,9 @@
 //! - Layers are referenced by their [`LayerExtra::uid`](crate::graphic_design::LayerExtra); every
 //!   layer of a template has one.
 //! - `controls` are the properties a user of the template edits (Essential Graphics ▸ Edit):
-//!   text, colour, slider (with `min` / `max`), checkbox, font and position, each bound to one
+//!   text, colour, slider (with `min` / `max`), checkbox, font, position and dropdown, each bound to one
 //!   layer parameter (`enabled` = the layer's visibility).
+//! - Version 2 dropdown options can replace several layer parameters and their keyframes together.
 //! - `resources.fonts` optionally embeds font files (base64) that the template needs; installing
 //!   the template registers them. Only embed fonts whose licence allows redistribution.
 //!
@@ -45,7 +46,7 @@ use crate::graphic_design::{GraphicMeta, LayerExtra, Pin, PinTarget, Roll, RollM
 use crate::keyframe::{Param, ParamValue};
 
 pub const TEMPLATE_FORMAT: &str = "filmcraft.graphicsTemplate";
-pub const TEMPLATE_VERSION: u32 = 1;
+pub const TEMPLATE_VERSION: u32 = 2;
 pub const TEMPLATE_EXTENSION: &str = "fcgt";
 
 /// Kind of an editable template property.
@@ -59,11 +60,12 @@ pub enum ControlKind {
     Checkbox,
     Font,
     Position,
+    Dropdown,
 }
 
 impl ControlKind {
-    pub const ALL: [ControlKind; 6] =
-        [ControlKind::Text, ControlKind::Color, ControlKind::Slider, ControlKind::Checkbox, ControlKind::Font, ControlKind::Position];
+    pub const ALL: [ControlKind; 7] =
+        [ControlKind::Text, ControlKind::Color, ControlKind::Slider, ControlKind::Checkbox, ControlKind::Font, ControlKind::Position, ControlKind::Dropdown];
     pub fn name(self) -> &'static str {
         match self {
             ControlKind::Text => "text",
@@ -72,6 +74,7 @@ impl ControlKind {
             ControlKind::Checkbox => "checkbox",
             ControlKind::Font => "font",
             ControlKind::Position => "position",
+            ControlKind::Dropdown => "dropdown",
         }
     }
     pub fn from_name(s: &str) -> Option<ControlKind> {
@@ -121,6 +124,93 @@ pub struct TemplateControl {
     pub min: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max: Option<f64>,
+    /// Named choices and the layer properties each choice changes (format version 2).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<TemplateOption>,
+}
+
+/// A discrete choice. Values are stable even when options are reordered.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TemplateOption {
+    pub label: String,
+    pub value: u32,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub overrides: Vec<TemplateOverride>,
+}
+
+/// A preset replaces the complete parameter, including its animation. Targets use layer uids.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TemplateOverride {
+    pub layer: u64,
+    pub param: String,
+    pub value: Param,
+}
+
+impl TemplateControl {
+    /// Also checked when editing a project: project files can contain template links directly.
+    pub fn validate(&self, layers: &[EffectInstance]) -> Result<(), TemplateError> {
+        let bad = |message: &str| TemplateError::Invalid(format!("control `{}`: {message}", self.id));
+        if self.min.is_some_and(|v| !v.is_finite()) || self.max.is_some_and(|v| !v.is_finite()) || self.min.zip(self.max).is_some_and(|(a, b)| a > b) {
+            return Err(bad("invalid slider range"));
+        }
+        if self.kind != ControlKind::Dropdown {
+            return if self.options.is_empty() { Ok(()) } else { Err(bad("only dropdowns have options")) };
+        }
+        if self.options.is_empty() || self.options.len() > 256 {
+            return Err(bad("a dropdown needs between 1 and 256 options"));
+        }
+        let current = layers.iter().find(|l| layer_uid(l) == self.layer).and_then(|l| l.params.get(&self.param));
+        let Some(Param { value: ParamValue::Choice(selected), keyframes }) = current else {
+            return Err(bad("a dropdown must target a choice parameter"));
+        };
+        if !keyframes.is_empty() || !self.options.iter().any(|o| o.value == *selected) {
+            return Err(bad("the selected choice must be static and present in the options"));
+        }
+        let mut values = std::collections::HashSet::new();
+        let mut labels = std::collections::HashSet::new();
+        for option in &self.options {
+            if option.label.trim().is_empty() || !values.insert(option.value) || !labels.insert(option.label.to_lowercase()) {
+                return Err(bad("option labels and values must be nonempty and unique"));
+            }
+            if option.overrides.len() > 4096 {
+                return Err(bad("too many option overrides"));
+            }
+            let mut targets = std::collections::HashSet::new();
+            for o in &option.overrides {
+                if !targets.insert((o.layer, &o.param)) || (o.layer == self.layer && o.param == self.param) {
+                    return Err(bad("duplicate or self-referencing option target"));
+                }
+                let Some(layer) = layers.iter().find(|l| layer_uid(l) == o.layer) else {
+                    return Err(bad("an option targets a missing layer"));
+                };
+                let target = if o.param == "enabled" {
+                    &ParamValue::Bool(layer.enabled)
+                } else {
+                    &layer.params.get(&o.param).ok_or_else(|| bad("an option targets a missing parameter"))?.value
+                };
+                let valid = |v: &ParamValue| {
+                    std::mem::discriminant(v) == std::mem::discriminant(target)
+                        && match v {
+                            ParamValue::Float(x) => x.is_finite(),
+                            ParamValue::Vec2(p) => p.x.is_finite() && p.y.is_finite(),
+                            ParamValue::Color(c) => c.iter().all(|v| v.is_finite()),
+                            ParamValue::Bool(_) | ParamValue::Choice(_) | ParamValue::Text(_) => true,
+                            _ => false,
+                        }
+                };
+                if !valid(&o.value.value)
+                    || o.value.keyframes.len() > 100_000
+                    || (o.param == "enabled" && !o.value.keyframes.is_empty())
+                    || o.value.keyframes.iter().any(|k| !valid(&k.value) || !k.in_influence.is_finite() || !k.out_influence.is_finite())
+                    || o.value.keyframes.windows(2).any(|ks| ks[0].time >= ks[1].time)
+                {
+                    return Err(bad("an option contains invalid parameter data"));
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 /// The template a placed graphic came from (kept on the clip, `GraphicMeta::template`).
@@ -188,7 +278,7 @@ impl Default for GraphicsTemplate {
     fn default() -> Self {
         GraphicsTemplate {
             format: TEMPLATE_FORMAT.into(),
-            version: TEMPLATE_VERSION,
+            version: 1,
             id: String::new(),
             name: String::new(),
             category: "My Templates".into(),
@@ -216,7 +306,7 @@ pub enum TemplateError {
     #[error("not a FilmCraft graphics template: {0}")]
     NotTemplate(String),
     #[error("this graphics template was made by a newer FilmCraft (format version {0}; this build reads up to {TEMPLATE_VERSION})")]
-    TooNew(u32),
+    TooNew(u64),
     #[error("invalid graphics template: {0}")]
     Invalid(String),
 }
@@ -253,8 +343,8 @@ impl GraphicsTemplate {
         if v.get("format").and_then(|f| f.as_str()) != Some(TEMPLATE_FORMAT) {
             return Err(TemplateError::NotTemplate(format!("`format` is not \"{TEMPLATE_FORMAT}\"")));
         }
-        let ver = v.get("version").and_then(|x| x.as_u64()).unwrap_or(0) as u32;
-        if ver > TEMPLATE_VERSION {
+        let ver = v.get("version").and_then(|x| x.as_u64()).unwrap_or(0);
+        if ver > u64::from(TEMPLATE_VERSION) {
             return Err(TemplateError::TooNew(ver));
         }
         if ver == 0 {
@@ -289,8 +379,74 @@ impl GraphicsTemplate {
             }
             uids.push(uid);
         }
+        if self.graphic.encoded_blending && self.version < 2 {
+            return bad("encoded graphic blending requires template version 2".into());
+        }
+        if let Some(rig) = &self.graphic.rig {
+            if self.version < 2 {
+                return bad("graphic rigs require template version 2".into());
+            }
+            rig.validate(&self.layers).map_err(TemplateError::Invalid)?;
+        }
+        for l in &self.layers {
+            if let Some(extra) = &l.layer {
+                if (!extra.paths.is_empty()
+                    || extra.clip_to.is_some()
+                    || extra.pair_spacing.is_some()
+                    || !extra.gradient_alpha.is_empty()
+                    || extra.uppercase_pattern.is_some())
+                    && self.version < 2
+                {
+                    return bad("extended graphic layer data requires template version 2".into());
+                }
+                if let Some(pattern) = &extra.uppercase_pattern {
+                    crate::graphic_design::compile_text_pattern(pattern).map_err(TemplateError::Invalid)?;
+                }
+                if let Some(spacing) = &extra.pair_spacing
+                    && (spacing.pairs.len() > 65536
+                        || spacing.family.is_empty()
+                        || spacing.style.is_empty()
+                        || spacing.pairs.iter().any(|(pair, v)| pair.chars().count() != 2 || !v.is_finite() || v.abs() > 1000.0))
+                {
+                    return bad("invalid graphic pair spacing".into());
+                }
+                if extra.clip_to.is_some_and(|id| id == extra.uid || !uids.contains(&id)) {
+                    return bad("invalid graphic matte reference".into());
+                }
+                let mut matte = extra.clip_to;
+                let mut seen = vec![extra.uid];
+                while let Some(id) = matte {
+                    if seen.contains(&id) || seen.len() >= 16 {
+                        return bad("cyclic or over-deep graphic matte chain".into());
+                    }
+                    seen.push(id);
+                    matte = self.layers.iter().find(|l| layer_uid(l) == id).and_then(|l| l.layer.as_ref()).and_then(|l| l.clip_to);
+                }
+                if extra.gradient_alpha.len() > 4096
+                    || extra.gradient_alpha.iter().flatten().any(|v| !v.is_finite() || !(0.0..=1.0).contains(v))
+                    || extra.gradient_alpha.windows(2).any(|p| p[0][0] >= p[1][0])
+                {
+                    return bad("invalid graphic gradient opacity stops".into());
+                }
+                if extra.paths.len() > 256
+                    || extra.paths.iter().map(|p| p.vertices.len()).sum::<usize>() > 16384
+                    || extra.paths.iter().any(|p| {
+                        p.vertices.len() > 16384
+                            || p.vertices
+                                .iter()
+                                .any(|v| [v.p, v.t_in, v.t_out].iter().any(|p| !p.x.is_finite() || !p.y.is_finite() || p.x.abs() > 1e7 || p.y.abs() > 1e7))
+                    })
+                {
+                    return bad("invalid graphic vector contours".into());
+                }
+            }
+        }
         let mut ids = Vec::new();
         for c in &self.controls {
+            if c.kind == ControlKind::Dropdown && self.version < 2 {
+                return bad("dropdown controls require template version 2".into());
+            }
+            c.validate(&self.layers)?;
             if c.id.is_empty() || ids.contains(&c.id) {
                 return bad(format!("control `{}` has no unique id", c.name));
             }
@@ -338,8 +494,30 @@ impl GraphicsTemplate {
                 }
             }
         }
+        let mut controls = self.controls.clone();
+        for c in &mut controls {
+            for option in &mut c.options {
+                for o in &mut option.overrides {
+                    if o.param == "position" {
+                        o.value.map_values(|v| match v {
+                            ParamValue::Vec2(q) => ParamValue::Vec2(Vec2::new(q.x * s + off.x, q.y * s + off.y)),
+                            other => other,
+                        });
+                    } else if o.param == "scale" {
+                        o.value.map_values(|v| match v {
+                            ParamValue::Float(x) => ParamValue::Float(x * s),
+                            other => other,
+                        });
+                    }
+                }
+            }
+        }
         let mut meta = self.graphic.clone();
-        meta.template = Some(TemplateLink { id: self.id.clone(), name: self.name.clone(), controls: self.controls.clone() });
+        if let Some(rig) = &mut meta.rig {
+            rig.scale *= s;
+            rig.offset = rig.offset * s + off;
+        }
+        meta.template = Some(TemplateLink { id: self.id.clone(), name: self.name.clone(), controls });
         (layers, meta)
     }
 }
@@ -438,7 +616,7 @@ fn pin(e: &mut EffectInstance, to: u64, edges: [bool; 4], offsets: [f64; 4]) {
 }
 
 fn ctl(id: &str, name: &str, layer: u64, param: &str) -> TemplateControl {
-    TemplateControl { id: id.into(), name: name.into(), kind: ControlKind::for_param(param), layer, param: param.into(), min: None, max: None }
+    TemplateControl { id: id.into(), name: name.into(), kind: ControlKind::for_param(param), layer, param: param.into(), ..Default::default() }
 }
 
 fn slider(id: &str, name: &str, layer: u64, param: &str, min: f64, max: f64) -> TemplateControl {
@@ -742,6 +920,52 @@ mod tests {
         let mut t = builtin_templates().remove(0);
         t.controls[0].layer = 999;
         assert!(matches!(t.validate(), Err(TemplateError::Invalid(_))));
+        let mut json = serde_json::to_value(&t).unwrap();
+        json["version"] = serde_json::json!(4_294_967_297u64);
+        assert_eq!(GraphicsTemplate::from_bytes(&serde_json::to_vec(&json).unwrap()), Err(TemplateError::TooNew(4_294_967_297)));
+    }
+
+    #[test]
+    fn dropdown_presets_validate_roundtrip_and_fit_the_canvas() {
+        let mut t = builtin_templates().into_iter().find(|t| t.id == "builtin:title-centered").unwrap();
+        t.version = 2;
+        let uid = layer_uid(&t.layers[0]);
+        t.layers[0].params.insert("theme".into(), Param::new(ParamValue::Choice(0)));
+        t.controls.push(TemplateControl {
+            id: "theme".into(),
+            name: "Theme".into(),
+            kind: ControlKind::Dropdown,
+            layer: uid,
+            param: "theme".into(),
+            options: vec![TemplateOption {
+                label: "Centered".into(),
+                value: 0,
+                overrides: vec![TemplateOverride { layer: uid, param: "position".into(), value: Param::new(ParamValue::Vec2(Vec2::new(960.0, 520.0))) }],
+            }],
+            ..Default::default()
+        });
+        t.validate().unwrap();
+        assert_eq!(GraphicsTemplate::from_bytes(t.to_json().as_bytes()).unwrap(), t);
+        let (_, meta) = t.instantiate((960, 540));
+        let controls = meta.template.unwrap().controls;
+        assert_eq!(controls.last().unwrap().options[0].overrides[0].value.value, ParamValue::Vec2(Vec2::new(480.0, 260.0)));
+        for case in 0..6 {
+            let mut invalid = t.clone();
+            let c = invalid.controls.last_mut().unwrap();
+            match case {
+                0 => c.options.clear(),
+                1 => c.options.push(c.options[0].clone()),
+                2 => c.options[0].overrides[0].layer = u64::MAX,
+                3 => c.options[0].overrides[0].value.value = ParamValue::Float(1.0),
+                4 => c.options[0].overrides[0].value.value = ParamValue::Vec2(Vec2::new(f64::INFINITY, 1.0)),
+                _ => invalid.version = 1,
+            }
+            assert!(invalid.validate().is_err(), "case {case}");
+        }
+        let c = t.controls.last_mut().unwrap();
+        c.min = Some(10.0);
+        c.max = Some(0.0);
+        assert!(t.validate().is_err());
     }
 
     #[test]

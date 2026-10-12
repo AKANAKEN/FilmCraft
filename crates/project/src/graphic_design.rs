@@ -41,11 +41,85 @@ pub struct LayerExtra {
     /// Responsive Design – Position.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pin: Option<Pin>,
+    /// Compound cubic contours for a vector shape (opposite winding produces holes).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub paths: Vec<crate::mask::MaskPath>,
+    /// Use another graphic layer's alpha as this layer's matte. Hidden matte layers are supported.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clip_to: Option<u64>,
+    /// Font-specific pair adjustments in 1/1000 em, added to metric kerning.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pair_spacing: Option<PairSpacing>,
+    /// Normalized opacity stops for a linear fill; empty uses endpoint alpha.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub gradient_alpha: Vec<[f32; 2]>,
+    /// Uppercase matched ASCII characters at display time, retaining editable source text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uppercase_pattern: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct PairSpacing {
+    pub family: String,
+    pub style: String,
+    pub pairs: BTreeMap<String, f32>,
+}
+
+pub fn compile_text_pattern(pattern: &str) -> Result<regex::Regex, String> {
+    if pattern.len() > 4096 {
+        return Err("text pattern exceeds 4096 bytes".into());
+    }
+    regex::RegexBuilder::new(pattern).size_limit(1 << 20).dfa_size_limit(1 << 20).nest_limit(32).build().map_err(|e| e.to_string())
+}
+
+/// ASCII casing preserves UTF-8 byte positions, including caret and per-character style ranges.
+pub fn uppercase_matches(text: &str, pattern: &str) -> String {
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<BTreeMap<String, Option<regex::Regex>>>> = OnceLock::new();
+    if text.len() > 65536 || pattern.len() > 4096 {
+        return text.into();
+    }
+    let cache = CACHE.get_or_init(Default::default);
+    let re = {
+        let mut map = cache.lock().unwrap_or_else(|e| e.into_inner());
+        if map.len() >= 64 {
+            map.clear();
+        }
+        map.entry(pattern.into()).or_insert_with(|| compile_text_pattern(pattern).ok()).clone()
+    };
+    let Some(re) = re else { return text.into() };
+    let mut out = text.to_owned();
+    for m in re.find_iter(text) {
+        if let Some(s) = out.get_mut(m.range()) {
+            s.make_ascii_uppercase();
+        }
+    }
+    out
+}
+
+/// Interpolate a bounded, ordered opacity ramp. Invalid project data produces transparent fill.
+pub fn gradient_alpha_at(stops: &[[f32; 2]], t: f32) -> f32 {
+    if stops.len() > 4096 || !t.is_finite() {
+        return 0.0;
+    }
+    let upper = stops.partition_point(|p| p[0] <= t);
+    let Some(a) = stops.get(upper.saturating_sub(1)) else { return 0.0 };
+    let b = stops.get(upper).unwrap_or(a);
+    let span = b[0] - a[0];
+    let value = if span > 0.0 { a[1] + (b[1] - a[1]) * ((t - a[0]) / span).clamp(0.0, 1.0) } else { a[1] };
+    if value.is_finite() { value.clamp(0.0, 1.0) } else { 0.0 }
 }
 
 impl LayerExtra {
     pub fn is_empty(&self) -> bool {
-        self.uid == 0 && self.runs.is_empty() && self.pin.is_none()
+        self.uid == 0
+            && self.runs.is_empty()
+            && self.pin.is_none()
+            && self.paths.is_empty()
+            && self.clip_to.is_none()
+            && self.pair_spacing.is_none()
+            && self.gradient_alpha.is_empty()
+            && self.uppercase_pattern.is_none()
     }
 }
 
@@ -387,6 +461,11 @@ pub fn roll_offset(r: &Roll, u: Tick, d: Tick, canvas: (u32, u32), content: [f64
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct GraphicMeta {
+    /// Blend layers of the graphic in encoded sRGB before returning linear premultiplied pixels.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub encoded_blending: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rig: Option<crate::graphic_rig::GraphicRig>,
     #[serde(skip_serializing_if = "is_roll_off")]
     pub roll: Roll,
     /// Responsive Design – Time: protected intro duration (from the clip start).
@@ -589,5 +668,25 @@ mod tests {
         // no responsive time: plain clip time from design_in
         let plain = GraphicMeta { design_in: sec(1.0), ..Default::default() };
         assert_eq!(remap_time(&plain, sec(2.0), sec(3.0)), sec(3.0));
+    }
+
+    #[test]
+    fn display_casing_preserves_source_offsets_and_rejects_hostile_patterns() {
+        let text = "Visit example.test/Path — café";
+        let converted = uppercase_matches(text, r"(?i)example\.test/\w+");
+        assert_eq!(converted, "Visit EXAMPLE.TEST/PATH — café");
+        assert_eq!(converted.len(), text.len());
+        assert_eq!(uppercase_matches(text, "["), text);
+        assert!(compile_text_pattern(&"x".repeat(4097)).is_err());
+    }
+
+    #[test]
+    fn gradient_alpha_stops_interpolate_and_clamp() {
+        let stops = [[0.25, 0.0], [0.5, 0.2], [1.0, 1.0]];
+        assert_eq!(gradient_alpha_at(&stops, 0.0), 0.0);
+        assert!((gradient_alpha_at(&stops, 0.75) - 0.6).abs() < 1e-6);
+        assert_eq!(gradient_alpha_at(&stops, 2.0), 1.0);
+        assert_eq!(gradient_alpha_at(&[], 0.5), 0.0);
+        assert_eq!(gradient_alpha_at(&stops, f32::NAN), 0.0);
     }
 }

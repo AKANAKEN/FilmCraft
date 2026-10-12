@@ -153,6 +153,7 @@ pub(crate) fn layer_defs() -> Vec<EffectDef> {
 /// Angle is degrees clockwise on screen (y down); 0 runs left to right.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LinearGradient {
+    pub alpha_curve: Vec<[f32; 2]>,
     pub start: [f32; 4],
     pub end: [f32; 4],
     pub angle: f32,
@@ -194,6 +195,7 @@ pub struct LayerTransform {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextProps {
+    pub pair_spacing: Option<crate::graphic_design::PairSpacing>,
     pub text: String,
     pub font: String,
     pub style: String,
@@ -222,6 +224,7 @@ pub struct TextProps {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ShapeProps {
+    pub paths: Vec<crate::mask::MaskPath>,
     /// 0 rectangle, 1 ellipse, 2 polygon, 3 path.
     pub shape: u32,
     pub size: (f32, f32),
@@ -240,6 +243,7 @@ pub enum LayerContent {
 /// A layer evaluated at one time.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LayerSpec {
+    pub clip_to: Option<u64>,
     pub name: String,
     pub enabled: bool,
     /// Stable layer id within the clip (0 = none).
@@ -288,8 +292,14 @@ pub fn eval_layer(e: &EffectInstance, t: Tick, frame: (u32, u32)) -> Option<Laye
     let content = match e.effect.as_str() {
         TEXT_LAYER => LayerContent::Text({
             let text = ss(e, "text", t);
+            let text = e
+                .layer
+                .as_ref()
+                .and_then(|l| l.uppercase_pattern.as_ref())
+                .map_or_else(|| text.clone(), |pattern| crate::graphic_design::uppercase_matches(&text, pattern));
             let runs = byte_runs(&text, e.layer.as_ref().map_or(&[][..], |x| &x.runs[..]));
             TextProps {
+                pair_spacing: e.layer.as_ref().and_then(|x| x.pair_spacing.clone()),
                 text,
                 runs,
                 font: ss(e, "font", t),
@@ -313,6 +323,7 @@ pub fn eval_layer(e: &EffectInstance, t: Tick, frame: (u32, u32)) -> Option<Laye
         SHAPE_LAYER => {
             let sz = vv(e, "size", t);
             LayerContent::Shape(ShapeProps {
+                paths: e.layer.as_ref().map(|x| x.paths.clone()).unwrap_or_default(),
                 shape: ch(e, "shape", t),
                 size: (sz.x.max(0.0) as f32, sz.y.max(0.0) as f32),
                 sides: ff(e, "sides", t).round().clamp(3.0, 64.0) as u32,
@@ -348,12 +359,14 @@ pub fn eval_layer(e: &EffectInstance, t: Tick, frame: (u32, u32)) -> Option<Laye
     Some(LayerSpec {
         name: ss(e, "name", t),
         enabled: e.enabled,
+        clip_to: e.layer.as_ref().and_then(|x| x.clip_to),
         uid: e.layer.as_ref().map_or(0, |x| x.uid),
         pin: e.layer.as_ref().and_then(|x| x.pin.clone()).filter(|p| p.any()),
         content,
         appearance: Appearance {
             fill: bb(e, "fill", t).then(|| cc(e, "fill_color", t)),
             gradient: (bb(e, "fill", t) && ch(e, "fill_kind", t) == 1).then(|| LinearGradient {
+                alpha_curve: e.layer.as_ref().map(|x| x.gradient_alpha.clone()).unwrap_or_default(),
                 start: cc(e, "gradient_start", t),
                 end: cc(e, "gradient_end", t),
                 angle: ff(e, "gradient_angle", t),
