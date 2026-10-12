@@ -248,6 +248,17 @@ fn oracle(o: &Decoded<'_>) -> Value {
             v["start"] = json!(start);
             v
         }
+        // A selector is a track group, and is exported as one.
+        Decoded::Selector { common: c, mode, length, tracks, selection_raw, trailing_raw } => {
+            let mut v = common(c);
+            v["mc_mode"] = json!(mode);
+            v["length"] = json!(length);
+            v["num_scalars"] = json!(0);
+            v["tracks"] = json!(tracks.iter().map(track).collect::<Vec<_>>());
+            v["selected_raw"] = json!(selection_raw);
+            v["trailing_raw"] = json!(trailing_raw);
+            v
+        }
     }
 }
 #[test]
@@ -392,6 +403,55 @@ fn a_windows_source_locator_carries_both_forms_of_its_path_and_nothing_assumed()
                 mutant[at] ^= 1 << bit;
                 std::panic::catch_unwind(|| {
                     let _ = bin(*b"WINF", &mutant, order).decode(1);
+                })
+                .unwrap();
+            }
+        }
+    }
+}
+#[test]
+fn a_group_clip_selector_reads_its_alternatives_as_the_track_group_it_is() {
+    // A selector is a track group: each track is one alternative this track of the group clip can
+    // play, one per angle carrying its media kind. Which alternative is active is not established,
+    // so the trailing fields are preserved rather than interpreted.
+    for order in [ByteOrder::Little, ByteOrder::Big] {
+        let mut b = synthetic_common(order);
+        b.extend_from_slice(&[2, 8]); // a track group
+        b.push(0); // mode
+        n(&mut b, 530, 4, order); // length
+        n(&mut b, 0, 4, order); // scalar count, always zero
+        n(&mut b, 2, 4, order); // two alternatives
+        for component in [1u64, 0] {
+            n(&mut b, 4, 2, order); // flags: a component and nothing else
+            n(&mut b, component, 4, order);
+        }
+        b.extend_from_slice(&[1, 1]); // extension: a lock per alternative
+        for _ in 0..2 {
+            b.push(0x45);
+            n(&mut b, 0, 2, order);
+        }
+        b.extend_from_slice(&[2, 1]);
+        b.push(1); // the only field that could name the active angle
+        n(&mut b, 0, 2, order);
+        b.push(3);
+        let Decoded::Selector { mode, length, tracks, selection_raw, trailing_raw, .. } = bin(*b"SLCT", &b, order).decode(1).unwrap() else {
+            panic!("a selector must decode as one")
+        };
+        assert_eq!((mode, length, selection_raw, trailing_raw), (0, 530, 1, 0));
+        assert_eq!(tracks.len(), 2, "one track per alternative");
+        assert_eq!(tracks[0].component, Some(1));
+        // The flag says a component field is present; its reference being null is separate.
+        assert_eq!(tracks[1].component, Some(0), "a present but null alternative reference");
+        // Truncation and single-bit damage stay errors, never panics.
+        for end in 0..b.len() {
+            assert!(std::panic::catch_unwind(|| bin(*b"SLCT", &b[..end], order).decode(1)).unwrap().is_err());
+        }
+        for at in 0..b.len() {
+            for bit in 0..8 {
+                let mut mutant = b.clone();
+                mutant[at] ^= 1 << bit;
+                std::panic::catch_unwind(|| {
+                    let _ = bin(*b"SLCT", &mutant, order).decode(1);
                 })
                 .unwrap();
             }

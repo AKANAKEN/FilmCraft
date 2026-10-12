@@ -82,16 +82,52 @@ pub struct Attribute<'a> {
 #[serde(tag = "class")]
 pub enum Decoded<'a> {
     Group(super::GroupEffect<'a>),
-    Auxiliary { common: Component<'a>, length: i32, fields: std::collections::BTreeMap<&'static str, super::Field<'a>> },
+    Auxiliary {
+        common: Component<'a>,
+        length: i32,
+        fields: std::collections::BTreeMap<&'static str, super::Field<'a>>,
+    },
     Locator(super::Locator<'a>),
     BinReference(super::BinReference<'a>),
     Descriptor(super::Descriptor<'a>),
-    Attributes { entries: Vec<Attribute<'a>> },
+    Attributes {
+        entries: Vec<Attribute<'a>>,
+    },
     Mob(Mob<'a>),
-    Sequence { common: Component<'a>, components: Vec<u32> },
-    SourceClip { common: Component<'a>, length: i32, legacy_id_raw: &'a [u8], track: u16, start: i32, id: Option<[u8; 32]> },
-    Filler { common: Component<'a>, length: i32 },
-    Timecode { common: Component<'a>, length: i32, flags: u32, fps: u32, start: i64 },
+    Sequence {
+        common: Component<'a>,
+        components: Vec<u32>,
+    },
+    /// A group clip's per-track selector. Each track is one alternative this track can play, one
+    /// per angle carrying its media kind. `selection_raw` is the only field that could name the
+    /// active angle; it is 1 in every selector observed, so its meaning is unestablished.
+    Selector {
+        common: Component<'a>,
+        mode: u8,
+        length: i32,
+        tracks: Vec<Track>,
+        selection_raw: u8,
+        trailing_raw: u16,
+    },
+    SourceClip {
+        common: Component<'a>,
+        length: i32,
+        legacy_id_raw: &'a [u8],
+        track: u16,
+        start: i32,
+        id: Option<[u8; 32]>,
+    },
+    Filler {
+        common: Component<'a>,
+        length: i32,
+    },
+    Timecode {
+        common: Component<'a>,
+        length: i32,
+        flags: u32,
+        fps: u32,
+        start: i64,
+    },
 }
 pub(super) struct Decode<'a, 'b> {
     pub(super) c: Cursor<'a>,
@@ -302,7 +338,7 @@ impl<'a> Bin<'a> {
         } else if object.class == *b"ATTR" {
             d.attributes()?
         } else {
-            if !matches!(&object.class, b"CMPO" | b"SEQU" | b"SCLP" | b"FILL" | b"TCCP" | b"TKFX" | b"SPED" | b"MASK" | b"ECCP" | b"TRKR") {
+            if !matches!(&object.class, b"CMPO" | b"SEQU" | b"SCLP" | b"FILL" | b"TCCP" | b"TKFX" | b"SPED" | b"MASK" | b"ECCP" | b"TRKR" | b"SLCT") {
                 // Name the class and object so an unsupported bin is actionable evidence.
                 return Err(bad(format!(
                     "unsupported semantic class {} at object {reference} (byte {})",
@@ -322,6 +358,17 @@ impl<'a> Bin<'a> {
                         components.push(d.reference()?);
                     }
                     Decoded::Sequence { common, components }
+                }
+                // A group clip's selector is a track group: each of its tracks is one alternative
+                // this track can play, one per angle carrying its media kind. The trailing byte is
+                // the only field that could name the active angle, and it is 1 in every selector
+                // observed, so it is preserved rather than interpreted.
+                b"SLCT" => {
+                    let (mode, length, tracks) = d.group()?;
+                    d.expect(&[2, 1])?;
+                    let selection_raw = d.u8()?;
+                    let trailing_raw = d.u16()?;
+                    Decoded::Selector { common, mode, length, tracks, selection_raw, trailing_raw }
                 }
                 _ => {
                     d.expect(&[2, 1])?;
