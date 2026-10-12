@@ -113,7 +113,16 @@ fn compute_block_sad(src: &[u8], src_stride: usize, ref_plane: &[u8], ref_stride
         let src_off = (y0 + r) * src_stride + x0;
         let ref_off = (y0 + r) * ref_stride + x0;
         if let (Some(s_row), Some(r_row)) = (src.get(src_off..src_off + w), ref_plane.get(ref_off..ref_off + w)) {
-            for (&s, &re) in s_row.iter().zip(r_row.iter()) {
+            let (chunks_s, rem_s) = s_row.as_chunks::<16>();
+            let (chunks_r, rem_r) = r_row.as_chunks::<16>();
+            for (cs, cr) in chunks_s.iter().zip(chunks_r.iter()) {
+                let mut sum16 = 0u32;
+                for i in 0..16 {
+                    sum16 += cs[i].abs_diff(cr[i]) as u32;
+                }
+                sad += sum16 as u64;
+            }
+            for (&s, &re) in rem_s.iter().zip(rem_r.iter()) {
                 sad += s.abs_diff(re) as u64;
             }
         }
