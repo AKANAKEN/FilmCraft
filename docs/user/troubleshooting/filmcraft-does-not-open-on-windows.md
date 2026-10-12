@@ -27,7 +27,7 @@ Update your graphics driver. If FilmCraft still quits, start it from PowerShell 
 
 Automatic switching to a safer graphics mode after a failed start was added after 0.6.0 and is not in a release yet ([issue 820](https://github.com/storytold/filmcraft/issues/820)).
 
-On one Intel UHD Graphics 620 laptop with Windows 11, Vulkan crashed at startup, `dx12` started but fell back to the CPU compositor, and `gl` started cleanly with GPU compositing. The workaround that user reported was `setx WGPU_BACKEND gl`, which keeps the setting for later launches. Try `gl` only after `dx12` and `vulkan` fail: on some AMD drivers an OpenGL start can bring the crash back.
+On one Intel UHD Graphics 620 laptop with Windows 11, Vulkan crashed at startup, `dx12` started but fell back to the CPU compositor, and `gl` started cleanly with GPU compositing. The workaround that user reported was `setx WGPU_BACKEND gl`, which keeps the setting for later launches. On AMD graphics, avoid `gl`: on some AMD drivers an OpenGL start can bring the crash back. On Intel graphics, avoid `vulkan`.
 
 ## Why this happens
 
