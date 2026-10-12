@@ -90,8 +90,8 @@ pub fn write_eob_4x4(sym: &mut SymbolEncoder, eob: usize) {
     }
 }
 
-/// Encode a single DC residual for a transform block (e.g. 64x64, 32x32, or 4x4).
-pub fn encode_dc_residual(sym: &mut SymbolEncoder, qindex: u8, tx_sz_ctx: usize, ctx: usize, level: u32, is_negative: bool) {
+/// Encode a single DC residual for a transform block (e.g. 64x64, 32x32, 16x16, or 4x4).
+pub fn encode_dc_residual(sym: &mut SymbolEncoder, qindex: u8, plane: usize, tx_sz_ctx: usize, ctx: usize, dc_sign_ctx: usize, level: u32, is_negative: bool) {
     if level == 0 {
         write_txb_skip(sym, qindex, tx_sz_ctx, ctx, true);
         return;
@@ -104,10 +104,17 @@ pub fn encode_dc_residual(sym: &mut SymbolEncoder, qindex: u8, tx_sz_ctx: usize,
     write_txb_skip(sym, qindex, tx_sz_ctx, ctx, false);
 
     // 2. eob = 1: eob_pt symbol 0 (no extra bits)
-    let eob_cdf: Option<&[u16]> = match s_ctx {
-        4 => tables::DEFAULT_EOB_PT_1024_CDF_BY_TIER.get(tier).map(|a| a.as_slice()),
-        3 => tables::DEFAULT_EOB_PT_512_CDF_BY_TIER.get(tier).map(|a| a.as_slice()),
-        _ => tables::DEFAULT_EOB_PT_16_CDF_BY_TIER.get(tier).map(|a| a.as_slice()),
+    let eob_cdf: Option<&[u16]> = if plane == 0 {
+        match s_ctx {
+            4 | 3 => tables::DEFAULT_EOB_PT_1024_CDF_BY_TIER.get(tier).map(|a| a.as_slice()),
+            _ => tables::DEFAULT_EOB_PT_16_CDF_BY_TIER.get(tier).map(|a| a.as_slice()),
+        }
+    } else {
+        match s_ctx {
+            3 => tables::DEFAULT_EOB_PT_1024_CHROMA_CDF_BY_TIER.get(tier).map(|a| a.as_slice()),
+            2 => tables::DEFAULT_EOB_PT_256_CHROMA_CDF_BY_TIER.get(tier).map(|a| a.as_slice()),
+            _ => tables::DEFAULT_EOB_PT_16_CDF_BY_TIER.get(tier).map(|a| a.as_slice()),
+        }
     };
     if let Some(cdf) = eob_cdf {
         sym.write_symbol_no_update(0, cdf);
@@ -115,7 +122,12 @@ pub fn encode_dc_residual(sym: &mut SymbolEncoder, qindex: u8, tx_sz_ctx: usize,
 
     // 3. coeff_base_eob: symbol = (level - 1).min(2) (NUM_BASE_LEVELS = 2)
     let base_sym = ((level - 1).min(2)) as usize;
-    if let Some(base_cdf) = tables::DEFAULT_COEFF_BASE_EOB_CDF_BY_TIER.get(tier).and_then(|t| t.get(s_ctx)) {
+    let base_cdf: Option<&[u16]> = if plane == 0 {
+        tables::DEFAULT_COEFF_BASE_EOB_CDF_BY_TIER.get(tier).and_then(|t| t.get(s_ctx)).map(|a| a.as_slice())
+    } else {
+        tables::DEFAULT_COEFF_BASE_EOB_CHROMA_CDF_BY_TIER.get(tier).and_then(|t| t.get(s_ctx)).map(|a| a.as_slice())
+    };
+    if let Some(base_cdf) = base_cdf {
         sym.write_symbol_no_update(base_sym, base_cdf);
     }
 
@@ -135,7 +147,9 @@ pub fn encode_dc_residual(sym: &mut SymbolEncoder, qindex: u8, tx_sz_ctx: usize,
     }
 
     // 5. dc_sign: symbol 1 if negative, 0 if positive
-    sym.write_symbol_no_update(if is_negative { 1 } else { 0 }, &tables::DEFAULT_DC_SIGN_CDF);
+    let ptype = (plane > 0) as usize;
+    let sign_cdf = &tables::DEFAULT_DC_SIGN_CDF_ALL[ptype][dc_sign_ctx.min(2)];
+    sym.write_symbol_no_update(if is_negative { 1 } else { 0 }, sign_cdf);
 
     // 6. Exp-Golomb escape if level > NUM_BASE_LEVELS + COEFF_BASE_RANGE (14)
     if level > tables::COEFF_BASE_RANGE + 2 {
@@ -205,8 +219,9 @@ mod tests {
     #[test]
     fn test_encode_dc_residual() {
         let mut sym = SymbolEncoder::new();
-        encode_dc_residual(&mut sym, 100, 4, 0, 3, false);
-        encode_dc_residual(&mut sym, 100, 4, 0, 10, true);
+        encode_dc_residual(&mut sym, 100, 0, 4, 0, 0, 3, false);
+        encode_dc_residual(&mut sym, 100, 0, 4, 0, 1, 10, true);
+        encode_dc_residual(&mut sym, 100, 1, 3, 7, 0, 2, false); // Chroma test
         let bytes = sym.finish();
         assert!(!bytes.is_empty());
     }

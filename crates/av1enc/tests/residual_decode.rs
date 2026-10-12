@@ -43,7 +43,7 @@ fn test_raw_non_skip_residual_tile() {
 
     let mut sym = symbol::SymbolEncoder::new();
     // 1. Partition 64x64
-    sym.write_symbol_no_update(0, &tables::DEFAULT_PARTITION_W64_CDF);
+    sym.write_symbol_no_update(0, &tables::DEFAULT_PARTITION_W64_CDF[0]);
     // 2. Skip = 0 (has residuals!)
     sym.write_symbol_no_update(0, &tables::DEFAULT_SKIP_CDF[0]);
     // 3. Y mode: DC_PRED (symbol 0)
@@ -52,7 +52,7 @@ fn test_raw_non_skip_residual_tile() {
     sym.write_symbol_no_update(0, &tables::DEFAULT_UV_MODE_CFL_NOT_ALLOWED_CDF[0]);
 
     // 5. Residuals for Y (plane 0, tx_sz = TX_64X64, ctx = 0):
-    coeff::encode_dc_residual(&mut sym, 100, 4, 0, 3, false);
+    coeff::encode_dc_residual(&mut sym, 100, 0, 4, 0, 0, 3, false);
 
     // 6. Residuals for U (plane 1, tx_sz = TX_32X32, ctx = 7):
     coeff::write_txb_skip(&mut sym, 100, 3, 7, true);
@@ -78,11 +78,11 @@ fn test_raw_non_skip_residual_tile() {
 
     // Now test negative DC residual:
     let mut sym_neg = symbol::SymbolEncoder::new();
-    sym_neg.write_symbol_no_update(0, &tables::DEFAULT_PARTITION_W64_CDF);
+    sym_neg.write_symbol_no_update(0, &tables::DEFAULT_PARTITION_W64_CDF[0]);
     sym_neg.write_symbol_no_update(0, &tables::DEFAULT_SKIP_CDF[0]);
     sym_neg.write_symbol_no_update(0, &tables::DEFAULT_INTRA_FRAME_Y_MODE_CDF[0][0]);
     sym_neg.write_symbol_no_update(0, &tables::DEFAULT_UV_MODE_CFL_NOT_ALLOWED_CDF[0]);
-    coeff::encode_dc_residual(&mut sym_neg, 100, 4, 0, 10, true); // negative level 10!
+    coeff::encode_dc_residual(&mut sym_neg, 100, 0, 4, 0, 0, 10, true); // negative level 10!
     coeff::write_txb_skip(&mut sym_neg, 100, 3, 7, true);
     coeff::write_txb_skip(&mut sym_neg, 100, 3, 7, true);
 
@@ -100,4 +100,31 @@ fn test_raw_non_skip_residual_tile() {
     let decoded_y_neg = pics_neg[0].planes[0][0];
     println!("Decoded Y sample with negative DC residual: {decoded_y_neg}");
     assert!(decoded_y_neg < 128, "Negative residual must decrease pixel value!");
+}
+
+#[test]
+fn test_split_partition_decode() {
+    let (w, h) = (64usize, 64usize);
+    let mut enc = Encoder::new(EncoderConfig::new(w as u32, h as u32, 24, 1)).unwrap();
+    // 64x64 frame with top half dark (30) and bottom half bright (220)
+    let mut y = vec![30u8; w * h];
+    for row in 32..64 {
+        for col in 0..64 {
+            y[row * w + col] = 220;
+        }
+    }
+    let uv = vec![128u8; (w / 2) * (h / 2)];
+    let frame = YuvFrame { y: &y, u: &uv, v: &uv, y_stride: w, uv_stride: w / 2 };
+
+    let p = enc.encode(&frame, 0).unwrap();
+    let mut dec = filmcraft_av1::Decoder::new();
+    let mut pics = dec.decode(&p.data).unwrap();
+    pics.extend(dec.flush());
+    assert_eq!(pics.len(), 1);
+    assert_eq!(pics[0].width, 64);
+    assert_eq!(pics[0].height, 64);
+    let top_left = pics[0].planes[0][0];
+    let bottom_left = pics[0].planes[0][32 * 64];
+    println!("Top-left pixel (expected ~30): {top_left}");
+    println!("Bottom-left pixel (expected ~220): {bottom_left}");
 }

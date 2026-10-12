@@ -93,8 +93,7 @@ impl SymbolEncoder {
         let prev = u;
         let sym_range = prev - cur;
 
-        // Add `cur` (15-bit value) at bit_pos
-        self.add_value(cur as u64, 15);
+        self.add_value(cur as u64);
 
         self.range = sym_range;
         let bits = 15 - (31 - self.range.leading_zeros());
@@ -102,45 +101,33 @@ impl SymbolEncoder {
         self.bit_pos += bits as usize;
     }
 
-    fn add_value(&mut self, val: u64, val_bits: usize) {
+    fn add_value(&mut self, val: u64) {
         if val == 0 {
             return;
         }
-        // Ensure stream is large enough
-        let end_bit = self.bit_pos + val_bits;
-        let needed_bytes = (end_bit + 64) / 8 + 1;
+        let end_bit = self.bit_pos + 14;
+        let end_byte = end_bit / 8;
+        let needed_bytes = end_byte + 1;
         if self.stream.len() < needed_bytes {
             self.stream.resize(needed_bytes, 0);
         }
 
-        // Add `val` at `bit_pos` (big-endian: MSB of val goes to bit_pos)
-        // Load u64 at byte_pos
-        let byte_pos = self.bit_pos / 8;
-        let bit_offset = self.bit_pos % 8;
+        let shift = 7 - (end_bit % 8);
+        let mut addend = (val as u128) << shift;
 
-        // Shift val so its MSB aligns with bit_offset
-        // val has val_bits bits (15 bits)
-        // In a 64-bit window starting at byte_pos:
-        // val starts at bit_offset from the top of the 64-bit window
-        let shift = 64 - bit_offset - val_bits;
-        let addend = val << shift;
-
-        // Add with carry propagation backward
-        let chunk = u64::from_be_bytes(self.stream[byte_pos..byte_pos + 8].try_into().unwrap_or([0; 8]));
-        let (new_chunk, carry) = chunk.overflowing_add(addend);
-        self.stream[byte_pos..byte_pos + 8].copy_from_slice(&new_chunk.to_be_bytes());
-
-        if carry {
-            // Propagate carry backward
-            let mut p = byte_pos;
-            while p > 0 {
-                p -= 1;
-                let (res, c) = self.stream[p].overflowing_add(1);
-                self.stream[p] = res;
-                if !c {
-                    break;
-                }
+        let mut p = end_byte;
+        while addend > 0 {
+            let byte_add = (addend & 0xFF) as u8;
+            addend >>= 8;
+            let (new_val, carry) = self.stream[p].overflowing_add(byte_add);
+            self.stream[p] = new_val;
+            if carry {
+                addend += 1;
             }
+            if p == 0 {
+                break;
+            }
+            p -= 1;
         }
     }
 

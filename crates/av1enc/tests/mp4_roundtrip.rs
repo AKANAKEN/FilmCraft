@@ -97,6 +97,15 @@ fn test_av1enc_mp4_mux_and_decode_gradient_psnr() {
     assert_eq!(pics[0].height, h);
 
     let psnr = filmcraft_av1enc::compute_psnr_u16(&y_plane, &pics[0].planes[0]).unwrap();
+    println!("psnr: {psnr:.2} dB");
+    for by in 0..4 {
+        let mut line = String::new();
+        for bx in 0..4 {
+            let val = pics[0].planes[0][(by * 32 + 16) * w as usize + (bx * 32 + 16)];
+            line.push_str(&format!("{val:4} "));
+        }
+        println!("grid by={by}: {line}");
+    }
     // In intra mode with transform residuals and directional prediction, reconstructed PSNR improves.
     assert!(psnr > 10.0, "Reconstruction PSNR should be > 10 dB, got {psnr:.2} dB");
 }

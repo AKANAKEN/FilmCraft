@@ -231,6 +231,7 @@ impl Encoder {
         let width = self.config.width as usize;
         let height = self.config.height as usize;
         let uv_width = width / 2;
+        let uv_height = height / 2;
 
         if is_key || self.frame_count == 0 {
             self.recon_y.fill(128);
@@ -238,146 +239,405 @@ impl Encoder {
             self.recon_v.fill(128);
         }
 
-        let mut above_modes = vec![intra::DC_PRED; sb_cols as usize];
-        let mut above_skips = vec![false; sb_cols as usize];
+        let cols32 = width.div_ceil(32);
+        let rows32 = height.div_ceil(32);
+        let mut grid_y_mode = vec![intra::DC_PRED; cols32 * rows32];
+        let mut grid_skip = vec![false; cols32 * rows32];
+        let mut grid_is_split = vec![false; cols32 * rows32];
 
-        for r in 0..sb_rows {
-            let mut left_mode = intra::DC_PRED;
-            let mut left_skip = false;
+        let mut above_dc = [vec![0u8; width.div_ceil(4)], vec![0u8; uv_width.div_ceil(4)], vec![0u8; uv_width.div_ceil(4)]];
+        let mut left_dc = [vec![0u8; height.div_ceil(4)], vec![0u8; uv_height.div_ceil(4)], vec![0u8; uv_height.div_ceil(4)]];
 
-            for c in 0..sb_cols {
-                let avail_u = r > 0;
-                let avail_l = c > 0;
-                let mut skip_ctx = 0;
-                if avail_u {
-                    skip_ctx += above_skips[c as usize] as usize;
+        let get_dc_sign_ctx = |x4: usize, y4: usize, w4: usize, h4: usize, above: &[u8], left: &[u8]| -> usize {
+            let mut dc_sign = 0i32;
+            for k in 0..w4 {
+                if let Some(&cat) = above.get(x4 + k) {
+                    match cat {
+                        1 => dc_sign -= 1,
+                        2 => dc_sign += 1,
+                        _ => {}
+                    }
                 }
-                if avail_l {
-                    skip_ctx += left_skip as usize;
+            }
+            for k in 0..h4 {
+                if let Some(&cat) = left.get(y4 + k) {
+                    match cat {
+                        1 => dc_sign -= 1,
+                        2 => dc_sign += 1,
+                        _ => {}
+                    }
                 }
+            }
+            match dc_sign.signum() {
+                -1 => 1,
+                1 => 2,
+                _ => 0,
+            }
+        };
 
-                let actx = tables::INTRA_MODE_CONTEXT.get(above_modes[c as usize] as usize).copied().unwrap_or(0) as usize;
-                let lctx = tables::INTRA_MODE_CONTEXT.get(left_mode as usize).copied().unwrap_or(0) as usize;
+        let update_dc_sign = |above: &mut [u8], left: &mut [u8], x4: usize, y4: usize, w4: usize, h4: usize, level: u32, is_neg: bool| {
+            let cat = if level > 0 { if is_neg { 1 } else { 2 } } else { 0 };
+            for k in 0..w4 {
+                if let Some(slot) = above.get_mut(x4 + k) {
+                    *slot = cat;
+                }
+            }
+            for k in 0..h4 {
+                if let Some(slot) = left.get_mut(y4 + k) {
+                    *slot = cat;
+                }
+            }
+        };
 
-                let y_mode = if self.config.preset != Preset::Speed {
-                    precomputed_modes.get(r as usize).and_then(|row| row.get(c as usize).copied()).unwrap_or(intra::DC_PRED)
-                } else {
-                    intra::DC_PRED
-                };
-
-                let x0 = (c as usize) * 64;
-                let y0 = (r as usize) * 64;
+        for sb_r in 0..sb_rows as usize {
+            for sb_c in 0..sb_cols as usize {
+                let r32 = sb_r * 2;
+                let c32 = sb_c * 2;
+                let x0 = sb_c * 64;
+                let y0 = sb_r * 64;
                 let block_w = 64.min(width.saturating_sub(x0));
                 let block_h = 64.min(height.saturating_sub(y0));
 
-                let (dc_level, is_neg) = compute_and_reconstruct_plane_dc(
-                    frame.y,
-                    frame.y_stride,
-                    &mut self.recon_y,
-                    width,
-                    x0,
-                    y0,
-                    block_w,
-                    block_h,
-                    y_mode,
-                    avail_u,
-                    avail_l,
-                    qindex,
-                    512,
-                );
+                let avail_u = sb_r > 0;
+                let avail_l = sb_c > 0;
 
-                let uv_mode = if y_mode == intra::V_PRED || y_mode == intra::H_PRED { y_mode } else { intra::DC_PRED };
+                let above_is_split = avail_u && grid_is_split.get((r32 - 1) * cols32 + c32).copied().unwrap_or(false);
+                let left_is_split = avail_l && grid_is_split.get(r32 * cols32 + c32.saturating_sub(1)).copied().unwrap_or(false);
+                let part_ctx = ((left_is_split as usize) * 2) + (above_is_split as usize);
 
-                let (u_dc_level, u_is_neg) = compute_and_reconstruct_plane_dc(
-                    frame.u,
-                    frame.uv_stride,
-                    &mut self.recon_u,
-                    uv_width,
-                    x0 / 2,
-                    y0 / 2,
-                    (block_w / 2).max(1),
-                    (block_h / 2).max(1),
-                    uv_mode,
-                    avail_u,
-                    avail_l,
-                    qindex,
-                    256,
-                );
+                let split = should_split_64x64(frame.y, frame.y_stride, x0, y0, block_w, block_h, self.config.preset);
 
-                let (v_dc_level, v_is_neg) = compute_and_reconstruct_plane_dc(
-                    frame.v,
-                    frame.uv_stride,
-                    &mut self.recon_v,
-                    uv_width,
-                    x0 / 2,
-                    y0 / 2,
-                    (block_w / 2).max(1),
-                    (block_h / 2).max(1),
-                    uv_mode,
-                    avail_u,
-                    avail_l,
-                    qindex,
-                    256,
-                );
+                if !split {
+                    sym.write_symbol_no_update(tables::PARTITION_NONE, &tables::DEFAULT_PARTITION_W64_CDF[part_ctx]);
 
-                let has_residual = dc_level > 0 || u_dc_level > 0 || v_dc_level > 0;
+                    let above_mode = if avail_u { grid_y_mode.get((r32 - 1) * cols32 + c32).copied().unwrap_or(intra::DC_PRED) } else { intra::DC_PRED };
+                    let left_mode =
+                        if avail_l { grid_y_mode.get(r32 * cols32 + c32.saturating_sub(1)).copied().unwrap_or(intra::DC_PRED) } else { intra::DC_PRED };
+                    let above_skip = if avail_u { grid_skip.get((r32 - 1) * cols32 + c32).copied().unwrap_or(false) } else { false };
+                    let left_skip = if avail_l { grid_skip.get(r32 * cols32 + c32.saturating_sub(1)).copied().unwrap_or(false) } else { false };
 
-                sym.write_symbol_no_update(0, &tables::DEFAULT_PARTITION_W64_CDF);
+                    let skip_ctx = (above_skip as usize) + (left_skip as usize);
+                    let actx = tables::INTRA_MODE_CONTEXT.get(above_mode as usize).copied().unwrap_or(0) as usize;
+                    let lctx = tables::INTRA_MODE_CONTEXT.get(left_mode as usize).copied().unwrap_or(0) as usize;
 
-                if has_residual {
-                    sym.write_symbol_no_update(0, &tables::DEFAULT_SKIP_CDF[skip_ctx]);
-                    sym.write_symbol_no_update(y_mode as usize, &tables::DEFAULT_INTRA_FRAME_Y_MODE_CDF[actx][lctx]);
-
-                    if y_mode == intra::V_PRED || y_mode == intra::H_PRED {
-                        sym.write_symbol_no_update(3, &tables::DEFAULT_ANGLE_DELTA_CDF[y_mode as usize - 1]);
-                    }
-
-                    sym.write_symbol_no_update(uv_mode as usize, &tables::DEFAULT_UV_MODE_CFL_NOT_ALLOWED_CDF[y_mode as usize]);
-
-                    if uv_mode == intra::V_PRED || uv_mode == intra::H_PRED {
-                        sym.write_symbol_no_update(3, &tables::DEFAULT_ANGLE_DELTA_CDF[uv_mode as usize - 1]);
-                    }
-
-                    // Write residuals for non-skip block:
-                    // Plane 0 (Y): 64x64 transform DC residual
-                    if dc_level > 0 {
-                        coeff::encode_dc_residual(&mut sym, qindex, 4, 0, dc_level, is_neg);
+                    let y_mode = if self.config.preset != Preset::Speed {
+                        precomputed_modes.get(sb_r).and_then(|row| row.get(sb_c).copied()).unwrap_or(intra::DC_PRED)
                     } else {
-                        coeff::write_txb_skip(&mut sym, qindex, 4, 0, true);
+                        intra::DC_PRED
+                    };
+
+                    let (dc_level, is_neg) = compute_and_reconstruct_plane_dc(
+                        frame.y,
+                        frame.y_stride,
+                        &mut self.recon_y,
+                        width,
+                        x0,
+                        y0,
+                        block_w,
+                        block_h,
+                        y_mode,
+                        avail_u,
+                        avail_l,
+                        qindex,
+                        512,
+                    );
+
+                    let uv_mode = if y_mode == intra::V_PRED || y_mode == intra::H_PRED { y_mode } else { intra::DC_PRED };
+
+                    let (u_dc_level, u_is_neg) = compute_and_reconstruct_plane_dc(
+                        frame.u,
+                        frame.uv_stride,
+                        &mut self.recon_u,
+                        uv_width,
+                        x0 / 2,
+                        y0 / 2,
+                        (block_w / 2).max(1),
+                        (block_h / 2).max(1),
+                        uv_mode,
+                        avail_u,
+                        avail_l,
+                        qindex,
+                        256,
+                    );
+
+                    let (v_dc_level, v_is_neg) = compute_and_reconstruct_plane_dc(
+                        frame.v,
+                        frame.uv_stride,
+                        &mut self.recon_v,
+                        uv_width,
+                        x0 / 2,
+                        y0 / 2,
+                        (block_w / 2).max(1),
+                        (block_h / 2).max(1),
+                        uv_mode,
+                        avail_u,
+                        avail_l,
+                        qindex,
+                        256,
+                    );
+
+                    let has_residual = dc_level > 0 || u_dc_level > 0 || v_dc_level > 0;
+
+                    if has_residual {
+                        sym.write_symbol_no_update(0, &tables::DEFAULT_SKIP_CDF[skip_ctx]);
+                        sym.write_symbol_no_update(y_mode as usize, &tables::DEFAULT_INTRA_FRAME_Y_MODE_CDF[actx][lctx]);
+
+                        if y_mode == intra::V_PRED || y_mode == intra::H_PRED {
+                            sym.write_symbol_no_update(3, &tables::DEFAULT_ANGLE_DELTA_CDF[y_mode as usize - 1]);
+                        }
+
+                        sym.write_symbol_no_update(uv_mode as usize, &tables::DEFAULT_UV_MODE_CFL_NOT_ALLOWED_CDF[y_mode as usize]);
+
+                        if uv_mode == intra::V_PRED || uv_mode == intra::H_PRED {
+                            sym.write_symbol_no_update(3, &tables::DEFAULT_ANGLE_DELTA_CDF[uv_mode as usize - 1]);
+                        }
+
+                        let luma_dc_ctx = get_dc_sign_ctx(x0 / 4, y0 / 4, 16, 16, &above_dc[0], &left_dc[0]);
+                        let u_dc_ctx = get_dc_sign_ctx((x0 / 2) / 4, (y0 / 2) / 4, 8, 8, &above_dc[1], &left_dc[1]);
+                        let v_dc_ctx = get_dc_sign_ctx((x0 / 2) / 4, (y0 / 2) / 4, 8, 8, &above_dc[2], &left_dc[2]);
+
+                        if dc_level > 0 {
+                            coeff::encode_dc_residual(&mut sym, qindex, 0, 4, 0, luma_dc_ctx, dc_level, is_neg);
+                        } else {
+                            coeff::write_txb_skip(&mut sym, qindex, 4, 0, true);
+                        }
+
+                        if u_dc_level > 0 {
+                            coeff::encode_dc_residual(&mut sym, qindex, 1, 3, 7, u_dc_ctx, u_dc_level, u_is_neg);
+                        } else {
+                            coeff::write_txb_skip(&mut sym, qindex, 3, 7, true);
+                        }
+
+                        if v_dc_level > 0 {
+                            coeff::encode_dc_residual(&mut sym, qindex, 2, 3, 7, v_dc_ctx, v_dc_level, v_is_neg);
+                        } else {
+                            coeff::write_txb_skip(&mut sym, qindex, 3, 7, true);
+                        }
+                    } else {
+                        sym.write_symbol_no_update(1, &tables::DEFAULT_SKIP_CDF[skip_ctx]);
+                        sym.write_symbol_no_update(y_mode as usize, &tables::DEFAULT_INTRA_FRAME_Y_MODE_CDF[actx][lctx]);
+
+                        if y_mode == intra::V_PRED || y_mode == intra::H_PRED {
+                            sym.write_symbol_no_update(3, &tables::DEFAULT_ANGLE_DELTA_CDF[y_mode as usize - 1]);
+                        }
+
+                        sym.write_symbol_no_update(uv_mode as usize, &tables::DEFAULT_UV_MODE_CFL_NOT_ALLOWED_CDF[y_mode as usize]);
+
+                        if uv_mode == intra::V_PRED || uv_mode == intra::H_PRED {
+                            sym.write_symbol_no_update(3, &tables::DEFAULT_ANGLE_DELTA_CDF[uv_mode as usize - 1]);
+                        }
                     }
 
-                    // Plane 1 (U): 32x32 transform DC residual
-                    if u_dc_level > 0 {
-                        coeff::encode_dc_residual(&mut sym, qindex, 3, 7, u_dc_level, u_is_neg);
-                    } else {
-                        coeff::write_txb_skip(&mut sym, qindex, 3, 7, true);
-                    }
+                    update_dc_sign(&mut above_dc[0], &mut left_dc[0], x0 / 4, y0 / 4, 16, 16, dc_level, is_neg);
+                    update_dc_sign(&mut above_dc[1], &mut left_dc[1], (x0 / 2) / 4, (y0 / 2) / 4, 8, 8, u_dc_level, u_is_neg);
+                    update_dc_sign(&mut above_dc[2], &mut left_dc[2], (x0 / 2) / 4, (y0 / 2) / 4, 8, 8, v_dc_level, v_is_neg);
 
-                    // Plane 2 (V): 32x32 transform DC residual
-                    if v_dc_level > 0 {
-                        coeff::encode_dc_residual(&mut sym, qindex, 3, 7, v_dc_level, v_is_neg);
-                    } else {
-                        coeff::write_txb_skip(&mut sym, qindex, 3, 7, true);
+                    for dr in 0..2 {
+                        for dc in 0..2 {
+                            let sub_r = r32 + dr;
+                            let sub_c = c32 + dc;
+                            if sub_r < rows32 && sub_c < cols32 {
+                                let idx = sub_r * cols32 + sub_c;
+                                grid_y_mode[idx] = y_mode;
+                                grid_skip[idx] = !has_residual;
+                                grid_is_split[idx] = false;
+                            }
+                        }
                     }
                 } else {
-                    sym.write_symbol_no_update(1, &tables::DEFAULT_SKIP_CDF[skip_ctx]);
-                    sym.write_symbol_no_update(y_mode as usize, &tables::DEFAULT_INTRA_FRAME_Y_MODE_CDF[actx][lctx]);
+                    sym.write_symbol_no_update(tables::PARTITION_SPLIT, &tables::DEFAULT_PARTITION_W64_CDF[part_ctx]);
 
-                    if y_mode == intra::V_PRED || y_mode == intra::H_PRED {
-                        sym.write_symbol_no_update(3, &tables::DEFAULT_ANGLE_DELTA_CDF[y_mode as usize - 1]);
-                    }
+                    for k in 0..4 {
+                        let (dr, dc) = match k {
+                            0 => (0, 0),
+                            1 => (0, 1),
+                            2 => (1, 0),
+                            _ => (1, 1),
+                        };
+                        let sub_r32 = r32 + dr;
+                        let sub_c32 = c32 + dc;
+                        let sub_x0 = x0 + dc * 32;
+                        let sub_y0 = y0 + dr * 32;
+                        let sub_w = 32.min(width.saturating_sub(sub_x0));
+                        let sub_h = 32.min(height.saturating_sub(sub_y0));
 
-                    sym.write_symbol_no_update(uv_mode as usize, &tables::DEFAULT_UV_MODE_CFL_NOT_ALLOWED_CDF[y_mode as usize]);
+                        sym.write_symbol_no_update(tables::PARTITION_NONE, &tables::DEFAULT_PARTITION_W32_CDF[0]);
 
-                    if uv_mode == intra::V_PRED || uv_mode == intra::H_PRED {
-                        sym.write_symbol_no_update(3, &tables::DEFAULT_ANGLE_DELTA_CDF[uv_mode as usize - 1]);
+                        let sub_avail_u = sub_r32 > 0;
+                        let sub_avail_l = sub_c32 > 0;
+
+                        let sub_above_mode =
+                            if sub_avail_u { grid_y_mode.get((sub_r32 - 1) * cols32 + sub_c32).copied().unwrap_or(intra::DC_PRED) } else { intra::DC_PRED };
+                        let sub_left_mode = if sub_avail_l {
+                            grid_y_mode.get(sub_r32 * cols32 + sub_c32.saturating_sub(1)).copied().unwrap_or(intra::DC_PRED)
+                        } else {
+                            intra::DC_PRED
+                        };
+                        let sub_above_skip = if sub_avail_u { grid_skip.get((sub_r32 - 1) * cols32 + sub_c32).copied().unwrap_or(false) } else { false };
+                        let sub_left_skip =
+                            if sub_avail_l { grid_skip.get(sub_r32 * cols32 + sub_c32.saturating_sub(1)).copied().unwrap_or(false) } else { false };
+
+                        let sub_skip_ctx = (sub_above_skip as usize) + (sub_left_skip as usize);
+                        let sub_actx = tables::INTRA_MODE_CONTEXT.get(sub_above_mode as usize).copied().unwrap_or(0) as usize;
+                        let sub_lctx = tables::INTRA_MODE_CONTEXT.get(sub_left_mode as usize).copied().unwrap_or(0) as usize;
+
+                        let mut above_buf = [128u8; 32];
+                        let has_above_ref = if sub_avail_u && sub_y0 > 0 {
+                            let off = (sub_y0 - 1) * width + sub_x0;
+                            if let Some(row) = self.recon_y.get(off..off + sub_w) {
+                                above_buf[..sub_w].copy_from_slice(row);
+                                true
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        };
+
+                        let mut left_buf = [128u8; 32];
+                        let has_left_ref = if sub_avail_l && sub_x0 > 0 {
+                            for y in 0..sub_h {
+                                if let Some(&p) = self.recon_y.get((sub_y0 + y) * width + sub_x0 - 1) {
+                                    left_buf[y] = p;
+                                }
+                            }
+                            true
+                        } else {
+                            false
+                        };
+
+                        let sub_y_mode = if self.config.preset != Preset::Speed {
+                            let src_off = sub_y0 * frame.y_stride + sub_x0;
+                            if let Some(src_sub) = frame.y.get(src_off..) {
+                                intra::choose_best_intra_mode(
+                                    src_sub,
+                                    frame.y_stride,
+                                    sub_w,
+                                    sub_h,
+                                    if has_above_ref { Some(&above_buf[..sub_w]) } else { None },
+                                    if has_left_ref { Some(&left_buf[..sub_h]) } else { None },
+                                )
+                            } else {
+                                intra::DC_PRED
+                            }
+                        } else {
+                            intra::DC_PRED
+                        };
+
+                        let (dc_level, is_neg) = compute_and_reconstruct_plane_dc(
+                            frame.y,
+                            frame.y_stride,
+                            &mut self.recon_y,
+                            width,
+                            sub_x0,
+                            sub_y0,
+                            sub_w,
+                            sub_h,
+                            sub_y_mode,
+                            sub_avail_u,
+                            sub_avail_l,
+                            qindex,
+                            256,
+                        );
+
+                        let sub_uv_mode = if sub_y_mode == intra::V_PRED || sub_y_mode == intra::H_PRED { sub_y_mode } else { intra::DC_PRED };
+
+                        let (u_dc_level, u_is_neg) = compute_and_reconstruct_plane_dc(
+                            frame.u,
+                            frame.uv_stride,
+                            &mut self.recon_u,
+                            uv_width,
+                            sub_x0 / 2,
+                            sub_y0 / 2,
+                            (sub_w / 2).max(1),
+                            (sub_h / 2).max(1),
+                            sub_uv_mode,
+                            sub_avail_u,
+                            sub_avail_l,
+                            qindex,
+                            128,
+                        );
+
+                        let (v_dc_level, v_is_neg) = compute_and_reconstruct_plane_dc(
+                            frame.v,
+                            frame.uv_stride,
+                            &mut self.recon_v,
+                            uv_width,
+                            sub_x0 / 2,
+                            sub_y0 / 2,
+                            (sub_w / 2).max(1),
+                            (sub_h / 2).max(1),
+                            sub_uv_mode,
+                            sub_avail_u,
+                            sub_avail_l,
+                            qindex,
+                            128,
+                        );
+
+                        let has_residual = dc_level > 0 || u_dc_level > 0 || v_dc_level > 0;
+
+                        if has_residual {
+                            sym.write_symbol_no_update(0, &tables::DEFAULT_SKIP_CDF[sub_skip_ctx]);
+                            sym.write_symbol_no_update(sub_y_mode as usize, &tables::DEFAULT_INTRA_FRAME_Y_MODE_CDF[sub_actx][sub_lctx]);
+
+                            if sub_y_mode == intra::V_PRED || sub_y_mode == intra::H_PRED {
+                                sym.write_symbol_no_update(3, &tables::DEFAULT_ANGLE_DELTA_CDF[sub_y_mode as usize - 1]);
+                            }
+
+                            sym.write_symbol_no_update(sub_uv_mode as usize, &tables::DEFAULT_UV_MODE_CFL_ALLOWED_CDF[sub_y_mode as usize]);
+
+                            if sub_uv_mode == intra::V_PRED || sub_uv_mode == intra::H_PRED {
+                                sym.write_symbol_no_update(3, &tables::DEFAULT_ANGLE_DELTA_CDF[sub_uv_mode as usize - 1]);
+                            }
+
+                            let luma_dc_ctx = get_dc_sign_ctx(sub_x0 / 4, sub_y0 / 4, 8, 8, &above_dc[0], &left_dc[0]);
+                            let u_dc_ctx = get_dc_sign_ctx((sub_x0 / 2) / 4, (sub_y0 / 2) / 4, 4, 4, &above_dc[1], &left_dc[1]);
+                            let v_dc_ctx = get_dc_sign_ctx((sub_x0 / 2) / 4, (sub_y0 / 2) / 4, 4, 4, &above_dc[2], &left_dc[2]);
+
+                            if dc_level > 0 {
+                                coeff::encode_dc_residual(&mut sym, qindex, 0, 3, 0, luma_dc_ctx, dc_level, is_neg);
+                            } else {
+                                coeff::write_txb_skip(&mut sym, qindex, 3, 0, true);
+                            }
+
+                            if u_dc_level > 0 {
+                                coeff::encode_dc_residual(&mut sym, qindex, 1, 2, 7, u_dc_ctx, u_dc_level, u_is_neg);
+                            } else {
+                                coeff::write_txb_skip(&mut sym, qindex, 2, 7, true);
+                            }
+
+                            if v_dc_level > 0 {
+                                coeff::encode_dc_residual(&mut sym, qindex, 2, 2, 7, v_dc_ctx, v_dc_level, v_is_neg);
+                            } else {
+                                coeff::write_txb_skip(&mut sym, qindex, 2, 7, true);
+                            }
+                        } else {
+                            sym.write_symbol_no_update(1, &tables::DEFAULT_SKIP_CDF[sub_skip_ctx]);
+                            sym.write_symbol_no_update(sub_y_mode as usize, &tables::DEFAULT_INTRA_FRAME_Y_MODE_CDF[sub_actx][sub_lctx]);
+
+                            if sub_y_mode == intra::V_PRED || sub_y_mode == intra::H_PRED {
+                                sym.write_symbol_no_update(3, &tables::DEFAULT_ANGLE_DELTA_CDF[sub_y_mode as usize - 1]);
+                            }
+
+                            sym.write_symbol_no_update(sub_uv_mode as usize, &tables::DEFAULT_UV_MODE_CFL_ALLOWED_CDF[sub_y_mode as usize]);
+
+                            if sub_uv_mode == intra::V_PRED || sub_uv_mode == intra::H_PRED {
+                                sym.write_symbol_no_update(3, &tables::DEFAULT_ANGLE_DELTA_CDF[sub_uv_mode as usize - 1]);
+                            }
+                        }
+
+                        update_dc_sign(&mut above_dc[0], &mut left_dc[0], sub_x0 / 4, sub_y0 / 4, 8, 8, dc_level, is_neg);
+                        update_dc_sign(&mut above_dc[1], &mut left_dc[1], (sub_x0 / 2) / 4, (sub_y0 / 2) / 4, 4, 4, u_dc_level, u_is_neg);
+                        update_dc_sign(&mut above_dc[2], &mut left_dc[2], (sub_x0 / 2) / 4, (sub_y0 / 2) / 4, 4, 4, v_dc_level, v_is_neg);
+
+                        if sub_r32 < rows32 && sub_c32 < cols32 {
+                            let idx = sub_r32 * cols32 + sub_c32;
+                            grid_y_mode[idx] = sub_y_mode;
+                            grid_skip[idx] = !has_residual;
+                            grid_is_split[idx] = true;
+                        }
                     }
                 }
-
-                above_modes[c as usize] = y_mode;
-                left_mode = y_mode;
-                above_skips[c as usize] = !has_residual;
-                left_skip = !has_residual;
             }
         }
 
@@ -425,6 +685,48 @@ impl Encoder {
     pub fn flush(&mut self) -> Result<Vec<Packet>> {
         Ok(Vec::new())
     }
+}
+
+fn should_split_64x64(y_plane: &[u8], stride: usize, x0: usize, y0: usize, block_w: usize, block_h: usize, preset: Preset) -> bool {
+    if preset == Preset::Speed || block_w < 64 || block_h < 64 {
+        return false;
+    }
+
+    let mut means = [0i64; 4];
+    for (idx, &(dx, dy)) in [(0, 0), (32, 0), (0, 32), (32, 32)].iter().enumerate() {
+        let mut sum = 0i64;
+        for y in 0..32 {
+            let row_off = (y0 + dy + y) * stride + x0 + dx;
+            if let Some(row) = y_plane.get(row_off..row_off + 32) {
+                sum += row.iter().map(|&p| p as i64).sum::<i64>();
+            }
+        }
+        means[idx] = sum / (32 * 32);
+    }
+
+    let min_m = means.iter().copied().min().unwrap_or(0);
+    let max_m = means.iter().copied().max().unwrap_or(0);
+    let range = max_m - min_m;
+
+    let threshold = match preset {
+        Preset::Quality => 12,
+        Preset::Balanced => 18,
+        Preset::Speed => i64::MAX,
+    };
+
+    if range >= threshold {
+        return true;
+    }
+
+    let var_threshold = match preset {
+        Preset::Quality => 120,
+        Preset::Balanced => 220,
+        Preset::Speed => u64::MAX,
+    };
+
+    let var = if let Some(sub) = y_plane.get(y0 * stride + x0..) { intra::block_variance(sub, stride, block_w, block_h) } else { 0 };
+
+    var >= var_threshold
 }
 
 fn compute_and_reconstruct_plane_dc(
