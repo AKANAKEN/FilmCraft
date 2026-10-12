@@ -234,11 +234,11 @@ fn panel_drag_cancel_and_outside_drop_leave_the_layout_unchanged() {
 
     for params in [
         json!({}),
-        json!({"panel": "Effects", "target": "unknown"}),
-        json!({"panel": "Effects", "target": "Program", "placement": "bad"}),
-        json!({"panel": 1, "target": "Program"}),
+        json!({"panel": "Effects", "anchor": "unknown"}),
+        json!({"panel": "Effects", "anchor": "Program", "zone": "bad"}),
+        json!({"panel": 1, "anchor": "Program"}),
     ] {
-        d.menu_err("window.panel.move", params);
+        d.menu_err("window.dockPanel", params);
         assert_eq!(d.app().ui.dock, original);
     }
     let _ = std::fs::remove_dir_all(data);
@@ -249,7 +249,7 @@ fn panel_headers_reorder_tabs_and_compact_grips_and_timeline_can_move() {
     let data = data_dir("panel-headers");
     let mut d = Driver::launch(&data);
     d.ok("ui.panel.show", json!({"panel": "Effects"}));
-    d.menu("window.panel.move", json!({"panel": "Effects", "target": "Properties"}));
+    d.menu("window.dockPanel", json!({"panel": "Effects", "anchor": "Properties"}));
     d.frames(3);
     let properties = d.rect("panel.tab.Properties");
     d.drag_panel("Effects", properties.left_center() + egui::vec2(2.0, 0.0));

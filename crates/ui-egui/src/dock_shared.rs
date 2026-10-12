@@ -9,48 +9,6 @@ const MAX_DEPTH: usize = 32;
 const MAX_NODES: usize = 4096;
 const MAX_PANELS: usize = 128;
 
-/// Preserve the original panel-move command while sharing validation and mutations.
-pub(crate) fn move_action(
-    root: &DockNode,
-    floating: &[Floating],
-    panel: PanelKind,
-    target: PanelKind,
-    placement: crate::dock::Placement,
-) -> Result<Action<PanelKind>, String> {
-    use craft_ui::docking::{Placement as SharedPlacement, Zone};
-    let shared = encode(root, floating)?;
-    shared.validate().map_err(|error| error.to_string())?;
-    if !shared.contains(&panel) || !shared.contains(&target) {
-        return Err("both panels must be open before moving a panel".into());
-    }
-    // Validation bounds recursion before looking for the tab after the anchor.
-    fn following(node: &DockNode, panel: PanelKind, target: PanelKind) -> Option<Option<PanelKind>> {
-        match node {
-            DockNode::Split { a, b, .. } => following(a, panel, target).or_else(|| following(b, panel, target)),
-            DockNode::Tabs { panels, .. } => panels.iter().position(|p| *p == target).map(|index| panels.iter().skip(index + 1).copied().find(|p| *p != panel)),
-        }
-    }
-    let placement = match placement {
-        crate::dock::Placement::Tab => SharedPlacement::Tab { before: None },
-        crate::dock::Placement::Before => SharedPlacement::Tab { before: Some(target) },
-        crate::dock::Placement::After => {
-            let before = following(root, panel, target)
-                .or_else(|| {
-                    floating.iter().find_map(|group| {
-                        group.panels.iter().position(|p| *p == target).map(|index| group.panels.iter().skip(index + 1).copied().find(|p| *p != panel))
-                    })
-                })
-                .flatten();
-            SharedPlacement::Tab { before }
-        }
-        crate::dock::Placement::Left => SharedPlacement::Split(Zone::Left),
-        crate::dock::Placement::Right => SharedPlacement::Split(Zone::Right),
-        crate::dock::Placement::Top => SharedPlacement::Split(Zone::Top),
-        crate::dock::Placement::Bottom => SharedPlacement::Split(Zone::Bottom),
-    };
-    Ok(Action::Move { panel, anchor: target, placement })
-}
-
 fn encode_node(node: &DockNode, depth: usize, count: &mut usize) -> Result<Node<PanelKind>, String> {
     *count = count.saturating_add(1);
     if depth > MAX_DEPTH || *count > MAX_NODES {

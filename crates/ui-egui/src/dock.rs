@@ -167,19 +167,6 @@ pub enum DockNode {
     },
 }
 
-/// A panel joins a tab group, changes tab order, or splits the destination group.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum Placement {
-    Tab,
-    Before,
-    After,
-    Left,
-    Right,
-    Top,
-    Bottom,
-}
-
 fn tabs(p: &[PanelKind], active: usize) -> DockNode {
     DockNode::Tabs { panels: p.to_vec(), active }
 }
@@ -399,21 +386,6 @@ pub fn workspace(name: &str) -> DockNode {
 }
 
 impl DockNode {
-    /// Compatibility helper using the same validated transactions as the editor.
-    pub fn move_panel(&mut self, panel: PanelKind, target: PanelKind, placement: Placement) -> Result<bool, String> {
-        let action = crate::dock_shared::move_action(self, &[], panel, target, placement)?;
-        if panel == target {
-            return Ok(false);
-        }
-        let mut shared = crate::dock_shared::encode(self, &[])?;
-        shared.apply(action).map_err(|error| error.to_string())?;
-        let next = crate::dock_shared::decode(shared)?.root;
-        crate::dock_shared::encode(&next, &[])?.validate().map_err(|error| error.to_string())?;
-        let changed = *self != next;
-        *self = next;
-        Ok(changed)
-    }
-
     /// Every panel in the tree.
     pub fn panels(&self, out: &mut Vec<PanelKind>) {
         match self {
@@ -994,53 +966,5 @@ mod tests {
         d.open_near(PanelKind::Info, PanelKind::Source);
         assert!(d.is_visible(PanelKind::Info));
         assert_eq!(d, hsplit(SplitSize::Ratio(0.5), tabs(&[PanelKind::Effects, PanelKind::Info], 1), tabs(&[PanelKind::Markers], 0)));
-    }
-    #[test]
-    fn panel_moves_preserve_all_panels_and_collapse_empty_sources() {
-        for placement in [Placement::Tab, Placement::Before, Placement::After, Placement::Left, Placement::Right, Placement::Top, Placement::Bottom] {
-            let mut dock = hsplit(SplitSize::Ratio(0.3), tabs(&[PanelKind::Effects], 0), tabs(&[PanelKind::Program, PanelKind::Properties], 1));
-            assert!(dock.move_panel(PanelKind::Effects, PanelKind::Program, placement).unwrap());
-            let mut panels = Vec::new();
-            dock.panels(&mut panels);
-            assert_eq!(panels.len(), 3);
-            for p in [PanelKind::Effects, PanelKind::Program, PanelKind::Properties] {
-                assert_eq!(panels.iter().filter(|v| **v == p).count(), 1);
-            }
-            assert!(dock.is_visible(PanelKind::Effects));
-            match placement {
-                Placement::Before => assert_eq!(panels, [PanelKind::Effects, PanelKind::Program, PanelKind::Properties]),
-                Placement::After => assert_eq!(panels, [PanelKind::Program, PanelKind::Effects, PanelKind::Properties]),
-                Placement::Tab => assert_eq!(panels, [PanelKind::Program, PanelKind::Properties, PanelKind::Effects]),
-                Placement::Left | Placement::Top => assert_eq!(panels[0], PanelKind::Effects),
-                _ => assert_eq!(panels[2], PanelKind::Effects),
-            }
-            let encoded = serde_json::to_string(&dock).unwrap();
-            assert_eq!(serde_json::from_str::<DockNode>(&encoded).unwrap(), dock);
-        }
-    }
-
-    #[test]
-    fn same_group_reordering_and_rejected_moves_are_atomic() {
-        let mut dock = tabs(&[PanelKind::Effects, PanelKind::Project, PanelKind::Info], 1);
-        dock.close(PanelKind::Effects);
-        assert!(dock.is_visible(PanelKind::Project), "removing an earlier inactive tab preserves the shown panel");
-        dock.open_near(PanelKind::Effects, PanelKind::Project);
-        dock.move_panel(PanelKind::Effects, PanelKind::Project, Placement::Before).unwrap();
-        assert_eq!(dock, tabs(&[PanelKind::Effects, PanelKind::Project, PanelKind::Info], 0));
-        let before = dock.clone();
-        assert!(!dock.move_panel(PanelKind::Effects, PanelKind::Effects, Placement::Right).unwrap());
-        assert!(dock.move_panel(PanelKind::Effects, PanelKind::Program, Placement::Tab).is_err());
-        assert_eq!(dock, before);
-        let mut duplicate = tabs(&[PanelKind::Effects, PanelKind::Effects, PanelKind::Program], 0);
-        let before = duplicate.clone();
-        assert!(duplicate.move_panel(PanelKind::Effects, PanelKind::Program, Placement::Tab).is_err());
-        assert_eq!(duplicate, before);
-        let mut deep = tabs(&[PanelKind::Effects, PanelKind::Program], 0);
-        for _ in 0..34 {
-            deep = hsplit(SplitSize::Ratio(0.5), tabs(&[], 0), deep);
-        }
-        let before = deep.clone();
-        assert!(deep.move_panel(PanelKind::Effects, PanelKind::Program, Placement::Right).is_err());
-        assert_eq!(deep, before);
     }
 }

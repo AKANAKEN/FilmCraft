@@ -25,9 +25,10 @@ To keep an arrangement across launches, use **Window → Workspaces → Save Cha
 or **Save as New Workspace**. **Reset to Saved Layout** restores the saved arrangement. Layout changes
 do not modify media, timeline edits or the project's undo history.
 
-Automation uses the same move command:
-`window.panel.move {"panel":"Effects","target":"Properties","placement":"tab"}`.
-Both panels must already be open, either docked or floating. Placements are `tab`, `before`, `after`, `left`, `right`, `top` and
-`bottom`. The move is atomic and rejects unknown panels, placements and malformed layouts.
+Automation uses the existing docking command:
+`window.dockPanel {"panel":"Effects","anchor":"Properties","zone":"center"}`.
+Both panels must already be open, either docked or floating. Zones are `center`, `left`, `right`,
+`top` and `bottom`; floating destinations accept tabs only. To insert before a destination tab,
+pass its name as `before`. Moves use the shared validated docking transactions.
 Panel title tabs register `panel.tab.<PanelKind>`; the current highlighted drop destination registers
 `dock.drop.<PanelKind>.<placement>` during a drag.

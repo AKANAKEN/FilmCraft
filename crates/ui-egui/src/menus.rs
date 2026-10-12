@@ -38,7 +38,6 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     uic!("app.language.indonesian", "Bahasa Indonesia", ["Edit", "Language"], None),
     uic!("app.language.korean", "한국어", ["Edit", "Language"], None),
     uic!("source.playback.toggle", "Source Play/Stop", [], None),
-    uic!("window.panel.move", "Move Panel", [], None),
     uic!("source.playback.play", "Play Source", [], None),
     uic!("source.playback.stop", "Stop Source", [], None),
     uic!("playback.toggle", "Play/Stop", [], Some("Space")),
@@ -247,22 +246,6 @@ pub fn invoke(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, mut params:
     if id == "perf.stats" {
         // the engine's counters plus playback, frame workers and UI timings
         return Ok(crate::perf::stats(app));
-    }
-    if id == "window.panel.move" {
-        let panel = params.get("panel").and_then(Value::as_str).and_then(PanelKind::from_name).ok_or("need a valid panel to move")?;
-        let target = params.get("target").and_then(Value::as_str).and_then(PanelKind::from_name).ok_or("need a valid destination panel")?;
-        let placement = params.get("placement").cloned().unwrap_or_else(|| json!("tab"));
-        let placement: crate::dock::Placement =
-            serde_json::from_value(placement).map_err(|_| "unknown panel placement (tab, before, after, left, right, top, bottom)")?;
-        let action = crate::dock_shared::move_action(&app.ui.dock, &app.ui.floating, panel, target, placement)?;
-        let changed = panel != target;
-        if changed {
-            app.apply_dock(action)?;
-        }
-        app.ui.focused = panel;
-        app.ui.keys.maximized = None;
-        ctx.request_repaint();
-        return Ok(json!({"moved": changed}));
     }
     if let Some(result) = crate::dock_ui::route(app, ctx, id, &params) {
         return result;

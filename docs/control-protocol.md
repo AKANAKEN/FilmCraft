@@ -74,12 +74,12 @@ OS window or prove physical-keyboard delivery.
 Element ids are stable, e.g. `timeline.clip.<id>`, `timeline.track.V1.lock`, `tools.Razor`,
 `project.item.<id>`, `effects.item.gaussian_blur`, `panel.tab.Timeline`, `program.transport.playback.toggle`.
 
-Panel docking is also command-driven:
-`window.panel.move {"panel":"Effects","target":"Properties","placement":"right"}` moves an open
-panel into a split beside the target. Use `tab` to join its tab group, `before` / `after` to reorder
-tabs, or `left` / `right` / `top` / `bottom` to split. Save with `window.workspace.saveChanges` or
-`window.workspace.saveAs {"name":"My Layout"}`. See [Moving panels](docking.md) for drag gestures,
-cancellation and drop-preview automation ids.
+Panel docking is command-driven:
+`window.dockPanel {"panel":"Effects","anchor":"Properties","zone":"right"}` moves an open panel
+into a split beside the anchor. Use `center` to join its tab group, or `left` / `right` / `top` /
+`bottom` to split. The optional `before` parameter names a tab to insert before. Save with
+`window.workspace.saveChanges` or `window.workspace.saveAs {"name":"My Layout"}`.
+See [Moving panels](docking.md) for drag gestures, cancellation and drop-preview automation ids.
 
 Audio mixing: `mixer.*` commands (strips `"A1"`, `"S1"`, `"Mix"` or ids; lanes `volume`, `pan`,
 `mute`, `send.<i>.level`, `fx.<slot>.<param>`): `mixer.inspect`, `mixer.setStrip` (volume, pan, mute,
