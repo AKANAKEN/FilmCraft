@@ -43,6 +43,15 @@ pub fn hw_backend() -> Option<&'static str> {
     *BACKEND.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+/// Nonblocking registration snapshot for UI diagnostics. Outer `None` means busy, not absent.
+pub fn hw_backend_snapshot() -> Option<Option<&'static str>> {
+    match BACKEND.try_lock() {
+        Ok(g) => Some(*g),
+        Err(std::sync::TryLockError::Poisoned(e)) => Some(*e.into_inner()),
+        Err(std::sync::TryLockError::WouldBlock) => None,
+    }
+}
+
 /// Process-wide hardware decoding counters (they only grow; subtract two snapshots to measure an
 /// interval). Frames decoded in software are `GopStats::frames - frames`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

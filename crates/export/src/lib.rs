@@ -18,6 +18,7 @@ use std::io::Write;
 mod aac_out;
 mod audio_out;
 mod deflate;
+pub mod diagnostics;
 mod job;
 mod mxf_out;
 mod pace;
@@ -728,6 +729,10 @@ pub struct EncoderFrame<'a> {
 }
 
 pub trait VideoEncoder: Send {
+    /// Backend identity for diagnostics. `true` means hardware; absent means unknown, not software.
+    fn diagnostic_backend(&self) -> Option<(&'static str, bool)> {
+        None
+    }
     /// MP4/MOV sample entry (codec config) — may only be complete after the first frame.
     fn sample_entry(&self) -> SampleEntry;
     fn timescale(&self) -> u32;
@@ -1052,6 +1057,9 @@ struct MjpegEncoder {
 }
 
 impl VideoEncoder for MjpegEncoder {
+    fn diagnostic_backend(&self) -> Option<(&'static str, bool)> {
+        Some(("FilmCraft", false))
+    }
     fn sample_entry(&self) -> SampleEntry {
         SampleEntry::jpeg(self.w, self.h)
     }
@@ -1177,6 +1185,9 @@ struct ProResEncoder {
 }
 
 impl VideoEncoder for ProResEncoder {
+    fn diagnostic_backend(&self) -> Option<(&'static str, bool)> {
+        Some(("FilmCraft", false))
+    }
     fn sample_entry(&self) -> SampleEntry {
         let mut e = SampleEntry::prores(filmcraft_isobmff::FourCc(self.profile.fourcc()), self.w as u16, self.h as u16);
         self.signal.apply_to(&mut e, true);
@@ -1351,6 +1362,9 @@ struct DnxEncoder {
 }
 
 impl VideoEncoder for DnxEncoder {
+    fn diagnostic_backend(&self) -> Option<(&'static str, bool)> {
+        Some(("FilmCraft", false))
+    }
     fn sample_entry(&self) -> SampleEntry {
         let mut e = SampleEntry::dnx(filmcraft_isobmff::FourCc(*b"AVdh"), self.w as u16, self.h as u16);
         self.signal.apply_to(&mut e, true);
@@ -1413,6 +1427,9 @@ struct ApvEncoder {
 }
 
 impl VideoEncoder for ApvEncoder {
+    fn diagnostic_backend(&self) -> Option<(&'static str, bool)> {
+        Some(("FilmCraft", false))
+    }
     fn sample_entry(&self) -> SampleEntry {
         let apvc = filmcraft_isobmff::ApvConfig::parse(&self.enc.decoder_config_record()).unwrap_or_default();
         let mut e = SampleEntry::apv(apvc, self.w as u16, self.h as u16);
@@ -1503,6 +1520,9 @@ impl H264Encoder {
 }
 
 impl VideoEncoder for H264Encoder {
+    fn diagnostic_backend(&self) -> Option<(&'static str, bool)> {
+        Some(("FilmCraft", false))
+    }
     fn sample_entry(&self) -> SampleEntry {
         let cfg = filmcraft_isobmff::AvcConfig::parse(&self.enc.avcc()).unwrap_or_else(|_| {
             let (sps, pps) = self.enc.sps_pps();

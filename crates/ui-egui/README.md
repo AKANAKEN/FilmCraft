@@ -3,6 +3,28 @@
 The egui frontend draws panels and dialogs, and dispatches project changes through the engine.
 Interactive controls keep stable automation ids regardless of the interface language.
 
+## Rendering capabilities
+
+Help → Rendering Capabilities (`help.renderingCapabilities`) opens a read-only, live diagnostic
+window. It separates preview compositor availability, decoder policy/registration and observed
+counts, and the latest video export encoder selection. GPU device failures retain an explanation
+even after the status bar changes. The same snapshot is exposed as `perf.stats.capabilities`;
+headless callers receive the engine fields without the window-specific preview entry.
+
+The window never starts hardware probes or opens media. Unknown and busy snapshots are explicit.
+The latest encoder selection is historical, not a claim that an export is currently running;
+third-party encoders without diagnostic identity remain unknown. Decode counters cover the
+process lifetime; export renderer counters may have been reset and omit CPU-only pipelines.
+Separate controls govern effects rendering, video decoding and video encoding. Hardware-only
+formats are not advertised as having a software fallback.
+
+`capabilities.copy` copies JSON locally, with no project fields or media metadata. Driver diagnostics
+can contain system library paths; review them before sharing. `capabilities.close` closes the
+window. The primary rows have `capabilities.preview`, `.decoder`, `.decodeUsage`, `.encoder` and
+`.exportRendering` automation IDs. `capabilities_ui` tests the real menu, rows, copy and close controls
+without changing the project or undo history. Set `FILMCRAFT_UI_SNAPSHOT_DIR` for an offscreen wgpu
+screenshot; a requested screenshot failure fails the test rather than silently skipping it.
+
 ## Transition drop previews
 
 Dragging a video or audio transition over a compatible clip shows its actual time span, the

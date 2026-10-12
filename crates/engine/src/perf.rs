@@ -60,12 +60,64 @@ pub fn export_json() -> Value {
     json!({"hardware": {"frames": hw.frames, "sessions": hw.sessions, "declined": hw.declined}, "stages": stages})
 }
 
+/// Nonblocking capability/usage observations for Help and headless diagnostics. This never runs a
+/// driver probe, opens media, or initializes an encoder. Registration is not proof that an arbitrary
+/// stream/configuration is supported. An encoder selection is historical, not an active-job claim.
+pub fn capabilities_json() -> Value {
+    let hw = filmcraft_codecs::hw::hw_stats();
+    let decoded = filmcraft_codecs::gop_stats().frames;
+    let backend = filmcraft_codecs::hw::hw_backend_snapshot();
+    let enabled = filmcraft_codecs::hw::hardware_decoding();
+    let reason = if !enabled {
+        "Hardware decoding is off for new decoders; reopen media to replace existing decoders."
+    } else if backend.is_none() {
+        "Decoder registration snapshot is busy."
+    } else if backend.flatten().is_none() {
+        "No native hardware decoder backend is registered; browser-host decoders are separate."
+    } else if hw.fallbacks > 0 || hw.declined > 0 {
+        "Some streams used software decoding; per-stream reasons are not retained."
+    } else {
+        "Hardware may be used for supported streams; registration is not a per-stream availability guarantee."
+    };
+    let encoder = filmcraft_export::diagnostics::latest_encoder_selection();
+    let rendering = filmcraft_export::gpu_render_stats();
+    let formats: Vec<Value> = filmcraft_export::Format::ALL
+        .iter()
+        .map(|format| {
+            json!({
+                    "format": format,
+                    "label": format.label(),
+                    "softwareEncoder": format.has_builtin_encoder(),
+                    // No device probes here. An export's selection above provides configuration-specific evidence.
+            "hardwareAvailability": "unknown",
+                })
+        })
+        .collect();
+    json!({
+        "scope": "process",
+        "decoder": {
+            "enabled": enabled,
+            "backend": backend.flatten(),
+            "snapshotAvailable": backend.is_some(),
+            "availability": if backend.is_none() { "unknown" } else if backend.flatten().is_some() { "registered" } else { "unregistered" },
+            "reason": reason,
+            "observed": {"hardwareFrames": hw.frames, "softwareFrames": decoded.saturating_sub(hw.frames),
+                "sessions": hw.sessions, "declined": hw.declined, "fallbacks": hw.fallbacks},
+        },
+        "encoder": {"latest": encoder.as_ref().and_then(|v| v.as_ref()), "snapshotAvailable": encoder.is_some()},
+        "rendering": {"scope": "Process counters since startup or the last explicit counter reset; CPU-only frames are not counted.",
+            "gpuFrames": rendering.frames, "cpuFallbackFrames": rendering.fallbacks},
+        "formats": formats,
+    })
+}
+
 /// The engine's `perf.stats`.
 pub fn stats(s: &Session) -> Value {
     let running = s.jobs.iter().filter(|j| j.result.lock().map(|r| r.is_none()).unwrap_or(false)).count();
     json!({
         "decode": decode_json(),
         "export": export_json(),
+        "capabilities": capabilities_json(),
         "media": {"openSources": s.media.open_sources()},
         "jobs": {"total": s.jobs.len(), "running": running},
     })
@@ -76,6 +128,18 @@ mod tests {
     use serde_json::json;
 
     use crate::Session;
+
+    #[test]
+    fn capability_snapshot_is_observational_and_does_not_probe_encoders() {
+        let value = super::capabilities_json();
+        assert_eq!(value["scope"], "process");
+        assert!(value["decoder"]["observed"]["hardwareFrames"].is_number());
+        assert!(value["encoder"]["snapshotAvailable"].is_boolean());
+        let formats = value["formats"].as_array().unwrap();
+        assert_eq!(formats.iter().find(|f| f["format"] == "hevc").unwrap()["softwareEncoder"], false);
+        assert_eq!(formats.iter().find(|f| f["format"] == "h264").unwrap()["softwareEncoder"], true);
+        assert!(formats.iter().all(|f| f["hardwareAvailability"] == "unknown"));
+    }
 
     #[test]
     fn perf_stats_query_reports_decode_counters() {

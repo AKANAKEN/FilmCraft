@@ -3568,3 +3568,11 @@
 	Export the labels to a preset file…	Exporter les étiquettes dans un fichier de paramètre prédéfini…
 	Show the presets folder	Afficher le dossier des paramètres prédéfinis
 	Delete this preset	Supprimer ce paramètre prédéfini
+	Rendering Capabilities…	Capacités de rendu…
+	Rendering Capabilities	Capacités de rendu
+	Preview compositor	Compositeur d’aperçu
+	Video decoding	Décodage vidéo
+	Decoded frames (process lifetime)	Images décodées (depuis le démarrage)
+	Latest export encoder selection	Dernier encodeur d’export sélectionné
+	Export render counters	Compteurs de rendu d’export
+	Copy diagnostics	Copier le diagnostic

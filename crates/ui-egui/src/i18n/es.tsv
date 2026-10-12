@@ -3592,3 +3592,11 @@
 	Export the labels to a preset file…	Exportar las etiquetas a un archivo de ajuste preestablecido…
 	Show the presets folder	Mostrar la carpeta de ajustes preestablecidos
 	Delete this preset	Eliminar este ajuste preestablecido
+	Rendering Capabilities…	Capacidades de renderizado…
+	Rendering Capabilities	Capacidades de renderizado
+	Preview compositor	Compositor de vista previa
+	Video decoding	Descodificación de vídeo
+	Decoded frames (process lifetime)	Fotogramas descodificados (desde el inicio)
+	Latest export encoder selection	Última selección del codificador de exportación
+	Export render counters	Contadores de renderizado de exportación
+	Copy diagnostics	Copiar diagnóstico

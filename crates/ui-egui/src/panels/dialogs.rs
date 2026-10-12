@@ -31,6 +31,12 @@ pub fn show(app: &mut FilmcraftApp, ctx: &egui::Context) {
     }
     let mut open = true;
     match d {
+        Dialog::RenderingCapabilities => {
+            if !crate::capabilities::show(app, ctx) {
+                app.dialog = None;
+            }
+            return;
+        }
         Dialog::About => {
             egui::Window::new(tl!("About FilmCraft"))
                 .id(egui::Id::new("About FilmCraft"))

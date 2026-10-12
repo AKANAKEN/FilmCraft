@@ -3594,3 +3594,11 @@
 	Export the labels to a preset file…	ラベルをプリセットファイルに書き出し…
 	Show the presets folder	プリセットフォルダーを表示
 	Delete this preset	このプリセットを削除
+	Rendering Capabilities…	レンダリング機能…
+	Rendering Capabilities	レンダリング機能
+	Preview compositor	プレビューコンポジター
+	Video decoding	動画のデコード
+	Decoded frames (process lifetime)	デコード済みフレーム（起動以降）
+	Latest export encoder selection	最後に選択された書き出しエンコーダー
+	Export render counters	書き出しレンダリングのカウンター
+	Copy diagnostics	診断情報をコピー
