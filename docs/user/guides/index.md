@@ -9,3 +9,4 @@ order: 20
 - [Grade color with Lumetri Color](grade-color.md)
 - [Export your video](export-your-video.md)
 - [Move a timeline to or from another editor](exchange-timelines.md)
+- [Recover unsaved work](recover-unsaved-work.md)

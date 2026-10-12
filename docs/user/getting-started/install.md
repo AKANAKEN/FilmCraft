@@ -19,7 +19,6 @@ You can also install it with ArtCraft Launcher, which lists FilmCraft with the o
 |------------------------------------|-----------------------------------------|--------------------------------------------------|
 | 64-bit Intel or AMD                | `filmcraft-<version>-windows-x64.msi`   | `filmcraft-<version>-windows-x64-portable.zip`   |
 | Arm (Snapdragon and other Arm PCs) | `filmcraft-<version>-windows-arm64.msi` | `filmcraft-<version>-windows-arm64-portable.zip` |
-| 32-bit                             | `filmcraft-<version>-windows-x86.msi`   | `filmcraft-<version>-windows-x86-portable.zip`   |
 
 The installers and executables are code-signed. If FilmCraft does not open after you install it, see [FilmCraft does not open on Windows](../troubleshooting/filmcraft-does-not-open-on-windows.md).
 

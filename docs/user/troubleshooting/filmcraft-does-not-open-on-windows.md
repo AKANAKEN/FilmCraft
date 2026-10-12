@@ -14,12 +14,14 @@ Update your graphics driver, then start FilmCraft once or twice more. If it stil
 
 ## Fix
 
-1. Update your graphics driver from your GPU maker.
+1. Update your graphics driver from your GPU maker. This may not be enough: the Intel laptop in issue 1037 crashed the same way on the latest Intel driver.
 2. Start FilmCraft again, twice if needed. After two starts in a row that die before the window paints, FilmCraft moves on to a safer graphics mode by itself and keeps it. It shows a notice in the window, with a button to go back to the default.
 3. If it still does not open, set `WGPU_BACKEND` to pick the graphics backend. Open PowerShell, go to the folder that holds `filmcraft.exe`, and run:
 
         $env:WGPU_BACKEND = "dx12"
         & .\filmcraft.exe
+
+   With `dx12`, FilmCraft may start but run some effects on the CPU instead of the GPU.
 
 4. If that does not work either, try `vulkan` instead of `dx12` in the same two lines.
 5. The setting applies to this PowerShell window only. To undo it, run `Remove-Item Env:WGPU_BACKEND`.
@@ -32,4 +34,4 @@ By default FilmCraft starts only Vulkan and DirectX 12 on Windows, not OpenGL. S
 
 ## Still stuck?
 
-[Report a problem](send-a-bug-report.md) and include your `filmcraft.log`. Or ask in [Discord](https://discord.gg/artcraft). A report with a driver crash on Intel graphics is [issue 1037](https://github.com/storytold/filmcraft/issues/1037).
+[Report a problem](send-a-bug-report.md) and include your `filmcraft.log`. Or ask in [Discord](https://discord.gg/artcraft). Related reports are [issue 1037](https://github.com/storytold/filmcraft/issues/1037), a driver crash on Intel graphics, and [issue 1134](https://github.com/storytold/filmcraft/issues/1134), FilmCraft not opening on Windows 11.
