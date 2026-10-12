@@ -181,7 +181,7 @@ impl MediaSource for Encoded {
     }
     fn video_frame(&self, req: filmcraft_media::FrameRequest) -> filmcraft_media::Result<Arc<filmcraft_frame::VideoFrame>> {
         let f = self.inner.video_frame(req)?;
-        let rgba = f.to_rgba8().map_err(filmcraft_media::MediaError::Decode)?;
+        let rgba = f.to_rgba8().map_err(filmcraft_media::MediaError::FrameAccess)?;
         let m = filmcraft_color::spaces::to_f32(&filmcraft_color::spaces::gamut_matrix(Gamut::Bt709, self.target.gamut()));
         let curve = self.target.curve();
         let out: Vec<u8> = rgba

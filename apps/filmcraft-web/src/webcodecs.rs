@@ -547,7 +547,7 @@ impl WcSource {
             std::mem::take(&mut *s.out.borrow_mut())
         });
         for (pts, f) in out {
-            let f = if self.config.rotation != 0 { f.rotated(self.config.rotation).map_err(MediaError::Decode)? } else { f };
+            let f = if self.config.rotation != 0 { f.rotated(self.config.rotation).map_err(MediaError::FrameAccess)? } else { f };
             c.frames.insert(pts, Arc::new(f));
         }
         while c.frames.len() > CACHE_FRAMES {
