@@ -146,6 +146,9 @@ impl filmcraft_avi::ByteSource for FileSource {
         self.0.metadata().map(|m| m.len()).unwrap_or(0)
     }
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> std::io::Result<()> {
-        std::os::unix::fs::FileExt::read_exact_at(&self.0, buf, offset)
+        use std::io::{Read, Seek, SeekFrom};
+        let mut f = &self.0;
+        f.seek(SeekFrom::Start(offset))?;
+        f.read_exact(buf)
     }
 }
