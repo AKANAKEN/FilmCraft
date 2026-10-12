@@ -259,6 +259,26 @@ fn subclip_in_the_source_monitor_and_project_menu() {
     }
 }
 
+/// #1184: the clip's right-click menu offers Add Marker, which the M shortcut already did. The
+/// marker lands at the playhead, as the shortcut's does, not at the pointer.
+#[test]
+fn add_marker_from_the_clip_menu_marks_the_playhead() {
+    let mut d = Driver::new();
+    let c = d.v1(0);
+    d.exec("timeline.select", json!({"clips": [c.id.0]}));
+    d.exec("playhead.set", json!({"seconds": 1.0}));
+    let at = d.app().session.playhead();
+    let before = d.app().session.active_sequence().expect("a sequence").markers.clone();
+    assert!(before.iter().all(|m| m.start != at), "nothing at the playhead yet");
+    d.ok("ui.click", json!({"id": format!("timeline.clip.{}", c.id.0), "button": "right"}));
+    d.frames(3);
+    d.click("timeline.clipMenu.markers.add");
+    let markers = d.app().session.active_sequence().expect("a sequence").markers.clone();
+    assert_eq!(markers.len(), before.len() + 1, "the menu added one marker");
+    let added = markers.iter().find(|m| !before.iter().any(|b| b.id == m.id)).expect("the new marker");
+    assert_eq!(added.start, at, "at the playhead, as the shortcut does");
+}
+
 /// #201: the clip's right-click Speed/Duration… opens the dialog instead of applying 50%; OK
 /// applies the speed typed there, Cancel leaves the clip alone.
 #[test]

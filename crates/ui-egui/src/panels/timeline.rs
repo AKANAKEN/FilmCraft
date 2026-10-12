@@ -1919,6 +1919,7 @@ pub(crate) const CLIP_MENU: &[&[(&str, &str)]] = &[
         ("Fit to frame", "clip.fitToFrame"),
         ("Fill frame", "clip.fillFrame"),
     ],
+    &[("Add Marker", "markers.add")],
     &[("Reveal in Project", "clip.revealInProject"), ("Join Through Edits", "sequence.joinThroughEdits")],
 ];
 
