@@ -196,6 +196,11 @@ pub struct TimelineView {
     pub show_waveforms: bool,
     /// Follow playhead during playback (page scroll).
     pub follow: bool,
+    /// #1188: the playhead the Timeline drew last frame. When paused, a playhead that jumps
+    /// outside the visible window (Home / End, a go-to-edit command, a script) moves the view to
+    /// it; a playhead that did not move never moves the view, so the user keeps control.
+    #[serde(skip)]
+    pub last_playhead: filmcraft_time::Tick,
     pub fit_pending: bool,
     /// The zoom a fit gave an empty sequence (which fits its 1 s minimum): the first clip to arrive
     /// fits again, unless the zoom was changed in between.
@@ -231,6 +236,7 @@ impl Default for TimelineView {
             thumbnail_mode: ThumbnailMode::Head,
             show_waveforms: true,
             follow: true,
+            last_playhead: Default::default(),
             fit_pending: true,
             fit_empty: None,
             track_lanes: Default::default(),

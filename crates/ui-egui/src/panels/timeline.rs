@@ -323,6 +323,25 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
             v.scroll = v.target_scroll;
         }
     }
+    // #1188: paused, a playhead that jumped outside the visible window brings the view to it, as
+    // Premiere does for Home / End. Only a playhead that moved moves the view, and nothing acts
+    // while a drag is running, so the user keeps the scroll they set.
+    if !app.playback.playing && app.tl.drag.is_none() {
+        let v = &mut app.ui.timeline;
+        let ph = app.session.playhead();
+        if ph != v.last_playhead {
+            v.last_playhead = ph;
+            let w = content.width() as f64;
+            let px = (ph.seconds() - v.scroll) * v.pps;
+            if px < 0.0 {
+                v.scroll = ph.seconds().max(0.0);
+                v.target_scroll = v.scroll;
+            } else if px > w {
+                v.scroll = (ph.seconds() - w / v.pps).max(0.0);
+                v.target_scroll = v.scroll;
+            }
+        }
+    }
     // The view stays inside the Timeline's extent, however it was moved (wheel, scroll bar, zoom,
     // a script): scrolled past it, nothing is in view and the scroll bar has nowhere to show it.
     {
