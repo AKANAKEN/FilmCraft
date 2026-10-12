@@ -85,8 +85,9 @@ pub(crate) fn prepare_document_with_index(
             // whose media can never be found. An unbindable one is not an import failure
             // though, even in strict mode: it is not bin contents, and it costs only its own
             // sequence clip a placeholder, which the sequence converter reports by name.
-            let (placed, referenced) = adapter::imported_items(&project, b.bin).map_err(failure)?;
-            for (items, tolerate) in [(placed, best_effort), (referenced, true)] {
+            // Subclips are deliberately absent: they bind through the master they restrict.
+            let items = adapter::imported_items(&project, b.bin).map_err(failure)?;
+            for (items, tolerate) in [(items.placed, best_effort), (items.referenced, true)] {
                 // Keep decoder work sequential and bounded, without a session/history snapshot per batch.
                 for chunk in items.chunks(if tolerate { 1 } else { 64 }) {
                     checkpoint()?;

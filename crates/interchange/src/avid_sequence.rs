@@ -101,10 +101,11 @@ fn sources(p: &Project, bin: BinId) -> Result<(String, BTreeMap<[u8; 32], ItemId
     avid_catalog::validate_project(p, Some(bin))?;
     let mut uid = None;
     let mut ids = BTreeMap::new();
-    let (placed, referenced) = avid_catalog::imported_items(p, bin)?;
-    for id in placed.into_iter().chain(referenced) {
+    // Subclips are sources too: a sequence can cut from one, and its identity is the subclip's.
+    let items = avid_catalog::imported_items(p, bin)?;
+    for id in items.placed.into_iter().chain(items.referenced).chain(items.subclips) {
         let it = p.item(id).ok_or_else(|| bad("missing bin item"))?;
-        if it.as_media().is_none() {
+        if it.as_media().is_none() && !matches!(it.kind, filmcraft_project::ItemKind::Subclip { .. }) {
             continue;
         }
         let Some(raw) = it.metadata.get(avid_catalog::SOURCE_KEY) else { continue };
@@ -275,13 +276,24 @@ impl Walk<'_> {
                 }
                 let id = avid_catalog::full_identity(&c["source_id"])?;
                 let item = *self.sources.get(&id).ok_or_else(|| bad("source master is missing from selected bin"))?;
-                let m = self.project.item(item).and_then(|i| i.as_media()).ok_or_else(|| bad("source is not media"))?;
+                // A source may be a subclip. Resolve to the media it restricts, keeping its range:
+                // clips of a subclip are expressed in the parent's media time.
+                let (_, m, span) = self.project.resolve_media(item).ok_or_else(|| bad("source is not media, or its subclip chain does not reach any"))?;
                 let MediaRef::Components { channels, picture } = &m.media else {
-                    return Err(bad("source master must be bound to managed components first"));
+                    return Err(bad(if span.is_some() {
+                        "the master this subclip restricts must be bound to managed components first"
+                    } else {
+                        "source master must be bound to managed components first"
+                    }));
                 };
-                let source_in = self.clock.ticks(c, "start")?;
-                if add(source_in, length)? > m.info.duration {
-                    return Err(bad("source range exceeds master duration"));
+                let source_in = match span {
+                    Some(range) => add(range.start, self.clock.ticks(c, "start")?)?,
+                    None => self.clock.ticks(c, "start")?,
+                };
+                // A cut from a subclip stays inside that subclip, not merely inside its master.
+                let limit = span.map_or(m.info.duration, |range| range.end());
+                if add(source_in, length)? > limit {
+                    return Err(bad(if span.is_some() { "source range exceeds the subclip" } else { "source range exceeds master duration" }));
                 }
                 let track = u32::try_from(number(c, "source_track")?).map_err(|_| bad("source track overflow"))?;
                 let mapping = if self.kind == TrackKind::Audio {
@@ -524,10 +536,31 @@ fn plan_inner(p: &Project, bytes: &[u8], bin: BinId, best_effort: bool) -> Resul
         return Err(bad("report must identify exactly one matching source bin"));
     }
     let mut result = Plan { bin, sequences:Vec::new(), rejected:Vec::new(), warnings:vec!["Sequence audio output uses FilmCraft defaults: 48000 Hz stereo. Raw Avid attributes and auxiliary tracks are retained; color, mixer automation, markers and other effects are not translated.".into()] };
-    // Subclips are placed compositions too, but they are bin contents restricting a master, not
-    // timelines; the catalog imports them as items, so converting them here would reject them.
-    let compositions: Vec<_> =
-        list(matching[0], "mobs", 200_000)?.iter().filter(|m| m["kind"] == "CompositionMob" && m["user_placed"] == true && m["usage_code"] != 2).collect();
+    // Not every placed composition is a timeline. A bin also holds subclips, saved effect
+    // templates, group clips and motion effects, each a composition mob with its own usage code.
+    // Converting one produces a sequence item that is not a sequence, so name what was skipped
+    // instead and leave it to the parts of the importer that model those kinds.
+    let mut skipped = BTreeMap::<&str, usize>::new();
+    let mut compositions = Vec::new();
+    for m in list(matching[0], "mobs", 200_000)? {
+        if m["kind"] != "CompositionMob" || m["user_placed"] != true {
+            continue;
+        }
+        match m["usage_code"].as_i64() {
+            // Imported as bin contents by the catalog, each restricting one master.
+            Some(2) => *skipped.entry("subclips").or_default() += 1,
+            // An Avid effect template does not describe FilmCraft's own effects.
+            Some(3) => *skipped.entry("saved effect templates").or_default() += 1,
+            // Grouped media: the selector that chooses an angle is not yet decoded.
+            Some(4) => *skipped.entry("group clips").or_default() += 1,
+            // A retime, with its own rendered media when the effect has been rendered.
+            Some(6) => *skipped.entry("motion effect clips").or_default() += 1,
+            _ => compositions.push(m),
+        }
+    }
+    for (kind, count) in &skipped {
+        result.warnings.push(format!("{count} {kind} in this bin are not timelines and were not converted into sequences."));
+    }
     if compositions.len() > 1024 {
         return Err(bad("too many compositions"));
     }

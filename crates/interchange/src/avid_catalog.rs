@@ -500,27 +500,44 @@ pub(crate) fn validate_project(project: &Project, parent: Option<BinId>) -> Resu
 /// different promises: the bin's own contents are what an import is accountable for, while a
 /// referenced source that cannot be bound only costs its sequence clip a placeholder. Other
 /// sub-bins are the user's and are never treated as sources.
-pub fn imported_items(project: &Project, bin: BinId) -> Result<(Vec<filmcraft_project::ItemId>, Vec<filmcraft_project::ItemId>)> {
+pub struct ImportedItems {
+    /// Masters the Avid bin itself placed. An import is accountable for these.
+    pub placed: Vec<filmcraft_project::ItemId>,
+    /// Masters its sequences reference without placing, in the referenced sub-bin.
+    pub referenced: Vec<filmcraft_project::ItemId>,
+    /// Subclips. These have no media of their own: they bind through the master they restrict,
+    /// so offering one to media binding would fail the item and, strictly, the whole import.
+    /// Sequence conversion still needs them, because a sequence can cut from a subclip.
+    pub subclips: Vec<filmcraft_project::ItemId>,
+}
+pub fn imported_items(project: &Project, bin: BinId) -> Result<ImportedItems> {
     let b = project.root.find_bin(bin).ok_or_else(|| bad("missing imported bin"))?;
-    // Only masters. A subclip has no media of its own: it binds through the master it restricts,
-    // so offering one to media binding would fail the item and, strictly, the whole import.
-    let media = |id: &filmcraft_project::ItemId| project.item(*id).is_some_and(|i| i.as_media().is_some());
-    let mut placed = Vec::new();
-    let mut referenced = Vec::new();
+    let mut out = ImportedItems { placed: Vec::new(), referenced: Vec::new(), subclips: Vec::new() };
+    let sort = |id: filmcraft_project::ItemId, into: &mut Vec<filmcraft_project::ItemId>, subclips: &mut Vec<filmcraft_project::ItemId>| match project
+        .item(id)
+        .map(|i| &i.kind)
+    {
+        Some(ItemKind::Media(_)) => into.push(id),
+        Some(ItemKind::Subclip { .. }) => subclips.push(id),
+        _ => {}
+    };
     for child in &b.children {
         match child {
-            BinEntry::Item(id) if media(id) => placed.push(*id),
-            BinEntry::Item(_) => {}
+            BinEntry::Item(id) => sort(*id, &mut out.placed, &mut out.subclips),
             BinEntry::Bin(sub) if sub.name == REFERENCED_BIN => {
-                referenced.extend(sub.children.iter().filter_map(|e| match e {
-                    BinEntry::Item(id) if media(id) => Some(*id),
-                    _ => None,
-                }));
+                for e in &sub.children {
+                    if let BinEntry::Item(id) = e {
+                        let (mut referenced, mut subclips) = (Vec::new(), Vec::new());
+                        sort(*id, &mut referenced, &mut subclips);
+                        out.referenced.append(&mut referenced);
+                        out.subclips.append(&mut subclips);
+                    }
+                }
             }
             BinEntry::Bin(_) => {}
         }
     }
-    Ok((placed, referenced))
+    Ok(out)
 }
 fn allocate_name(names: &mut BTreeSet<String>, base: &str) -> Result<String> {
     if names.insert(base.into()) {

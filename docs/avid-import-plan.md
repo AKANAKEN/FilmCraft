@@ -33,6 +33,18 @@ Avid placed in it. FilmCraft binds media to an item rather than to a timeline cl
 those items a converted timeline could neither play nor be relinked. Metadata and media
 transfers are unchanged: they import placed bin contents only.
 
+Only timelines become sequences. A bin's placed compositions also include subclips, saved effect
+templates, group clips and motion effects; each is reported by kind and count rather than
+converted into a sequence item that is not a sequence. Saved effect templates, group clips and
+motion effect clips are recognized and deliberately not transferred.
+
+Subclips transfer as subclips. A placed Avid subclip becomes a FilmCraft subclip restricting the
+master it points at, and a sequence that cuts from one keeps referencing it. Avid records a
+subclip's range in two forms and both are read; a range reaching past the end of the master it
+restricts is shortened to that master and reported. A subclip binds media through its master, not
+on its own. Composition mobs that are not a plain range of one available master — several masters,
+an empty range, a start with no usable end — are reported by name instead of approximated.
+
 Imported sources use FilmCraft's **Link Media…** dialog when components need reconnecting.
 Search only finds candidates. Choose **Link N files** to apply the selected replacement and,
 when enabled, other unique matches. Duplicate copies require an explicit choice. Leaving A1

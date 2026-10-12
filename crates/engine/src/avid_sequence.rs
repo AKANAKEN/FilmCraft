@@ -289,6 +289,69 @@ mod tests {
         assert!(!s.project.item(clip.item).unwrap().as_media().unwrap().offline);
     }
     #[test]
+    fn placed_compositions_that_are_not_timelines_are_named_rather_than_converted() {
+        // A bin holds subclips, saved effect templates, group clips and motion effects alongside
+        // its sequences. Each is a composition mob, and converting one yields a sequence item
+        // that is not a sequence.
+        let mut v = fixture();
+        let rate = json!({"numerator":24,"denominator":1});
+        for (usage, name) in [(3, "Resize"), (4, "Angles (2cam)"), (6, "Fast (48.00 FPS)")] {
+            let mob = json!({"kind":"CompositionMob","name":name,"live":true,"user_placed":true,
+                "id":{"raw":format!("{usage:02}").repeat(32),"byte_order":"little"},"length":48,"rate":rate,"usage_code":usage,
+                "tracks":[{"index":1,"component":{"class":"SEQU","media_kind":1,"length":48,"rate":rate,"components":[]}}]});
+            v["bins"][0]["mobs"].as_array_mut().unwrap().push(mob);
+        }
+        let (mut s, bin) = session(&v);
+        let plan = adapter::plan_best_effort(&s.project, &serde_json::to_vec(&v).unwrap(), bin).unwrap();
+        for kind in ["saved effect templates", "group clips", "motion effect clips"] {
+            assert!(plan.warnings.iter().any(|w| w.contains(kind)), "{kind} unreported in {:?}", plan.warnings);
+        }
+        let (ids, rejected) = adapter::apply_supported(Arc::make_mut(&mut s.project), plan).unwrap();
+        assert!(rejected.is_empty(), "none of them is rejected either: {rejected:?}");
+        // Only the fixture's own sequence becomes a sequence.
+        for id in &ids {
+            let name = s.project.item(*id).map(|i| i.name.clone()).unwrap_or_default();
+            assert!(!["Resize", "Angles (2cam)", "Fast (48.00 FPS)"].contains(&name.as_str()), "{name} was converted into a sequence");
+        }
+        assert_eq!(ids.len(), 1);
+    }
+    #[test]
+    fn a_sequence_cutting_from_a_subclip_resolves_it_in_the_masters_media_time() {
+        // Cut bins reference subclips, not only masters. A clip of a subclip is expressed in the
+        // parent's media time, so the subclip's own offset has to be added to the component's.
+        let mut v = fixture();
+        let master = v["bins"][0]["catalog"]["clips"][0].clone();
+        let rate = json!({"numerator":24,"denominator":1});
+        // A subclip over frames 24..72 of its master, and a sequence cutting 12 frames from 6
+        // frames into that subclip: 30 frames into the master.
+        let sub = json!({"kind":"CompositionMob","name":"Trim.sub.01","live":true,"user_placed":true,
+            "id":{"raw":"06".repeat(32),"byte_order":"little"},"length":96,"rate":master["rate"],"usage_code":2,
+            "attributes":{"_START":24,"_END":72},
+            "tracks":[{"index":1,"component":{"class":"SCLP","media_kind":2,"length":96,"rate":master["rate"],
+                "source_id":master["id"],"source_track":1,"start":0}}]});
+        v["bins"][0]["mobs"].as_array_mut().unwrap().push(sub.clone());
+        let cut = json!({"class":"SCLP","length":12,"rate":rate,"media_kind":2,"source_id":sub["id"],"source_track":1,"start":6});
+        let seq = json!({"kind":"CompositionMob","name":"Cut from a subclip","live":true,"user_placed":true,
+            "id":{"raw":"07".repeat(32),"byte_order":"little"},"length":12,"rate":rate,
+            "attributes":{"SEQUERNCE_FORMAT_STRING":"HD 1080p/24"},
+            "tracks":[{"index":1,"component":{"class":"TCCP","media_kind":3,"length":12,"rate":rate,"start":86400,"fps":24,"flags":0}},
+                {"index":1,"component":{"class":"SEQU","media_kind":2,"length":12,"rate":rate,"components":[cut]}}]});
+        v["bins"][0]["mobs"].as_array_mut().unwrap().push(seq);
+        let (mut s, bin) = session(&v);
+        let plan = adapter::plan_best_effort(&s.project, &serde_json::to_vec(&v).unwrap(), bin).unwrap();
+        assert!(!plan.warnings.iter().any(|w| w.contains("source master is missing")), "{:?}", plan.warnings);
+        let (ids, rejected) = adapter::apply_supported(Arc::make_mut(&mut s.project), plan).unwrap();
+        assert!(rejected.is_empty(), "{rejected:?}");
+        let id = *ids.iter().find(|id| s.project.item(**id).is_some_and(|i| i.name == "Cut from a subclip")).expect("the sequence that cuts from the subclip");
+        let q = s.project.sequence(id).expect("a sequence");
+        let clip = &q.audio_tracks[0].items[0];
+        // The clip references the subclip itself, and reads 24 + 6 = 30 frames into the master.
+        assert!(matches!(s.project.item(clip.item).map(|i| &i.kind), Some(filmcraft_project::ItemKind::Subclip { .. })));
+        assert_eq!(clip.source_in, FrameRate::FPS_24.tick_of(30), "the subclip offset is added to the cut");
+        assert_eq!(clip.duration, FrameRate::FPS_24.tick_of(12));
+        assert!(!s.project.item(clip.item).and_then(|i| i.as_media()).is_some_and(|m| m.offline));
+    }
+    #[test]
     fn a_multi_component_auxiliary_track_warns_without_placeholdering_the_sequence() {
         // Feature-film bins carry kind-7 auxiliary tracks holding more than the single filler
         // component this reader accepts. That decision belongs to the track, so the real edits
