@@ -69,7 +69,7 @@
 	Close	닫기
 	Close All Other Projects	다른 모든 프로젝트 닫기
 	Close All Projects	모든 프로젝트 닫기
-	Close Gap	간격 닫기
+	Close Gap	빈 구간 제거
 	Close Project	프로젝트 닫기
 	Color Management…	색상 관리…
 	Color Matte…	색상 매트…
@@ -114,7 +114,7 @@
 	Events	이벤트
 	Export	내보내기
 	Export As Motion Graphics Template…	모션 그래픽 템플릿으로 내보내기…
-	Extract	추출
+	Extract	구간 삭제 (간격 닫기)
 	Extract Audio	오디오 추출
 	Field Options…	필드 옵션…
 	File	파일
@@ -127,7 +127,7 @@
 	Find…	찾기…
 	Fit	맞춤
 	Fit to frame	프레임에 맞춤
-	Flatten	평면화
+	Flatten	멀티카메라 클립 펼치기
 	Forest	숲
 	Frame Blending	프레임 혼합
 	Frame Hold Options…	프레임 고정 옵션…
@@ -139,7 +139,7 @@
 	Full	전체
 	Generate Audio Waveform	오디오 파형 생성
 	Get Media File Properties for	미디어 파일 속성 가져오기:
-	Go to Gap	간격으로 이동
+	Go to Gap	빈 구간으로 이동
 	Go to In	인점으로 이동
 	Go to Next Caption Segment	다음 자막 구간으로 이동
 	Go to Next Marker	다음 마커로 이동
@@ -175,7 +175,7 @@
 	Learning	학습
 	Left	왼쪽
 	Libraries	라이브러리
-	Lift	들어 올리기
+	Lift	구간 삭제 (간격 유지)
 	Light	밝게
 	Link	연결
 	Link Media…	미디어 연결…
@@ -491,7 +491,7 @@
 	Save Preset	프리셋 저장
 	Name:	이름:
 	Type	유형
-	Scale	비율
+	Scale	배율
 	Anchor to In Point	인점에 고정
 	Anchor to Out Point	아웃점에 고정
 	Without keyframes	키프레임 없이
@@ -559,8 +559,8 @@
 	Speech-to-text turns the dialogue into editable text.	음성-텍스트 변환으로 대화를 편집 가능한 텍스트로 바꿉니다.
 	This build has no speech-to-text; import a transcript with transcript.set.	이 빌드에는 음성-텍스트 변환 기능이 없습니다. transcript.set으로 대본을 가져오세요.
 	Transcribe	대본 작성
-	Extract selected text	선택한 텍스트 추출
-	Lift selected text	선택한 텍스트 들어 올리기
+	Extract selected text	선택한 텍스트 구간 삭제 (간격 닫기)
+	Lift selected text	선택한 텍스트 구간 삭제 (간격 유지)
 	Remove filler words	군더더기 단어 제거
 	Create captions	자막 만들기
 	Speaker	화자
@@ -653,8 +653,8 @@
 	Insert (,)	삽입 (,)
 	Overwrite (.)	덮어쓰기 (.)
 	Export Frame (Shift+E)	프레임 내보내기 (Shift+E)
-	Lift (;)	들어 올리기 (;)
-	Extract (')	추출 (')
+	Lift (;)	구간 삭제 (간격 유지) (;)
+	Extract (')	구간 삭제 (간격 닫기) (')
 	Export Frame: use Export mode (M6)	프레임 내보내기: 내보내기 모드 사용 (M6)
 	Button Editor	버튼 편집기
 	Multi-Camera Record on	멀티카메라 녹화 켜기
@@ -1908,7 +1908,7 @@
 	Level 3	레벨 3
 	Level 4	레벨 4
 	Levels	레벨
-	Lifted blacks, softer contrast, muted colour	검정은 들어 올리고 대비는 부드럽게, 색은 차분하게
+	Lifted blacks, softer contrast, muted colour	검정 레벨을 높이고 대비를 부드럽게, 색은 차분하게
 	Light 1	조명 1
 	Light 2	조명 2
 	Light 3	조명 3
