@@ -1,6 +1,7 @@
 {
   "identical": {
     "\tHDR": "Standard format, codec, profile, color model or specification name; spelling is part of its identity.",
+    "\tFLAC": "Standard format, codec, profile, color model or specification name; spelling is part of its identity.",
     "\tLUT": "Standard format, codec, profile, color model or specification name; spelling is part of its identity.",
     "\tOpenType": "Standard format, codec, profile, color model or specification name; spelling is part of its identity.",
     "\tASC CDL": "Standard format, codec, profile, color model or specification name; spelling is part of its identity.",
@@ -115,6 +116,20 @@
     }
   },
   "collisions": {
+    "\tPřidat do oblíbených": {
+      "sources": [
+        "Add to Favorites",
+        "Add to favorites"
+      ],
+      "reason": "Same meaning and action; source differs only in capitalization. Czech sentence case is identical."
+    },
+    "\tOdebrat z oblíbených": {
+      "sources": [
+        "Remove from Favorites",
+        "Remove from favorites"
+      ],
+      "reason": "Same meaning and action; source differs only in capitalization. Czech sentence case is identical."
+    },
     "\tPřidat titulek na pozici přehrávací hlavy": {
       "sources": [
         "Add Caption at Playhead",

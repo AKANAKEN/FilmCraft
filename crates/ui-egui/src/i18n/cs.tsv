@@ -2804,8 +2804,6 @@
 	Ignore Audio	Ignorovat zvuk
 	Ignore Video	Ignorovat video
 	Apply a cut at each detected cut point	Provést střih v každém zjištěném střihovém bodě
-	Create a subclip for each detected cut point	Vytvořit podklip pro každý zjištěný střihový bod
-	Generate clip markers at each detected cut point	Vygenerovat značky klipu v každém zjištěném střihovém bodě
 	Sensitivity:	Citlivost:
 	Normalize Mix Track to:	Normalizovat mixážní stopu na:
 	Disabled clips	Vypnuté klipy
@@ -3561,3 +3559,34 @@
 	Use Effect Shutter Angle	Použít úhel závěrky efektu
 	Settings	Nastavení
 	1/2	1/2
+# Strings added on main after the Czech catalog was drafted (graphics safe mode, FLAC and EXR export,
+# label colour presets, renamed Scene Edit Detection options)
+	0 fastest, 8 smallest	0 nejrychlejší, 8 nejmenší
+	A file dialog is already open	Dialog pro výběr souboru je již otevřený
+	Add to favorites	Přidat do oblíbených
+	Remove from favorites	Odebrat z oblíbených
+	An earlier start failed with the default graphics. Updating the graphics driver usually fixes this.	Předchozí spuštění s výchozí grafikou selhalo. Obvykle pomůže aktualizovat ovladač grafiky.
+	Appearance Settings…	Nastavení vzhledu…
+	Compression	Komprese
+	Compression Level	Úroveň komprese
+	Create a bin of subclips from each detected cut point	Vytvořit přihrádku s podklipem pro každý zjištěný střihový bod
+	Create a clip marker at each detected cut point	Vytvořit značku klipu v každém zjištěném střihovém bodě
+	Delete this preset	Odstranit toto přednastavení
+	DirectX 12 only	Pouze DirectX 12
+	software rendering	softwarové vykreslování
+	Drag inward to round the corners	Tažením dovnitř zaoblíte rohy
+	Export the labels to a preset file…	Exportovat štítky do souboru přednastavení…
+	Import a preset file…	Importovat soubor přednastavení…
+	FLAC	FLAC
+	FLAC (lossless)	FLAC (bezeztrátový)
+	FLAC 48 kHz 24-bit	FLAC 48 kHz 24bitový
+	FLAC, stereo 48 kHz 24-bit, lossless	FLAC, stereo 48 kHz 24bitový, bezeztrátový
+	Label Color Presets	Přednastavení barev štítků
+	Revert to the preset's colors and names	Vrátit barvy a názvy z přednastavení
+	Safe graphics mode: {mode}	Bezpečný grafický režim: {mode}
+	Show the presets folder	Zobrazit složku přednastavení
+	The default graphics are used from the next start.	Výchozí grafika se použije od příštího spuštění.
+	Use Default Graphics	Použít výchozí grafiku
+	ZIP (1 scan line)	ZIP (1 řádek obrazu)
+	ZIP (16 scan lines)	ZIP (16 řádků obrazu)
+	{name} (Modified)	{name} (upraveno)
