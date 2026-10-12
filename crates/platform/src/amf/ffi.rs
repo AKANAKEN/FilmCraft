@@ -7,9 +7,15 @@
 
 use std::ffi::c_void;
 use std::sync::OnceLock;
+#[cfg(target_os = "windows")]
 use windows::Win32::Foundation::HMODULE;
+#[cfg(target_os = "windows")]
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW};
+#[cfg(target_os = "windows")]
 use windows::core::{PCSTR, w};
+
+#[cfg(not(target_os = "windows"))]
+use libloading::Library;
 
 pub const AMF_OK: i32 = 0;
 pub const AMF_FAIL: i32 = 1;
@@ -300,7 +306,10 @@ pub struct AmfBuffer {
 }
 
 pub struct AmfRuntime {
-    module: HMODULE,
+    #[cfg(target_os = "windows")]
+    _module: HMODULE,
+    #[cfg(not(target_os = "windows"))]
+    _lib: Library,
     factory: *mut AmfFactory,
 }
 
@@ -315,12 +324,13 @@ pub fn runtime() -> Result<&'static AmfRuntime, String> {
     RUNTIME.get_or_init(load_runtime).as_ref().map_err(Clone::clone)
 }
 
+#[cfg(target_os = "windows")]
 fn load_runtime() -> Result<AmfRuntime, String> {
     // SAFETY: loads amfrt64.dll securely from system32.
-    let module = unsafe { LoadLibraryExW(w!("amfrt64.dll"), None, LOAD_LIBRARY_SEARCH_SYSTEM32) }.map_err(|e| format!("amfrt64.dll not available: {e}"))?;
+    let _module = unsafe { LoadLibraryExW(w!("amfrt64.dll"), None, LOAD_LIBRARY_SEARCH_SYSTEM32) }.map_err(|e| format!("amfrt64.dll not available: {e}"))?;
 
     // SAFETY: resolves AMFInit exported symbol with expected signature.
-    let p_init = unsafe { GetProcAddress(module, PCSTR(c"AMFInit".as_ptr().cast())) }.ok_or_else(|| "amfrt64.dll lacks AMFInit symbol".to_string())?;
+    let p_init = unsafe { GetProcAddress(_module, PCSTR(c"AMFInit".as_ptr().cast())) }.ok_or_else(|| "amfrt64.dll lacks AMFInit symbol".to_string())?;
 
     // SAFETY: transmuting function pointer of known signature.
     let init_fn: AmfInitFn = unsafe { std::mem::transmute(p_init) };
@@ -334,7 +344,28 @@ fn load_runtime() -> Result<AmfRuntime, String> {
         return Err(format!("AMFInit failed with code {res}"));
     }
 
-    Ok(AmfRuntime { module, factory })
+    Ok(AmfRuntime { _module, factory })
+}
+
+#[cfg(not(target_os = "windows"))]
+fn load_runtime() -> Result<AmfRuntime, String> {
+    // SAFETY: loads libamfrt64.so.1 securely from system library search path.
+    let lib = unsafe { Library::new("libamfrt64.so.1").or_else(|_| Library::new("libamfrt64.so")) }.map_err(|e| format!("libamfrt64.so not available: {e}"))?;
+
+    let init_fn: AmfInitFn = unsafe {
+        let sym = lib.get::<AmfInitFn>(b"AMFInit\0").map_err(|e| format!("AMFInit not found: {e}"))?;
+        *sym
+    };
+
+    let mut factory = std::ptr::null_mut();
+    let full_version = (1u64 << 48) | (4u64 << 32);
+    // SAFETY: calling AMFInit with valid out-pointer.
+    let res = unsafe { init_fn(full_version, &mut factory) };
+    if res != AMF_OK || factory.is_null() {
+        return Err(format!("AMFInit failed with code {res}"));
+    }
+
+    Ok(AmfRuntime { _lib: lib, factory })
 }
 
 impl AmfRuntime {

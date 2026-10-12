@@ -82,12 +82,15 @@ impl Session {
             return Err(format!("AMF CreateContext failed ({res})"));
         }
 
-        // SAFETY: calling AMFContext::InitDX11 with D3D11 device.
-        let res = unsafe { ((*(*context).vtbl).init_dx11)(context, device.as_raw(), AMF_DX11_1) };
-        if res != AMF_OK {
-            // SAFETY: releasing context on initialization failure.
-            unsafe { ((*(*context).vtbl).release)(context) };
-            return Err(format!("AMF InitDX11 failed ({res})"));
+        #[cfg(target_os = "windows")]
+        {
+            // SAFETY: calling AMFContext::InitDX11 with D3D11 device.
+            let res = unsafe { ((*(*context).vtbl).init_dx11)(context, device.as_raw(), AMF_DX11_1) };
+            if res != AMF_OK {
+                // SAFETY: releasing context on initialization failure.
+                unsafe { ((*(*context).vtbl).release)(context) };
+                return Err(format!("AMF InitDX11 failed ({res})"));
+            }
         }
 
         let codec = cfg.profile.codec();
