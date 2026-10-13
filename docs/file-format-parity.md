@@ -92,4 +92,5 @@ validation in Avid and Pro Tools, DVD / Blu-ray / DCP / broadcast MXF delivery.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-13 | minor | Stills: EXIF Orientation applied to JPEG, PNG, WebP and TIFF (#1583); YCbCr TIFF and DNG not yet |
 | 2026-10-10 | major | Created: format-by-format comparison with Premiere 26.5.2 from the import / export registries, crate READMEs, the installed bundle's exporter listings and open issues |
