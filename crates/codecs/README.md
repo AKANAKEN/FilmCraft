@@ -20,3 +20,11 @@ Run `cargo test --release -p filmcraft-codecs` and the workspace's
 fixture generator and oracle, with generated media under `target/fixtures/`.
 Module tests also exercise synthetic headers and malformed input. No media
 fixtures are committed to this crate.
+
+MOV sources recognize the exact QuickTime `logs` identifier
+`com.apple.rec2020.apple-log`. It selects the existing Apple Log / Rec.2020
+input transform; `colr` or the decoder still supplies matrix and range.
+Rec.2020 primaries, filenames, unknown identifiers and malformed tags do not
+imply Apple Log. Interpret Footage overrides continue to take precedence.
+`tests/apple_log_metadata.rs` generates original ProRes MOVs to test detection,
+missing `colr`, malformed metadata and decoded frame colour.
