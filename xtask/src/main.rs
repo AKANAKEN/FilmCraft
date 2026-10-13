@@ -107,6 +107,8 @@ const SAME_LAYER: &[(&str, &str)] = &[
     ("gpu", "render"),
     ("cli", "filmcraft"),
     ("tts", "tts-text"),
+    // Native UI owns the asynchronous check/stage presentation; updater remains L5 and has no UI dependency.
+    ("ui-egui", "updater"),
 ];
 
 /// Crates that must not appear below L5 (UI toolkits, windowing, OS audio/menus).
