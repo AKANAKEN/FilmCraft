@@ -258,7 +258,45 @@ impl FrameStreamInfo {
             // Only what the picture format depends on counts: encoders such as SVT-AV1 put a
             // provisional sequence header in `av1C` whose coding tool flags (CDEF, restoration,
             // warped motion…) differ from the in-band one, and decoders follow the in-band one.
-            FrameCodec::Av1 => obus(sample).into_iter().any(|(t, p)| t == 1 && self.sequence_header.as_deref().is_none_or(|s| av1_format(s) != av1_format(p))),
+            //
+            // Consider AV1 parameters changed only when profile, bit depth, mono, or chroma
+            // subsampling change; ignore colour primaries / transfer / matrix differences that many
+            // muxers put in av1C and which don't necessarily require reconfiguring the hardware.
+            //
+            // This relaxed rule is only enabled when the environment variable
+            // FILMCRAFT_IGNORE_AV1_COLOR_MISMATCH is set (non-empty). Default behaviour is unchanged.
+            FrameCodec::Av1 => {
+                let ignore_color = std::env::var_os("FILMCRAFT_IGNORE_AV1_COLOR_MISMATCH").is_some();
+                obus(sample).into_iter().any(|(t, p)| {
+                    if t != 1 {
+                        return false;
+                    }
+                    let cfg_fmt = self.sequence_header.as_deref().and_then(|s| av1_format(s));
+                    let inband_fmt = av1_format(p);
+
+                    match (cfg_fmt, inband_fmt) {
+                        (Some((cfg_profile, _cfg_w, _cfg_h, cfg_color)), Some((in_profile, _in_w, _in_h, in_color))) => {
+                            if ignore_color {
+                                // Compare only profile, bit depth, mono, and chroma subsampling.
+                                let bit_depth_changed = cfg_color.bit_depth != in_color.bit_depth;
+                                let mono_changed = cfg_color.mono_chrome != in_color.mono_chrome;
+                                let subsampling_changed = cfg_color.subsampling_x != in_color.subsampling_x || cfg_color.subsampling_y != in_color.subsampling_y;
+                                cfg_profile != in_profile || bit_depth_changed || mono_changed || subsampling_changed
+                            } else {
+                                // Strict: any difference in the parsed av1_format is a change.
+                                cfg_profile != in_profile || cfg_color != in_color || _cfg_w != _in_w || _cfg_h != _in_h
+                            }
+                        }
+                        // if we don't have a stored config but the sample has a header, treat as change
+                        (None, Some(_)) => true,
+                        (Some(_), None) => {
+                            // av1C present but sample lacks a header: no change
+                            false
+                        }
+                        _ => false,
+                    }
+                })
+            }
             FrameCodec::Vp9 => {
                 self.picture_params(sample).is_some_and(|p| p.size != self.size || p.bit_depth != self.bit_depth || p.subsampling != self.subsampling)
             }
