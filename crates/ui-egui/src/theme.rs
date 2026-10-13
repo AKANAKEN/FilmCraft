@@ -651,13 +651,13 @@ mod tests {
         let ctx = egui::Context::default();
         let standard = Tokens::for_kind(ThemeKind::Medium);
         apply_visuals(&ctx, &standard);
-        assert_eq!(ctx.style().visuals.selection.bg_fill, standard.row_selected);
-        assert_eq!(ctx.style().visuals.selection.stroke.color, standard.text);
+        assert_eq!(ctx.global_style().visuals.selection.bg_fill, standard.row_selected);
+        assert_eq!(ctx.global_style().visuals.selection.stroke.color, standard.text);
 
         let custom = standard.with_appearance(Some([0xe0, 0x45, 0x7b]), false);
         apply_visuals(&ctx, &custom);
-        assert_eq!(ctx.style().visuals.selection.bg_fill, custom.accent);
-        assert_eq!(ctx.style().visuals.selection.stroke.color, Color32::WHITE);
+        assert_eq!(ctx.global_style().visuals.selection.bg_fill, custom.accent);
+        assert_eq!(ctx.global_style().visuals.selection.stroke.color, Color32::WHITE);
     }
 
     /// Chinese media and track names must render even when the interface stays in English.
