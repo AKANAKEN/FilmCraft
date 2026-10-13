@@ -126,6 +126,7 @@ fn what_the_gpu_does_not_take_goes_to_the_software_encoder() {
         (after.frames - before.frames, after.declined - before.declined)
     };
     // two-pass VBR is a software feature (both passes ask, both are declined)
+    // if NVENC is present, it and VA-API see each pass and each declines
     assert_eq!(run("two_pass.mp4", &|s| s.bitrate_mode = BitrateMode::Vbr2Pass), (0, 2));
     // MXF H.264 is an Annex B stream with in-band parameter sets: the software encoder's
     assert_eq!(
@@ -136,7 +137,8 @@ fn what_the_gpu_does_not_take_goes_to_the_software_encoder() {
         (0, 1)
     );
     // an odd frame size is rounded to even by the pipeline, so the GPU still takes it (cropped in the SPS)
-    assert_eq!(run("odd.mp4", &|s| s.frame_size = Some((641, 359))), (24, 0));
+    let odd = run("odd.mp4", &|s| s.frame_size = Some((641, 359)));
+    assert_eq!(odd, if filmcraft_platform::nvenc::available() { (24, 0) } else { (0, 1) });
     // Off never touches the hardware encoder
     assert_eq!(run("off.mp4", &|s| s.hardware_encoding = HardwareEncoding::Off), (0, 0));
     // the decoded file of a declined export is fine
