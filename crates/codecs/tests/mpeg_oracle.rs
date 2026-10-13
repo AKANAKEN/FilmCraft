@@ -457,29 +457,26 @@ fn transport_stream_h264_recovery_points() {
     }
 }
 
-/// Gradual decoder refresh: a stream cut at a recovery point starts with inter pictures whose
-/// references are missing. They are presented (imperfect until the refresh wave completes); opening,
-/// decoding every frame and seeking never fail.
+/// Gradual decoder refresh (recovery_frame_cnt > 0): its recovery points are not key units, so a
+/// stream cut mid-refresh is refused cleanly.
 #[test]
-fn transport_stream_h264_intra_refresh_cut_decodes_every_frame() {
+fn transport_stream_h264_intra_refresh_cut_is_refused() {
     let ff = filmcraft_testkit::require_ffmpeg!();
     let f = make(&ff, "ts_h264_intra_refresh.ts");
     let data = bytes(&f);
     let idx = filmcraft_mpegts::open(&data[..]).unwrap();
     let vi = idx.streams.iter().position(|s| s.codec == filmcraft_mpegts::Codec::H264).unwrap();
-    let keys: Vec<usize> = (0..idx.streams[vi].units.len()).filter(|&i| idx.streams[vi].units[i].key).collect();
-    assert!(keys.len() >= 4, "{} key units in {} (IDR only: 1)", keys.len(), idx.streams[vi].units.len());
-    let head = idx.read_unit(&data[..], vi, keys[2]).unwrap();
+    // recovery points with recovery_frame_cnt > 0 are not random access points: only the IDR is key
+    let n = idx.streams[vi].units.len();
+    let keys: Vec<usize> = (0..n).filter(|&i| idx.streams[vi].units[i].key).collect();
+    assert_eq!(keys, [0], "key units in {n}");
+    let head = idx.read_unit(&data[..], vi, n / 2).unwrap();
     let hit = data.windows(100).position(|w| w == &head[..100]).unwrap();
     let at = hit / 188 * 188;
     assert!(data[at] == 0x47 && data[at + 1] & 0x40 != 0 && at > 3 * 188, "packet at {at}");
-    let cut = MpegSource::open("cut.ts", [&data[..3 * 188], &data[at..]].concat().into()).unwrap();
-    let rate = cut.info().frame_rate();
-    let m = rate.frame_at(cut.info().duration);
-    assert!(m > 10, "{m} frames");
-    for j in (0..m).chain([m / 2, 3, m - 1, 0]) {
-        cut.video_frame(FrameRequest::full(rate.tick_of(j))).unwrap_or_else(|e| panic!("cut frame {j}: {e}"));
-    }
+    // a cut inside the refresh wave has no safe start picture: refused, never a panic
+    let cut = MpegSource::open("cut.ts", [&data[..3 * 188], &data[at..]].concat().into());
+    assert!(cut.is_err(), "a stream cut mid-refresh has no random-access picture");
 }
 
 #[test]
