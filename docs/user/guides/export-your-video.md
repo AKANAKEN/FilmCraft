@@ -2,7 +2,7 @@
 title: Export your video
 description: Render a sequence to a video file from Export mode, or use Quick Export, and watch the export queue.
 order: 40
-verified: 0.6.0
+verified: 0.7.2
 ---
 
 Open a sequence, click the **Export** tab in the header, set the file name, location and preset, then click **Export**.
@@ -22,14 +22,15 @@ Exports run as background jobs with progress and cancel, so you can keep editing
 
 ## Quick Export
 
-The header also has a **Quick Export** button. It opens a small popup with a file name and location, a preset list and **Export**.
+The header also has a **Quick Export** button. It opens a small popup with a **File Name** field, the folder, a preset list and **Export**. Click the folder to pick another one.
 
 ## What FilmCraft can write
 
 - H.264 MP4 with AAC, using FilmCraft's own encoders.
 - Apple ProRes 422 HQ and Motion JPEG in QuickTime.
 - MXF OP1a and Avid-style OP-Atom (DNxHR, ProRes or H.264 with PCM and start timecode).
-- PNG sequences, animated GIF and WAV.
+- Image sequences (PNG, TIFF, BMP, JPEG, Targa, DPX, OpenEXR) and animated GIF.
+- WAV, AIFF and FLAC audio. FLAC is lossless. To put it in an MP4 or MOV, set **Audio Format** in the **Audio** section to **FLAC (lossless)**. Its **Compression Level** goes from 0 (fastest) to 8 (smallest).
 - H.265 only through a hardware encoder: NVIDIA on Windows, VideoToolbox on macOS. There is no H.265 export on Linux, and no AV1 export yet.
 
 H.264 can also use a hardware encoder on macOS, and on Windows and Linux with an NVIDIA GPU. On Windows and Linux it is opt-in. In the **Video** section, the **Hardware Encoding** row has a **Use the hardware encoder when available** check box.

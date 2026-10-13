@@ -2,7 +2,7 @@
 title: Recover unsaved work
 description: Bring back unsaved changes after FilmCraft quit, crashed or lost power, using the Recover Unsaved Changes dialog.
 order: 60
-verified: 0.6.0
+verified: 0.7.2
 ---
 
 If FilmCraft was closed or quit with unsaved changes, it offers to bring them back the next time it starts. Click **Recover**.

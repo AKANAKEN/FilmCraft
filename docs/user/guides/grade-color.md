@@ -2,7 +2,7 @@
 title: Grade color with Lumetri Color
 description: Open the Color workspace, add Lumetri Color to a clip, and use its sections and the scopes to correct and grade the picture.
 order: 30
-verified: 0.6.0
+verified: 0.7.2
 ---
 
 Choose **Window ▸ Workspaces ▸ Color**, select a video clip in the timeline, and use the **Lumetri Color** panel on the right.

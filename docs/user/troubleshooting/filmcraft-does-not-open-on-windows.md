@@ -1,11 +1,11 @@
 ---
 title: FilmCraft does not open on Windows
-description: Fix FilmCraft flashing in Task Manager or quitting right after launch on Windows 11, caused by a graphics driver crash, by choosing another graphics backend.
+description: Fix FilmCraft flashing in Task Manager or quitting right after launch on Windows 11, caused by a graphics driver crash, by letting it switch to a safe graphics mode or choosing one yourself.
 order: 10
-verified: 0.6.0
+verified: 0.7.2
 ---
 
-Update your graphics driver. If FilmCraft still quits, start it from PowerShell with another graphics backend, as shown below.
+Start FilmCraft again a few times, waiting 15 seconds between tries. After two failed starts in a row it switches to a safe graphics mode by itself. Updating your graphics driver may also fix it.
 
 ## Symptoms
 
@@ -15,24 +15,28 @@ Update your graphics driver. If FilmCraft still quits, start it from PowerShell 
 ## Fix
 
 1. Update your graphics driver from your GPU maker. This may not be enough: the Intel laptop in issue 1037 crashed the same way on the latest Intel driver.
-2. If it still does not open, set `WGPU_BACKEND` to pick the graphics backend. Open PowerShell, go to the folder that holds `filmcraft.exe`, and run:
+2. Start FilmCraft again. Wait about 15 seconds between tries: a start counts as failed only when FilmCraft quit within 15 seconds of launch without showing its window.
+3. After two failed starts in a row, the next start uses DirectX 12 only, without Vulkan. If that fails twice too, FilmCraft moves on to software rendering. It keeps the mode that works for later starts.
+4. In a safe mode, FilmCraft shows a notice at the bottom right: **Safe graphics mode: DirectX 12 only** or **Safe graphics mode: software rendering**. Some effects may then run on the CPU instead of the GPU, and with software rendering the preview is drawn on the CPU.
 
-        $env:WGPU_BACKEND = "dx12"
-        & .\filmcraft.exe
+To go back to the normal graphics mode, for example after a driver update, click **Use Default Graphics** in the notice. FilmCraft uses the default mode from the next start. **Close** hides the notice for this session.
 
-   With `dx12`, FilmCraft may start but run some effects on the CPU instead of the GPU.
+## Choose the graphics mode yourself
 
-3. If `dx12` does not start it either: on AMD or NVIDIA graphics, try `vulkan` in the same two lines. On Intel graphics skip `vulkan`, which is the driver that crashes there, and try `gl`.
-4. The setting applies to this PowerShell window only. To undo it, run `Remove-Item Env:WGPU_BACKEND`.
+You can pick the mode when you start FilmCraft from PowerShell. Go to the folder that holds `filmcraft.exe` and run one of these:
 
-Automatic switching to a safer graphics mode after a failed start was added after 0.6.0 and is not in a release yet ([issue 820](https://github.com/storytold/filmcraft/issues/820)).
+    & .\filmcraft.exe --graphics dx12
+    & .\filmcraft.exe --graphics software
+    & .\filmcraft.exe --graphics default
 
-On one Intel UHD Graphics 620 laptop with Windows 11, Vulkan crashed at startup, `dx12` started but fell back to the CPU compositor, and `gl` started cleanly with GPU compositing. The workaround that user reported was `setx WGPU_BACKEND gl`, which keeps the setting for later launches. On AMD graphics, avoid `gl`: on some AMD drivers an OpenGL start can bring the crash back. On Intel graphics, avoid `vulkan`.
+FilmCraft keeps the mode you pick for later starts. `--graphics default` undoes an automatic switch.
+
+The older workaround still works: set `WGPU_BACKEND` to `dx12`, `vulkan` or `gl` before you start FilmCraft. While it is set, FilmCraft does not switch modes by itself. On Intel graphics, avoid `vulkan`. On AMD graphics, avoid `gl`: on some AMD drivers an OpenGL start can bring the crash back. To undo it in the same PowerShell window, run `Remove-Item Env:WGPU_BACKEND`.
 
 ## Why this happens
 
-By default FilmCraft starts only Vulkan and DirectX 12 on Windows, not OpenGL. Some graphics drivers crash inside the driver while the window is being created, before FilmCraft can handle an error. Intel's Vulkan driver and AMD's OpenGL driver have both done this.
+By default FilmCraft starts Vulkan and DirectX 12 on Windows, not OpenGL. Some graphics drivers crash inside the driver while the window is being created, before FilmCraft can handle an error. Intel's Vulkan driver and AMD's OpenGL driver have both done this. FilmCraft notices such crashes on the next start and moves to a mode that avoids the crashing driver.
 
 ## Still stuck?
 
-[Report a problem](send-a-bug-report.md) and include your `filmcraft.log`. Or ask in [Discord](https://discord.gg/artcraft). Related reports are [issue 1037](https://github.com/storytold/filmcraft/issues/1037), a driver crash on Intel graphics, and [issue 1134](https://github.com/storytold/filmcraft/issues/1134), FilmCraft not opening on Windows 11.
+[Report a problem](send-a-bug-report.md) and include your `filmcraft.log`. Or ask in [Discord](https://discord.gg/artcraft). Related reports are [issue 1037](https://github.com/storytold/filmcraft/issues/1037), a driver crash on Intel graphics, [issue 1134](https://github.com/storytold/filmcraft/issues/1134), FilmCraft not opening on Windows 11, and [issue 820](https://github.com/storytold/filmcraft/issues/820), the automatic switch to a safe graphics mode.

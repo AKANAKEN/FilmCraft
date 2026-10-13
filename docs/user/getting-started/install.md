@@ -2,10 +2,10 @@
 title: Install FilmCraft
 description: Download FilmCraft for Windows 11, macOS or Linux, from getartcraft.com, GitHub or ArtCraft Launcher, and pick the right file.
 order: 10
-verified: 0.6.0
+verified: 0.7.2
 ---
 
-The easiest way is to download FilmCraft from the [FilmCraft page on getartcraft.com](https://getartcraft.com/apps/filmcraft). If you want a specific file, take it from the [latest release](https://github.com/storytold/filmcraft/releases/latest) on GitHub. In the file names, `<version>` stands for the version number, for example `0.6.0`.
+The easiest way is to download FilmCraft from the [FilmCraft page on getartcraft.com](https://getartcraft.com/apps/filmcraft). If you want a specific file, take it from the [latest release](https://github.com/storytold/filmcraft/releases/latest) on GitHub. In the file names, `<version>` stands for the version number, for example `0.7.2`.
 
 You can also install it with ArtCraft Launcher, which lists FilmCraft with the other Craft apps. See [ArtCraft Launcher](https://getartcraft.com/docs/craft-launcher).
 
@@ -19,6 +19,7 @@ You can also install it with ArtCraft Launcher, which lists FilmCraft with the o
 |------------------------------------|-----------------------------------------|--------------------------------------------------|
 | 64-bit Intel or AMD                | `filmcraft-<version>-windows-x64.msi`   | `filmcraft-<version>-windows-x64-portable.zip`   |
 | Arm (Snapdragon and other Arm PCs) | `filmcraft-<version>-windows-arm64.msi` | `filmcraft-<version>-windows-arm64-portable.zip` |
+| 32-bit Windows                     | `filmcraft-<version>-windows-x86.msi`   | `filmcraft-<version>-windows-x86-portable.zip`   |
 
 The installers and executables are code-signed. If FilmCraft does not open after you install it, see [FilmCraft does not open on Windows](../troubleshooting/filmcraft-does-not-open-on-windows.md).
 
@@ -43,7 +44,7 @@ Pick one file from the release. Replace `x86_64` with `aarch64` on Arm.
 
 The tarball installer puts FilmCraft, its command-line tool and the desktop entry in `~/.local`, with no administrator rights. For all users, run `sudo ./install.sh --prefix /usr/local`. Running the installer again updates the installation.
 
-RISC-V (riscv64) has a tarball only: `filmcraft-<version>-linux-riscv64.tar.gz`. It needs glibc 2.39 or newer, such as Ubuntu 24.04 or Debian 13.
+RISC-V (riscv64) has a `.deb`, an `.rpm` and a tarball, named with `riscv64`, but no AppImage or Flatpak. It needs glibc 2.39 or newer, such as Ubuntu 24.04 or Debian 13.
 
 ## FreeBSD
 

@@ -1,7 +1,7 @@
 ---
 title: FilmCraft
 description: FilmCraft is a free, open-source video editor for macOS, Windows and Linux, built as an alternative to Adobe Premiere Pro.
-verified: 0.6.0
+verified: 0.7.2
 ---
 
 FilmCraft is a video editor for people who know Adobe Premiere Pro. It has the same kind of panels, workspaces, tools and shortcuts, and it is free and open source.

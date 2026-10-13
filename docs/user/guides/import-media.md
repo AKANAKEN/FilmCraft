@@ -2,7 +2,7 @@
 title: Import media
 description: Bring video, audio and still files into a FilmCraft project from disk, by drag and drop, or from the demo footage.
 order: 10
-verified: 0.6.0
+verified: 0.7.2
 ---
 
 Choose **File ▸ Import…**, pick your files, and they appear in the Project panel. You can also drop files anywhere in the FilmCraft window.
@@ -18,7 +18,7 @@ The header also has an **Import** tab. It shows cards for **Browse files…** (m
 
 ## Image sequences
 
-To import numbered stills as one clip, use **File ▸ Import Image Sequence…**.
+To import numbered stills as one clip, use **File ▸ Import Image Sequence…**. A CinemaDNG shot, a folder of numbered DNG frames, comes in the same way as one clip.
 
 ## Open a clip in the Source monitor
 
@@ -26,7 +26,7 @@ Right-click an item in the Project panel and choose **Open in Source Monitor**. 
 
 ## Which files work
 
-FilmCraft reads H.264, HEVC, ProRes, VP8, VP9, AV1, DNxHD and DNxHR, MJPEG and PCM video and audio, AAC, Opus, MP3, FLAC, ALAC and Vorbis audio, and PNG, JPEG, GIF, WebP, TIFF and BMP stills. See [What file formats does FilmCraft support?](../faq/file-formats.md) for the full list and what is not supported yet.
+FilmCraft reads H.264, HEVC, ProRes, VP8, VP9, AV1, DNxHD and DNxHR, MJPEG and PCM video and audio, AAC, Opus, MP3, MP2, FLAC, ALAC and Vorbis audio, and PNG, JPEG, GIF, WebP, TIFF, BMP, Targa, DPX, OpenEXR and DNG stills. Animated GIF and APNG files come in as clips. See [What file formats does FilmCraft support?](../faq/file-formats.md) for the full list and what is not supported yet.
 
 ## If a file does not import
 

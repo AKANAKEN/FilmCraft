@@ -2,7 +2,7 @@
 title: Report a problem
 description: What to include when you report a FilmCraft bug, and where the log files are.
 order: 20
-verified: 0.6.0
+verified: 0.7.2
 ---
 
 Open an issue in the [issue tracker](https://github.com/storytold/filmcraft/issues) or tell the team in [Discord](https://discord.gg/artcraft). Bug reports with real footage are the most useful thing you can send.

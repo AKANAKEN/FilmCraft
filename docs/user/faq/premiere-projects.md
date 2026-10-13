@@ -2,7 +2,7 @@
 title: Can FilmCraft open Premiere Pro projects?
 description: FilmCraft cannot open .prproj files yet; move sequences over as Final Cut Pro 7 XML, AAF or OpenTimelineIO instead.
 order: 30
-verified: 0.6.0
+verified: 0.7.2
 ---
 
 Not yet. FilmCraft cannot open Premiere Pro `.prproj` files. Bring your sequences over as Final Cut Pro 7 XML, AAF or OpenTimelineIO. The steps are in [Move a timeline to or from another editor](../guides/exchange-timelines.md).

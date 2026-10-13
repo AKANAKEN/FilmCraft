@@ -2,7 +2,7 @@
 title: Move a timeline to or from another editor
 description: Import and export timelines as Final Cut Pro XML, FCPXML, OpenTimelineIO, EDL, AAF and OMF, for example to bring a Premiere sequence into FilmCraft.
 order: 50
-verified: 0.6.0
+verified: 0.7.2
 ---
 
 To bring a sequence in, choose **File ▸ Import…** and pick the exchange file. To send one out, open the sequence and choose a format under **File ▸ Export**.

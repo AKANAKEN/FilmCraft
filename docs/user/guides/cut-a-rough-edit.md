@@ -2,7 +2,7 @@
 title: Cut a rough edit with three-point editing
 description: Mark In and Out in the Source monitor, then insert or overwrite the clip into the timeline, and take ranges back out with lift and extract.
 order: 20
-verified: 0.6.0
+verified: 0.7.2
 ---
 
 Open a clip in the Source monitor, press `I` and `O` to mark the part you want, then press `,` to insert it or `.` to overwrite onto the timeline.

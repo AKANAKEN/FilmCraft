@@ -2,7 +2,7 @@
 title: Is FilmCraft free?
 description: FilmCraft is free and open source under the MIT or Apache-2.0 license, and runs on Windows, macOS and Linux.
 order: 10
-verified: 0.6.0
+verified: 0.7.2
 ---
 
 Yes. FilmCraft is one of the Crafting Apps, which are free, open-source creative tools from the ArtCraft team. It is dual-licensed under MIT or Apache-2.0, at your option. The code is on [GitHub](https://github.com/storytold/filmcraft).
