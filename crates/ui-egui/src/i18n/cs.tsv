@@ -232,6 +232,7 @@
 	Normalize Mix Track…	Normalizovat mixážní stopu…
 	Offline File…	Offline soubor…
 	Open Project…	Otevřít projekt…
+	Open Recent	Otevřít nedávné
 	Optical Flow	Optický tok
 	Overwrite	Přepsat
 	Paste	Vložit ze schránky
@@ -284,6 +285,7 @@
 	Review	Revize
 	Right	Vpravo
 	Ripple Delete	Odstranit s posunem
+	Ripple Delete Head Frame	Odstranit začátek klipu s posunem
 	Ripple Sequence Markers	Posouvat značky sekvence
 	Rose	Růžová
 	Safe Margins	Bezpečné okraje
@@ -3024,6 +3026,7 @@
 	Clear Edit Point Selection	Zrušit výběr střihového bodu
 	Clear Finished Exports	Vymazat dokončené exporty
 	Clear Poster Frame	Vymazat reprezentativní snímek
+	Clear Recent Files	Vymazat nedávné soubory
 	Close Bin	Zavřít přihrádku
 	Close Sequence	Zavřít sekvenci
 	Contains	Obsahuje
@@ -3592,3 +3595,15 @@
 	ZIP (1 scan line)	ZIP (1 řádek obrazu)
 	ZIP (16 scan lines)	ZIP (16 řádků obrazu)
 	{name} (Modified)	{name} (upraveno)
+	32 bit	32bitový
+	32 bit float	32bitový s plovoucí desetinnou čárkou
+	Couldn't open your web browser	Nepodařilo se otevřít webový prohlížeč
+	FLAC stores whole-number samples only	FLAC ukládá pouze celočíselné vzorky
+	MXF export writes integer PCM only	Export MXF zapisuje pouze celočíselné PCM
+	Open this address in your browser yourself:	Otevřete tuto adresu ručně ve svém prohlížeči:
+	Opens in your web browser: {url}	Otevře odkaz ve webovém prohlížeči: {url}
+	Recent	Nedávné
+	Saves this session's log and shows it in your file manager.	Uloží protokol této relace a zobrazí jej ve správci souborů.
+	Shows a report on this computer.	Zobrazí zprávu o tomto počítači.
+	Shows the version, community links and credits in a FilmCraft window.	Zobrazí verzi, odkazy na komunitu a poděkování v okně FilmCraft.
+	no Korean font is installed on this system; the interface stays in English	v systému není nainstalováno korejské písmo; rozhraní zůstává v angličtině
