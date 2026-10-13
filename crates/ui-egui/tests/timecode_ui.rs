@@ -208,3 +208,25 @@ fn compact_floating_monitor_timecodes_keep_drag_typing_escape_and_caret_routing(
         assert!(std::sync::Arc::ptr_eq(&project, &s.project));
     }
 }
+
+/// The Effect Controls footer timecode is the same field: it scrubs by dragging and takes a typed
+/// time, moving the sequence's playhead.
+#[test]
+fn the_effect_controls_timecode_scrubs_and_types_like_the_timeline_one() {
+    let mut d = Driver::demo();
+    let clip = d.harness.state().session.active_sequence().unwrap().video_tracks[0].items[0].id.0;
+    d.harness.state_mut().session.execute("timeline.select", json!({"clips": [clip]})).unwrap();
+    d.ok("ui.panel.show", json!({"panel": "EffectControls"}));
+    d.frames(3);
+    d.set_frame(30);
+    d.drag_by("effectControls.timecode", 20.0);
+    assert_eq!(d.frame(), 50, "1 frame per point");
+    d.drag_by("effectControls.timecode", -300.0);
+    assert_eq!(d.frame(), 0, "never before the start");
+    d.type_into("effectControls.timecode", "1000", "Enter");
+    let (rate, df) = {
+        let s = &d.harness.state().session;
+        (s.sequence_rate(), s.active_sequence().unwrap().settings.drop_frame)
+    };
+    assert_eq!(d.frame(), parse_timecode("1000", rate, df, 0).unwrap());
+}
