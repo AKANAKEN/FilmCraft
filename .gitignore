@@ -1,6 +1,9 @@
 *~
 plan/
-/target
+target/
+target-*/
+.metadata_never_index
+.noindex
 /dist
 /log
 .DS_Store
