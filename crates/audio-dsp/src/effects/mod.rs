@@ -68,9 +68,27 @@ impl std::fmt::Debug for EffectInfo {
     }
 }
 
+/// Sample rates the effects are built for. Anything outside (zero, negative, NaN, infinite or
+/// absurdly large, as a corrupt file can claim) is mapped into range before construction so the
+/// DSP designs and delay-line sizes stay finite.
+const MIN_RATE: f32 = 1_000.0;
+const MAX_RATE: f32 = 1_000_000.0;
+/// Channels beyond this are passed through untouched, so effects are never built wider.
+const MAX_CHANNELS: usize = 64;
+
+fn sane_rate(sr: f32) -> f32 {
+    if sr.is_nan() { 48_000.0 } else { sr.clamp(MIN_RATE, MAX_RATE) }
+}
+
 macro_rules! entry {
     ($id:literal, $name:literal, $cat:ident, $ty:ty) => {
-        EffectInfo { id: $id, name: $name, category: Category::$cat, params: <$ty>::PARAMS, create: |sr, ch| Box::new(<$ty>::new(sr, ch)) }
+        EffectInfo {
+            id: $id,
+            name: $name,
+            category: Category::$cat,
+            params: <$ty>::PARAMS,
+            create: |sr, ch| Box::new(<$ty>::new(sane_rate(sr), ch.min(MAX_CHANNELS))),
+        }
     };
 }
 

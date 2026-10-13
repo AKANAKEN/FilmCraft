@@ -20,6 +20,9 @@ pub struct StreamResampler {
     next_out: Option<i64>,
 }
 
+/// Most source frames one block may pull.
+const MAX_PULL: i64 = 1 << 24;
+
 impl StreamResampler {
     /// Rates of zero are treated as 1 Hz rather than dividing by zero.
     pub fn new(from: u32, to: u32) -> Self {
@@ -34,7 +37,8 @@ impl StreamResampler {
     fn source_index(&self, out: i64) -> (i64, f32) {
         let p = out as i128 * self.from as i128;
         let to = self.to as i128;
-        (p.div_euclid(to) as i64, (p.rem_euclid(to) as f64 / to as f64) as f32)
+        let whole = p.div_euclid(to).clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64;
+        (whole, (p.rem_euclid(to) as f64 / to as f64) as f32)
     }
 
     /// Output frames `[out, out + n)`, planar. `pull(start, frames)` returns source frames
@@ -48,12 +52,20 @@ impl StreamResampler {
         let (last, _) = self.source_index(out.saturating_add(n as i64 - 1));
         // interpolation reads source frames first - 1 ..= last
         if self.next_out != Some(out) || self.held.is_empty() {
-            self.held_start = first - 1;
+            self.held_start = first.saturating_sub(1);
             self.held.clear();
         }
-        let held_end = self.held_start + self.held.first().map_or(0, Vec::len) as i64;
-        if last + 1 > held_end {
-            let want = (last + 1 - held_end) as usize;
+        let held_end = self.held_start.saturating_add(self.held.first().map_or(0, Vec::len) as i64);
+        if last.saturating_add(1) > held_end {
+            let want = last.saturating_add(1).saturating_sub(held_end);
+            if want > MAX_PULL {
+                // an absurd rate ratio (corrupt rates): silence rather than gigabytes of pulls
+                let channels = self.held.len().max(1);
+                self.held.clear();
+                self.next_out = None;
+                return vec![vec![0.0; n]; channels];
+            }
+            let want = want as usize;
             let got = pull(held_end, want);
             if self.held.is_empty() {
                 self.held = vec![Vec::new(); got.len().max(1)];
@@ -64,10 +76,10 @@ impl StreamResampler {
             }
         }
         let mut dst = vec![vec![0.0f32; n]; self.held.len()];
-        for (i, frame) in (out..).take(n).enumerate() {
-            let (s, frac) = self.source_index(frame);
+        for i in 0..n {
+            let (s, frac) = self.source_index(out.saturating_add(i as i64));
             // held starts at first - 1, so the earlier frame is always held
-            let k = usize::try_from(s - self.held_start).unwrap_or(0);
+            let k = usize::try_from(s.saturating_sub(self.held_start)).unwrap_or(0);
             for (d, h) in dst.iter_mut().zip(&self.held) {
                 let a = k.checked_sub(1).and_then(|j| h.get(j)).copied().unwrap_or(0.0);
                 let b = h.get(k).copied().unwrap_or(0.0);
@@ -78,11 +90,11 @@ impl StreamResampler {
         }
         // keep what the next block can still read: from its first frame - 1 on
         let (next_first, _) = self.source_index(out.saturating_add(n as i64));
-        let drop = (next_first - 1 - self.held_start).clamp(0, self.held.first().map_or(0, Vec::len) as i64) as usize;
+        let drop = next_first.saturating_sub(1).saturating_sub(self.held_start).clamp(0, self.held.first().map_or(0, Vec::len) as i64) as usize;
         for h in &mut self.held {
             h.drain(..drop);
         }
-        self.held_start += drop as i64;
+        self.held_start = self.held_start.saturating_add(drop as i64);
         self.next_out = Some(out.saturating_add(n as i64));
         dst
     }

@@ -80,6 +80,11 @@ pub fn decimate(x: &[f32], d: usize) -> Vec<f32> {
     if d <= 1 {
         return x.to_vec();
     }
+    // a filter longer than the signal gains nothing: cap so the taps stay bounded
+    let d = d.min(x.len().max(1));
+    if d <= 1 {
+        return x.to_vec();
+    }
     let half = 8 * d;
     let fc = 0.42 / d as f64; // cycles per input sample
     let taps: Vec<f32> = {
@@ -202,7 +207,7 @@ pub fn find_offset(a: &[f32], b: &[f32], sample_rate: u32, opts: &SyncOptions) -
     let r = gcc(&ca, &cb, n, opts.phat_beta, band);
     // valid lags: b[0..lb) against a[L..L+lb) must overlap by a minimum amount
     let min_overlap = ((rate_c as i64) / 2).min(la.min(lb) / 4).max(8);
-    let max_lag_c = opts.max_lag.map(|m| m.abs() / d as i64 + 1);
+    let max_lag_c = opts.max_lag.map(|m| (m.saturating_abs() / d as i64).saturating_add(1));
     let lo = -(lb - min_overlap);
     let hi = la - min_overlap;
     if hi < lo {
