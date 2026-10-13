@@ -20,3 +20,10 @@ Run `cargo test --release -p filmcraft-codecs` and the workspace's
 fixture generator and oracle, with generated media under `target/fixtures/`.
 Module tests also exercise synthetic headers and malformed input. No media
 fixtures are committed to this crate.
+
+AC-3 and E-AC-3 MP4 audio uses `dac3`/`dec3` (ETSI TS 102 366 Annex F)
+for the primary program's layout rather than the mandated stereo sample-entry
+field. Missing or invalid descriptors fall back to bounded primary syncframe
+headers. Dependent E-AC-3 substreams remain outside the decoder's output.
+`ac3_mp4_layout` forces the generic count to two, checks all six decoded channels
+against FFmpeg, and checks random access.
