@@ -1303,6 +1303,8 @@ mod remix_tests;
 #[cfg(test)]
 mod ripple_delete_tests;
 #[cfg(test)]
+mod ripple_head_tests;
+#[cfg(test)]
 mod roll_linked_tests;
 #[cfg(test)]
 mod scopes_tests;
