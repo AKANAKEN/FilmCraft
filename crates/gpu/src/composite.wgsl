@@ -14,7 +14,7 @@ struct U {
     p0: vec4<f32>,   // opacity, kind (0 rgba8 srgb straight, 1 rgba16f premul linear, 2 yuv), taps, transfer (0 srgb, 1 linear, 2 pq, 3 hlg)
     p1: vec4<f32>,   // y_off y_scale c_off c_scale (code units)
     p2: vec4<f32>,   // kr kb code_scale footprint
-    p3: vec4<f32>,   // blend mode, alpha-plane scale (0: none), effect-source integer decimation, unused
+    p3: vec4<f32>,   // blend mode, alpha-plane scale (0: none), effect-source integer decimation, magnified (1: scaled up on both axes)
     // Colour management of HDR / wide-gamut Y'CbCr (`filmcraft_color::InputTransform`, #965):
     q0: vec4<f32>,   // on, curve (0 sdr, 1 linear, 2 pq, 3 hlg), HLG OOTF scale (0: none), reference white cd/m²
     q1: vec4<f32>,   // HLG OOTF luma weights, gamut matrix on
@@ -207,8 +207,20 @@ fn yuv_texel(texel: vec2<i32>) -> vec4<f32> {
     let cs = u.p2.z;
     let yc = textureLoad(tex0, t, 0).r * cs;
     let cp = p * u.src.zw / u.src.xy;
-    let cb = load4(tex1, cp).r * cs;
-    let cr = load4(tex2, cp).r * cs;
+    // (Cb, Cr) codes. Scaled up, the chroma texel that covers this luma texel (`x >> 1` when
+    // subsampled), as the CPU decodes the frame before it resamples: interpolating the chroma
+    // plane as well smears hard colour edges (#1558). Otherwise interpolated.
+    var c: vec2<f32>;
+    if u.p3.w > 0.5 {
+        let cd = vec2<i32>(textureDimensions(tex1));
+        let sh = vec2<u32>(select(vec2(0u), vec2(1u), cd < vec2<i32>(textureDimensions(tex0))));
+        let ct = min(t >> sh, cd - 1);
+        c = vec2(textureLoad(tex1, ct, 0).r, textureLoad(tex2, ct, 0).r);
+    } else {
+        c = vec2(load4(tex1, cp).r, load4(tex2, cp).r);
+    }
+    let cb = c.x * cs;
+    let cr = c.y * cs;
     let y = (yc - u.p1.x) / u.p1.y;
     let b = (cb - u.p1.z) / u.p1.w;
     let r = (cr - u.p1.z) / u.p1.w;
