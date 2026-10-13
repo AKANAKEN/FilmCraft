@@ -1,5 +1,7 @@
 use super::*;
 
+mod hostile;
+
 fn chunk(id: &[u8; 4], data: &[u8]) -> Vec<u8> {
     let mut v = id.to_vec();
     v.extend_from_slice(&(data.len() as u32).to_le_bytes());

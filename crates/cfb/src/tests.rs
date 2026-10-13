@@ -1,5 +1,7 @@
 use crate::*;
 
+mod hostile;
+
 fn pattern(n: usize, seed: u8) -> Vec<u8> {
     (0..n).map(|i| (i as u32).wrapping_mul(31).wrapping_add(seed as u32) as u8).collect()
 }
