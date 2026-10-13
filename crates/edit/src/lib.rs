@@ -598,8 +598,8 @@ pub fn copy_items(seq: &mut Sequence, moves: &[(ClipId, TrackId, Tick)], insert_
 
 /// The transitions that travel with a move (#227, #374): those whose clips all move, onto one
 /// track and by one offset (a fade at a moved clip's edge, or the cut between two clips that move
-/// together), shifted to where those clips land.
-fn carried_transitions(seq: &Sequence, placed: &[(TrackId, TrackItem)]) -> Vec<(TrackId, Transition)> {
+/// together), shifted to where those clips land. The timeline's drag preview uses it too.
+pub fn carried_transitions(seq: &Sequence, placed: &[(TrackId, TrackItem)]) -> Vec<(TrackId, Transition)> {
     let landing = |c: ClipId| {
         let (dest, it) = placed.iter().find(|(_, it)| it.id == c)?;
         let (_, old) = seq.find_item(c)?;

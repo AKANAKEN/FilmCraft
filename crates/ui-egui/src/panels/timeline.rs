@@ -9,7 +9,7 @@
 //! damped exponential easing, anchored under the cursor) so navigation feels fluid; all geometry is
 //! drawn as GPU meshes by egui's wgpu backend and culled to the visible range.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use egui::{Align2, Color32, CursorIcon, Pos2, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
@@ -475,6 +475,8 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     if copying {
         ctx.set_cursor_icon(CursorIcon::Copy);
     }
+    // a move drag carries the transitions the drop will carry (#1712); the rest on moved clips drop
+    let (carried, lifted) = drag_transitions(app, seq, &previews);
     for r in &rows {
         let Some(tr) = seq.track(r.track) else { continue };
         let clip_rect = if r.kind == TrackKind::Video { vclip } else { aclip };
@@ -559,7 +561,8 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         // selected edit points (trim mode): red brackets for ripple, yellow for roll / regular trim
         super::trim_monitor::paint_edit_points(app, &p, seq, tr, r, &layout);
         // transitions (one being dragged where the drag puts it; the selected ones outlined)
-        for trn in &tr.transitions {
+        let here = carried.iter().filter(|(dest, _)| *dest == r.track).map(|(_, trn)| trn);
+        for trn in tr.transitions.iter().filter(|x| !lifted.contains(&x.id)).chain(here) {
             let (start, end) = match &app.tl.drag {
                 Some(Drag::Transition { id, start, duration, .. }) if *id == trn.id => (*start, *start + *duration),
                 _ => (trn.start, trn.end()),
@@ -1772,6 +1775,32 @@ pub fn locate(app: &FilmcraftApp, clip: u64, edge: Option<&str>) -> Option<(f32,
         _ => (layout.x_of(it.start) + layout.x_of(it.end())) / 2.0,
     };
     Some((x, y))
+}
+
+/// During a move drag: the transitions as the drop will leave them (`filmcraft_edit::carried_transitions`)
+/// and the ids of every transition on a moved clip, which are not drawn where they were.
+fn drag_transitions(
+    app: &FilmcraftApp,
+    seq: &Sequence,
+    previews: &HashMap<ClipId, (Tick, Tick, Option<TrackId>)>,
+) -> (Vec<(TrackId, filmcraft_project::Transition)>, HashSet<filmcraft_project::TransitionId>) {
+    if !matches!(app.tl.drag, Some(Drag::Move { .. })) || previews.is_empty() {
+        return Default::default();
+    }
+    let placed: Vec<(TrackId, TrackItem)> = previews
+        .iter()
+        .filter_map(|(c, (start, _, mt))| {
+            let (home, it) = seq.find_item(*c)?;
+            Some((mt.unwrap_or(home), TrackItem { start: *start, ..it.clone() }))
+        })
+        .collect();
+    let lifted = seq
+        .all_tracks()
+        .flat_map(|t| t.transitions.iter())
+        .filter(|x| [x.from, x.to].into_iter().flatten().any(|c| previews.contains_key(&c)))
+        .map(|x| x.id)
+        .collect();
+    (filmcraft_edit::carried_transitions(seq, &placed), lifted)
 }
 
 fn preview_drag(app: &FilmcraftApp, seq: &Sequence, out: &mut HashMap<ClipId, (Tick, Tick, Option<TrackId>)>, edited: &mut HashMap<ClipId, TrackItem>) {
