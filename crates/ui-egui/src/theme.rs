@@ -500,8 +500,11 @@ pub fn apply_visuals(ctx: &egui::Context, t: &Tokens) {
     v.extreme_bg_color = t.field_bg;
     v.faint_bg_color = t.row_alt;
     v.override_text_color = Some(t.text);
-    v.selection.bg_fill = if t.kind == ThemeKind::Medium { t.row_selected } else { t.accent };
-    v.selection.stroke = Stroke::new(1.0, if t.kind == ThemeKind::Medium { t.text } else { Color32::WHITE });
+    // The standard Dark preset uses a subdued selection row; an explicitly chosen highlight
+    // keeps its established selection behavior.
+    let standard_dark_accent = t.kind == ThemeKind::Medium && t.accent == Color32::from_rgb(0x2d, 0x81, 0xff);
+    v.selection.bg_fill = if standard_dark_accent { t.row_selected } else { t.accent };
+    v.selection.stroke = Stroke::new(1.0, if standard_dark_accent { t.text } else { Color32::WHITE });
     v.hyperlink_color = t.accent;
     v.window_stroke = Stroke::new(1.0, t.field_border);
     v.window_corner_radius = egui::CornerRadius::same(6);
@@ -641,6 +644,20 @@ mod tests {
         }
         let v = |c: Color32| egui::ecolor::HsvaGamma::from(c).v;
         assert!(v(t.playhead) > v(pink) && v(t.timecode) > v(pink) && v(t.track_target) < v(pink), "lighter and darker as the default blues are");
+    }
+
+    #[test]
+    fn selection_uses_standard_row_or_saved_custom_highlight() {
+        let ctx = egui::Context::default();
+        let standard = Tokens::for_kind(ThemeKind::Medium);
+        apply_visuals(&ctx, &standard);
+        assert_eq!(ctx.style().visuals.selection.bg_fill, standard.row_selected);
+        assert_eq!(ctx.style().visuals.selection.stroke.color, standard.text);
+
+        let custom = standard.with_appearance(Some([0xe0, 0x45, 0x7b]), false);
+        apply_visuals(&ctx, &custom);
+        assert_eq!(ctx.style().visuals.selection.bg_fill, custom.accent);
+        assert_eq!(ctx.style().visuals.selection.stroke.color, Color32::WHITE);
     }
 
     /// Chinese media and track names must render even when the interface stays in English.
