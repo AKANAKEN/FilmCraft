@@ -20,6 +20,10 @@
 //! Simplified Chinese uses the Chinese fallback `theme::install` always adds (craft-fonts Hans/Hant
 //! faces, otherwise one installed system face, see `cjk.rs`); without one, switching to Chinese is
 //! refused the same way ([`chinese_font_available`]).
+//!
+//! العربية (Arabic) uses the right-to-left fallback faces `theme::install` always adds (craft-fonts
+//! Noto Sans Arabic, otherwise one installed system face, see `rtl.rs`); without an Arabic face,
+//! switching to Arabic is refused the same way ([`arabic_font_available`]).
 
 mod catalog;
 
@@ -49,6 +53,8 @@ pub enum Language {
     It,
     /// Korean; Hangul needs an installed system font ([`korean_font_available`]).
     Ko,
+    /// العربية (Arabic), persisted as `ar`.
+    Ar,
 }
 
 static JAPANESE: OnceLock<Catalog> = OnceLock::new();
@@ -62,9 +68,10 @@ static FRENCH: OnceLock<Catalog> = OnceLock::new();
 static KOREAN: OnceLock<Catalog> = OnceLock::new();
 static INDONESIAN: OnceLock<Catalog> = OnceLock::new();
 static ITALIAN: OnceLock<Catalog> = OnceLock::new();
+static ARABIC: OnceLock<Catalog> = OnceLock::new();
 
 impl Language {
-    pub const ALL: [Self; 12] = [Self::En, Self::Ja, Self::Es, Self::PtBr, Self::Uk, Self::ZhCn, Self::De, Self::Ru, Self::Fr, Self::Id, Self::Ko, Self::It];
+    pub const ALL: [Self; 13] = [Self::En, Self::Ja, Self::Es, Self::PtBr, Self::Uk, Self::ZhCn, Self::De, Self::Ru, Self::Fr, Self::Id, Self::Ko, Self::It, Self::Ar];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -80,6 +87,7 @@ impl Language {
             Self::Id => "Bahasa Indonesia",
             Self::It => "Italiano",
             Self::Ko => "한국어",
+            Self::Ar => "العربية",
         }
     }
 
@@ -97,6 +105,7 @@ impl Language {
             "id" => Some(Self::Id),
             "it" => Some(Self::It),
             "ko" => Some(Self::Ko),
+            "ar" => Some(Self::Ar),
             _ => None,
         }
     }
@@ -111,7 +120,7 @@ impl Language {
     /// only for Simplified locales (`zh`, `zh-CN`, `zh-SG`, `zh-Hans…`); Traditional ones (`zh-TW`,
     /// `zh-HK`, `zh-MO`, `zh-Hant…`) are skipped.
     pub fn from_locales(tags: &[String]) -> Self {
-        const PRIMARY: [(&str, Language); 12] = [
+        const PRIMARY: [(&str, Language); 13] = [
             ("en", Language::En),
             ("ja", Language::Ja),
             ("es", Language::Es),
@@ -124,6 +133,7 @@ impl Language {
             ("in", Language::Id),
             ("it", Language::It),
             ("ko", Language::Ko),
+            ("ar", Language::Ar),
         ];
         tags.iter()
             .find_map(|tag| {
@@ -156,6 +166,7 @@ impl Language {
             Self::Id => "id",
             Self::It => "it",
             Self::Ko => "ko",
+            Self::Ar => "ar",
         }
     }
 
@@ -174,6 +185,7 @@ impl Language {
             Self::Id => Some(INDONESIAN.get_or_init(|| Catalog::parse(include_str!("id.tsv")))),
             Self::It => Some(ITALIAN.get_or_init(|| Catalog::parse(include_str!("it.tsv")))),
             Self::Ko => Some(KOREAN.get_or_init(|| Catalog::parse(include_str!("ko.tsv")))),
+            Self::Ar => Some(ARABIC.get_or_init(|| Catalog::parse(include_str!("ar.tsv")))),
         }
     }
 
@@ -336,6 +348,13 @@ pub fn korean_font_available() -> bool {
     crate::cjk::korean_available()
 }
 
+/// Whether the interface can show Arabic: `theme::install` always adds the right-to-left fallback
+/// faces (craft-fonts Noto Sans Arabic, otherwise one installed system face, see `rtl.rs`).
+/// False on systems without either.
+pub fn arabic_font_available() -> bool {
+    crate::rtl::arabic_available()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -354,6 +373,7 @@ mod tests {
             ("id", include_str!("id.tsv")),
             ("it", include_str!("it.tsv")),
             ("ko", include_str!("ko.tsv")),
+            ("ar", include_str!("ar.tsv")),
         ] {
             let (entries, errors) = catalog::parse_entries(text);
             assert!(errors.is_empty(), "{code}: {errors:?}");
@@ -415,6 +435,13 @@ mod tests {
         assert_eq!(Language::It.tr("An untranslated label"), "An untranslated label");
         assert_eq!(Language::parse("it"), Some(Language::It));
         assert_eq!(Language::parse("it-IT"), None, "the preference stores the bare code");
+        assert_eq!(Language::Ar.name(), "العربية");
+        assert_eq!(Language::Ar.tr("File"), "ملف");
+        assert_eq!(Language::Ar.tr("Save As…"), "حفظ باسم…");
+        assert_eq!(Language::Ar.tr("مقطع العطلة.mp4"), "مقطع العطلة.mp4");
+        assert_eq!(Language::Ar.tr("An untranslated label"), "An untranslated label");
+        assert_eq!(Language::parse("ar"), Some(Language::Ar));
+        assert_eq!(Language::parse("ar-SA"), None, "the preference stores the bare code");
         for l in Language::ALL {
             assert_eq!(Language::parse(l.code()), Some(l));
             let json = serde_json::to_string(&l).unwrap();
@@ -1031,6 +1058,9 @@ mod tests {
         for tag in ["id", "ID", "id-ID", "id_ID.UTF-8", "id_ID", "in", "in-ID", "in_ID.UTF-8"] {
             assert_eq!(l(&[tag]), Language::Id, "{tag}");
         }
+        for tag in ["ar", "AR", "ar-SA", "ar-EG", "ar_IQ.UTF-8"] {
+            assert_eq!(l(&[tag]), Language::Ar, "{tag}");
+        }
         assert_eq!(l(&["jv-ID", "ms-MY", "id-ID", "en"]), Language::Id, "Javanese and Malay have no catalog");
         for none in [&["ind"][..], &["i"], &["-id"], &["ms"], &["ms-ID"], &["jv"]] {
             assert_eq!(l(none), Language::En, "{none:?}");
@@ -1377,5 +1407,67 @@ mod tests {
                 }
             }
         });
+    }
+
+    /// Like the other whole-interface catalogs: every core menu label, no entry the Spanish
+    /// catalog lacks, and the searches find the Arabic labels.
+    #[test]
+    fn arabic_covers_the_menus_and_has_no_dead_entries() {
+        let (entries, errors) = catalog::parse_entries(include_str!("ar.tsv"));
+        assert!(errors.is_empty(), "{errors:?}");
+        for (ctx, en, _) in &entries {
+            assert!(ctx.is_empty() && (Language::Es.has(en) || en == "Settings"), "Arabic entry without a Spanish one: {ctx:?} {en:?}");
+        }
+        let (core, _) = catalog::parse_entries(include_str!("uk.tsv"));
+        for (_, en, _) in core {
+            assert!(Language::Ar.has(&en), "missing Arabic menu label: {en:?}");
+        }
+        for en in crate::menus::MENUS.into_iter().chain(["Audio", "Settings"]) {
+            assert!(Language::Ar.has(en), "untranslated Arabic menu: {en}");
+        }
+        // beyond the menus: panels, effects and their parameters, settings, status messages
+        for (en, ar) in [
+            ("Settings", "الإعدادات"),
+            ("Gaussian Blur", "ضبابية غاوسية"),
+            ("Audio Track Mixer", "مازج مسارات الصوت"),
+            ("Sequence", "تسلسل"),
+            ("Playhead", "رأس التشغيل"),
+        ] {
+            assert_eq!(Language::Ar.tr(en), ar);
+        }
+        set_current(Language::Ar);
+        assert!(matches_query("Gaussian Blur", "ضبابية"));
+        assert!(matches_query("Gaussian Blur", "gaussian"));
+        set_current(Language::En);
+    }
+
+    #[test]
+    fn arabic_switches_or_is_refused_without_a_font() {
+        let mut app = crate::FilmcraftApp::new(filmcraft_engine::Session::default());
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx, &crate::theme::Tokens::for_kind(crate::theme::ThemeKind::default()));
+        let r = crate::menus::invoke(&mut app, &ctx, "app.language.arabic", serde_json::json!({}));
+        if !crate::rtl::arabic_available() {
+            // no craft-fonts Arab face and no system font: refused, and the interface stays English
+            assert!(r.is_err(), "{r:?}");
+            assert_eq!(app.ui.language, Language::En);
+            return;
+        }
+        assert!(r.is_ok(), "{r:?}");
+        assert_eq!((app.ui.language, current()), (Language::Ar, Language::Ar));
+        let mut output = ctx.run_ui(egui::RawInput::default(), |_| {});
+        output.textures_delta.clear();
+        ctx.fonts_mut(|fonts| {
+            // the Arabic letters resolve in the families whose faces serve them
+            for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+                let font = egui::FontId::new(13.0, family);
+                for ch in "العربية ملف تحرير".chars() {
+                    assert!(fonts.has_glyph(&font, ch), "missing {ch} in {font:?}");
+                }
+            }
+        });
+        crate::menus::invoke(&mut app, &ctx, "app.language.english", serde_json::json!({})).unwrap();
+        assert_eq!(app.ui.language, Language::En);
+        set_current(Language::En);
     }
 }
