@@ -443,6 +443,17 @@ mod tests {
     }
 
     #[test]
+    fn traditional_chinese_catalog_keys_match_simplified_chinese() {
+        let (simplified, simplified_errors) = catalog::parse_entries(include_str!("zh-cn.tsv"));
+        let (traditional, traditional_errors) = catalog::parse_entries(include_str!("zh-tw.tsv"));
+        assert!(simplified_errors.is_empty(), "{simplified_errors:?}");
+        assert!(traditional_errors.is_empty(), "{traditional_errors:?}");
+        let simplified_keys: std::collections::HashSet<_> = simplified.iter().map(|(context, source, _)| (context, source)).collect();
+        let traditional_keys: std::collections::HashSet<_> = traditional.iter().map(|(context, source, _)| (context, source)).collect();
+        assert_eq!(traditional_keys, simplified_keys, "run `python tools/sync_zh_tw.py` to synchronize the catalog");
+    }
+
+    #[test]
     fn the_current_language_is_per_thread() {
         set_current(Language::Es);
         assert_eq!((current(), t("File")), (Language::Es, "Archivo"));

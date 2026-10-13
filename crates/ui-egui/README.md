@@ -31,6 +31,10 @@ English source strings are lookup keys in `src/i18n/<code>.tsv`. `tl!` translate
 fills translated templates, and `i18n::t` translates names from registries. Placeholder values
 (including user filenames containing braces) are inserted literally. Catalog translations are
 original work using ordinary language, without proprietary localisation resources.
+After adding or removing strings in `zh-cn.tsv`, run `python -m pip install opencc-python-reimplemented`
+once, then `python tools/sync_zh_tw.py` to add Traditional Chinese translations for new strings and
+remove obsolete entries while preserving reviewed Taiwan translations. Run
+`python tools/sync_zh_tw.py --check` to check catalog key synchronization without modifying files.
 
 Spanish, Japanese, Simplified Chinese, Traditional Chinese, French and Brazilian Portuguese cover menus, panels, dialogs, settings and registry labels. Searches accept both the
 translated label and its English source, including Unicode capitals. Project content, command ids
