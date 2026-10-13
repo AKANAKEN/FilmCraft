@@ -1852,11 +1852,9 @@ impl FilmcraftApp {
     /// Automation ids `progress.window`, `.bar`, `.cancel`.
     fn job_window(&mut self, ctx: &egui::Context) {
         use std::sync::atomic::Ordering;
-        if !self.session.prefs.general.show_progress_window {
-            return;
-        }
         let Some(job) = self.watch_jobs(ctx) else { return };
-        if self.ui.progress_window_hidden == Some(job.id) {
+        if !(self.session.prefs.general.show_progress_window || self.ui.progress_window_asked == Some(job.id)) || self.ui.progress_window_hidden == Some(job.id)
+        {
             return;
         }
         let (done, total) = (job.progress.done.load(Ordering::Relaxed), job.progress.total.load(Ordering::Relaxed));
@@ -1893,6 +1891,7 @@ impl FilmcraftApp {
         }
         if !open || cancel {
             self.ui.progress_window_hidden = Some(job.id);
+            self.ui.progress_window_asked = None;
         }
     }
 
@@ -1916,6 +1915,29 @@ impl FilmcraftApp {
             Tokens::ui(11.0),
             t.text_dim,
         );
+        // the progress window, one click away whatever the preference says (#1192): two overlapping
+        // frames, left of the percentage
+        let label_w = p.layout_no_wrap(format!("{verb}… {:.0}%{left}", f * 100.0), Tokens::ui(11.0), t.text_dim).size().x;
+        let window = egui::Rect::from_center_size(egui::pos2(bar.min.x - 8.0 - label_w - 14.0, sb.center().y), egui::vec2(16.0, 16.0));
+        let wresp = ui.interact(window, egui::Id::new(("job-window", job.id)), egui::Sense::click());
+        let wc = if wresp.hovered() || self.ui.progress_window_asked == Some(job.id) { t.hot_text } else { t.text_dim };
+        p.rect_stroke(
+            egui::Rect::from_min_size(window.min + egui::vec2(1.0, 4.0), egui::vec2(10.0, 8.0)),
+            1.0,
+            egui::Stroke::new(1.2, wc),
+            egui::StrokeKind::Inside,
+        );
+        p.rect_stroke(
+            egui::Rect::from_min_size(window.min + egui::vec2(5.0, 1.0), egui::vec2(10.0, 8.0)),
+            1.0,
+            egui::Stroke::new(1.2, wc),
+            egui::StrokeKind::Inside,
+        );
+        self.auto.add("status.job.window", window, "Show progress window");
+        if wresp.on_hover_text(tl!("Show a progress window while exporting or rendering")).clicked() {
+            self.ui.progress_window_asked = Some(job.id);
+            self.ui.progress_window_hidden = None;
+        }
         let resp = ui.interact(cancel, egui::Id::new(("job-cancel", job.id)), egui::Sense::click());
         let c = if resp.hovered() { t.hot_text } else { t.text_dim };
         let k = 3.5;
