@@ -284,6 +284,24 @@ pub(crate) fn reveal_playhead(app: &mut FilmcraftApp, ctx: &egui::Context) {
     }
 }
 
+/// The view `(start, end)` inside `0..=total` after a zoom bar's handle is dragged to `handle`
+/// (the time the pointer puts it at): the view stays centred on `playhead` (moved in from the
+/// ends as far as needed), so the dragged handle follows the pointer until it reaches the
+/// playhead, and the view never gets narrower than `min_span` nor wider than `total`. Time units
+/// are the caller's (seconds for the Timeline, a fraction of the clip for a monitor).
+pub fn handle_zoom(left_handle: bool, handle: f64, playhead: f64, total: f64, min_span: f64) -> (f64, f64) {
+    let total = if total.is_finite() { total.max(0.0) } else { 0.0 };
+    let min_span = if min_span.is_finite() { min_span.clamp(0.0, total) } else { total };
+    let at = if playhead.is_finite() { playhead.clamp(0.0, total) } else { 0.0 };
+    let handle = if handle.is_finite() { handle.clamp(0.0, total) } else { 0.0 };
+    // a handle at the pointer, the playhead in the middle of the view: the span doubles the
+    // handle's distance from the playhead, or reaches the far end if that comes first
+    let span = if left_handle { (2.0 * (at - handle)).min(total - handle) } else { (2.0 * (handle - at)).min(handle) };
+    let span = span.clamp(min_span, total);
+    let start = (at - span / 2.0).clamp(0.0, total - span);
+    (start, start + span)
+}
+
 /// Zoom about a time (keeps it under the same screen x).
 pub fn zoom_about(v: &mut TimelineView, factor: f64, anchor_secs: f64, width: f32) {
     let old = v.target_pps;
@@ -1680,9 +1698,10 @@ fn zoom_scrollbar(app: &mut FilmcraftApp, ui: &mut egui::Ui, bar: Rect, seq_seco
         v.target_pps = start_pps;
         v.pps = start_pps;
     }
-    if let Some(Drag::ZoomBar { grab, start, mode, .. }) = app.tl.drag.clone()
+    if let Some(Drag::ZoomBar { grab, start, start_pps, mode }) = app.tl.drag.clone()
         && resp.dragged()
     {
+        let playhead = app.session.playhead().seconds();
         let v = &mut app.ui.timeline;
         match mode {
             // the thumb's middle: scroll, the thumb staying under the pointer
@@ -1692,20 +1711,20 @@ fn zoom_scrollbar(app: &mut FilmcraftApp, ui: &mut egui::Ui, bar: Rect, seq_seco
                     v.scroll = v.target_scroll;
                 }
             }
-            // a handle: zoom, the other end of the view staying where it is
+            // a handle: zoom about the playhead, the handle following the pointer (by the offset
+            // it was grabbed at)
             _ => {
-                let dx = resp.drag_delta().x as f64 / bar.width().max(1.0) as f64 * total;
-                if mode == 1 {
-                    let end = v.scroll + vis;
-                    let ns = (v.scroll + dx).clamp(0.0, (end - 0.05).max(0.0));
-                    v.pps = (bar.width() as f64 / (end - ns).max(0.05)).clamp(0.05, 24_000.0);
+                if let Some(pos) = resp.interact_pointer_pos() {
+                    let time_at = |x: f32| (x - bar.min.x) as f64 / bar.width().max(1.0) as f64 * total;
+                    let edge = if mode == 1 { start } else { start + bar.width() as f64 / start_pps.max(1e-9) };
+                    let handle = time_at(pos.x) - (time_at(grab) - edge);
+                    let min_span = (bar.width() as f64 / 24_000.0).max(0.05);
+                    let (ns, ne) = handle_zoom(mode == 1, handle, playhead, total, min_span);
+                    v.pps = (bar.width() as f64 / (ne - ns).max(min_span)).clamp(0.05, 24_000.0);
                     v.scroll = ns;
                     v.target_scroll = ns;
-                } else {
-                    let ne = (v.scroll + vis + dx).max(v.scroll + 0.05);
-                    v.pps = (bar.width() as f64 / (ne - v.scroll)).clamp(0.05, 24_000.0);
+                    v.target_pps = v.pps;
                 }
-                v.target_pps = v.pps;
             }
         }
     }
@@ -3420,5 +3439,46 @@ mod ruler_tests {
         }
         let (minor, label) = ruler_steps(1.0, i64::MAX);
         assert!(minor >= 1 && label >= 1 && label % minor == 0, "an unrepresentable rate: tick {minor}, label {label}");
+    }
+}
+
+#[cfg(test)]
+mod handle_zoom_tests {
+    use super::handle_zoom;
+
+    #[test]
+    fn the_view_stays_centred_on_the_playhead_and_the_handle_follows_the_pointer() {
+        // a left handle at 20 of 100, the playhead at 50: the view is 20..80
+        assert_eq!(handle_zoom(true, 20.0, 50.0, 100.0, 1.0), (20.0, 80.0));
+        // a right handle at 70: 30..70
+        assert_eq!(handle_zoom(false, 70.0, 50.0, 100.0, 1.0), (30.0, 70.0));
+    }
+
+    #[test]
+    fn near_an_end_the_view_is_moved_in_from_it() {
+        // playhead at 10: the left handle at 0 asks for 0..20 at least; the far end wins at 100
+        assert_eq!(handle_zoom(true, 0.0, 10.0, 100.0, 1.0), (0.0, 20.0));
+        // the right handle at 100 with the playhead at 90: the view reaches the end
+        assert_eq!(handle_zoom(false, 100.0, 90.0, 100.0, 1.0), (80.0, 100.0));
+        // the whole range: the handles at the ends
+        assert_eq!(handle_zoom(true, 0.0, 50.0, 100.0, 1.0), (0.0, 100.0));
+    }
+
+    #[test]
+    fn a_handle_dragged_past_the_playhead_leaves_the_smallest_view() {
+        assert_eq!(handle_zoom(true, 80.0, 50.0, 100.0, 4.0), (48.0, 52.0));
+        assert_eq!(handle_zoom(false, 10.0, 50.0, 100.0, 4.0), (48.0, 52.0));
+    }
+
+    #[test]
+    fn numbers_that_are_not_numbers_do_no_harm() {
+        for v in [f64::NAN, f64::INFINITY, -1.0] {
+            for left in [true, false] {
+                let (s, e) = handle_zoom(left, v, v, 100.0, 1.0);
+                assert!(s.is_finite() && e.is_finite() && 0.0 <= s && s <= e && e <= 100.0, "{s} {e}");
+            }
+        }
+        let (s, e) = handle_zoom(true, 1.0, 1.0, f64::NAN, f64::NAN);
+        assert!(s.is_finite() && e.is_finite());
     }
 }

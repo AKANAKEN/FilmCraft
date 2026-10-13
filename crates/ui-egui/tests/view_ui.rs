@@ -355,6 +355,29 @@ fn time_zoom_bar_zooms_and_scrolls_the_monitor_ruler() {
     assert!((d.rect("program.zoomBar")[2] - track[2]).abs() < 0.5);
 }
 
+/// A handle of a monitor's zoom bar zooms about the playhead: the view stays centred on it, and
+/// the dragged handle follows the pointer.
+#[test]
+fn time_zoom_bar_handles_zoom_about_the_playhead() {
+    let mut d = Driver::demo();
+    let duration = num(&d.exec("sequence.inspect", json!({}))["duration"]);
+    d.exec("playhead.set", json!({"time": (duration * 0.5) as i64}));
+    d.frames(2);
+    let track = d.rect("program.zoomBar.track");
+    let y = track[1] + track[3] / 2.0;
+    // the right handle dragged to three quarters: the half around the playhead
+    d.ok("ui.drag", json!({"from": {"x": track[0] + track[2] - 4.0, "y": y}, "to": {"x": track[0] + track[2] * 0.75, "y": y}, "steps": 8}));
+    d.frames(2);
+    let z = d.program()["time_zoom"].clone();
+    assert!((num(&z[0]) - 0.25).abs() < 0.02 && (num(&z[1]) - 0.75).abs() < 0.02, "{z}");
+    // the left handle dragged in to 0.4: the fifth around the playhead
+    let thumb = d.rect("program.zoomBar");
+    d.ok("ui.drag", json!({"from": {"x": thumb[0] + 4.0, "y": y}, "to": {"x": track[0] + track[2] * 0.4, "y": y}, "steps": 8}));
+    d.frames(2);
+    let z = d.program()["time_zoom"].clone();
+    assert!((num(&z[0]) - 0.4).abs() < 0.02 && (num(&z[1]) - 0.6).abs() < 0.02, "{z}");
+}
+
 /// While a monitor plays, its zoomed ruler pages to keep the playhead in view, keeping its width,
 /// as the Timeline follows the playhead; stopped, or with auto-scrolling off, it stays put.
 #[test]
