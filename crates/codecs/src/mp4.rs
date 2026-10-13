@@ -318,7 +318,7 @@ impl Mp4Source {
         // Sony XAVC files with no `tmcd` track carry the start timecode in an `rtmd` metadata
         // track; convert its fields to a frame count using the video frame rate.
         let start_timecode = start_timecode.or_else(|| rtmd_start_timecode(&file, &bytes, video.as_ref()?.frame_rate));
-        let info = MediaInfo {
+        let mut info = MediaInfo {
             name: name.to_string(),
             kind: if video.is_some() { MediaKind::Movie } else { MediaKind::AudioOnly },
             duration,
@@ -347,7 +347,16 @@ impl Mp4Source {
                 Some(Mp4Audio { track: i, state, starts, offset, preroll })
             })
             .collect();
-        rebase_unedited_video(&mut file, vtrack, &mut audios);
+        if let (Some(shift), Some(ti)) = (rebase_unedited_video(&mut file, vtrack, &mut audios), vtrack) {
+            // The edit-list duration counted the leading empty edit; the content now starts at its
+            // first presented picture, so the clip ends one shift earlier (review on #1289). Only
+            // the edit-list duration is affected: the media duration already excludes the delay,
+            // and fragmented files keep the media duration regardless.
+            let edit_list = file.tracks.get(ti).is_some_and(|t| !t.edits.is_empty());
+            if edit_list && !file.fragmented {
+                info.duration = Tick((info.duration.0 - shift.0).max(0));
+            }
+        }
         Ok(Self { info, bytes, file, vtrack, video: GopCache::new(explicit_color).with_rotation(rotation).with_crop(aperture), audios })
     }
 
@@ -674,17 +683,20 @@ pub fn opener(name: &str, bytes: Arc<[u8]>) -> Option<Result<SharedSource, Media
 /// skips into the media yields a non-positive start and needs no shift). Every track moves back by
 /// the earliest start among them, video and audio alike, so the streams stay in sync and a delay
 /// between them keeps its meaning.
-fn rebase_unedited_video(file: &mut Mp4File, vtrack: Option<usize>, audios: &mut [Mp4Audio]) {
-    let Some(vi) = vtrack else { return };
-    let Some(t) = file.tracks.get(vi).filter(|t| t.timescale > 0) else { return };
-    let Some(first) = t.samples.iter().map(|s| s.pts).min().map(|p| p.saturating_add(t.edit_offset)).filter(|&p| p > 0) else { return };
+fn rebase_unedited_video(file: &mut Mp4File, vtrack: Option<usize>, audios: &mut [Mp4Audio]) -> Option<Tick> {
+    let vi = vtrack?;
+    let t = file.tracks.get(vi).filter(|t| t.timescale > 0)?;
+    let first = t.samples.iter().map(|s| s.pts).min()?.saturating_add(t.edit_offset);
+    if first <= 0 {
+        return None;
+    }
     let vts = i64::from(t.timescale);
     let video_start = Tick::from_rational(first, 1, vts);
     let audio_ts = |a: &Mp4Audio| file.tracks.get(a.track).map_or(1, |t| i64::from(t.timescale.max(1)));
     // an audio track starts at its offset (a negative one only hides priming before zero)
     let shift = audios.iter().fold(video_start, |m, a| m.min(Tick::from_rational(a.offset.max(0), 1, audio_ts(a))));
     if shift <= Tick::ZERO {
-        return;
+        return None;
     }
     for a in audios.iter_mut() {
         let d = shift.to_rational_round(1, audio_ts(a));
@@ -694,6 +706,7 @@ fn rebase_unedited_video(file: &mut Mp4File, vtrack: Option<usize>, audios: &mut
     if let Some(t) = file.tracks.get_mut(vi) {
         t.edit_offset = t.edit_offset.saturating_sub(v);
     }
+    Some(shift)
 }
 
 /// How long a track plays. With an edit list that is the sum of its edits (ISO/IEC 14496-12
@@ -778,12 +791,13 @@ mod tests {
         // skip the first frame (B-frame delay style): three frames play (movie timescale 1000 ms)
         let skip = vec![Edit { segment_duration: 120, media_time: 1, media_rate: 0x10000 }];
         assert_eq!(frames(&Mp4Source::open("skip.mov", mov_with_edits(skip)).expect("open")), 3);
-        // a one-frame empty edit, then all four frames: five frames, and the last one is there
+        // a one-frame empty edit, then all four frames: the edit list spans five frames, but the
+        // presentation is rebased to the first picture, so four frames play and the last is there
         let delayed =
             vec![Edit { segment_duration: 40, media_time: -1, media_rate: 0x10000 }, Edit { segment_duration: 160, media_time: 0, media_rate: 0x10000 }];
         let s = Mp4Source::open("delayed.mov", mov_with_edits(delayed)).expect("open");
-        assert_eq!(frames(&s), 5);
-        assert!(s.video_frame(FrameRequest::full(Tick::from_rational(4, 1, 25))).is_ok());
+        assert_eq!(frames(&s), 4);
+        assert!(s.video_frame(FrameRequest::full(Tick::from_rational(3, 1, 25))).is_ok());
         // hostile segment durations fall back to the media duration instead of wrapping
         let huge = vec![Edit { segment_duration: u64::MAX, media_time: 0, media_rate: 0x10000 }];
         assert_eq!(frames(&Mp4Source::open("huge.mov", mov_with_edits(huge)).expect("open")), 4);
