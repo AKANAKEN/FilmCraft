@@ -639,7 +639,10 @@ impl ExportSettings {
             return Err(ExportError::Unsupported("floating-point audio is 32-bit: set the sample size to 32".into()));
         }
         let sample_format = self.audio.sample_format();
-        if (self.has_audio() || self.format.is_audio_only()) && self.audio_codec() != AudioCodec::Aac && !self.supports_sample_format(sample_format) {
+        if (self.has_audio() || self.format.is_audio_only())
+            && !matches!(self.audio_codec(), AudioCodec::Aac | AudioCodec::Mp3)
+            && !self.supports_sample_format(sample_format)
+        {
             let codec = if self.audio_codec() == AudioCodec::Flac { "FLAC" } else { self.format.label() };
             return Err(ExportError::Unsupported(format!("{codec} audio has no {} samples: choose 16, 24 or 32 bit", sample_format.label())));
         }
