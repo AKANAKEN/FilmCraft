@@ -320,6 +320,13 @@ file ──► codecs (MP4/MOV, MKV, audio)        demux + decode, GOP-aware see
   and handed to the GPU as an image (a layer image keeps its clip's blend mode), so both paths
   give the same picture. Setting `FILMCRAFT_CPU_COMPOSITE=1`
   forces the CPU path in the desktop app.
+- **Transparent overlay uploads.** The GPU planner trims transparent borders from 9–16-bit
+  4:4:4 media with alpha, Normal blend, integer translation and one-to-one placement. It retains
+  a one-texel border for bilinear loads and translates the cropped source back to its original
+  position. The crop must save at least half the source pixels; otherwise the original allocation
+  is retained. Effects, colour management, resampling, subsampled chroma and malformed planes
+  keep the existing path. This reduces source preparation, upload storage and fragment work,
+  without changing the media, project or CPU compositor.
 - **CPU compositor shortcuts.** The CPU compositor, which is what export runs, works on
   premultiplied linear `f32` images, 33 MB at 1080p, so what it does not allocate, convert or mix
   is time saved. Three shortcuts, each of which gives the general path's bits (compared bit for

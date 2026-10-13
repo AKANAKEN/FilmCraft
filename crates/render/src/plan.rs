@@ -27,6 +27,9 @@ use filmcraft_time::Tick;
 use crate::gpufx::FxOp;
 use crate::{Blend, RenderOptions, SourceProvider, motion_matrix, output_size};
 
+#[path = "plan_overlay.rs"]
+mod overlay;
+
 /// One layer for the GPU, bottom to top.
 #[derive(Clone)]
 pub struct PlanLayer {
@@ -457,7 +460,7 @@ fn push_item(
             };
             let px_scale = frame.width as f64 / size.0.max(1) as f64;
             let m = Affine::scale(opts.scale as f64, opts.scale as f64).then_apply(&motion).then_apply(&Affine::scale(1.0 / px_scale, 1.0 / px_scale));
-            out.push(PlanLayer { input, ..PlanLayer::new(frame, m, op * extra_opacity, bl) });
+            out.push(overlay::trim(PlanLayer { input, ..PlanLayer::new(frame, m, op * extra_opacity, bl) }));
             return;
         }
     }

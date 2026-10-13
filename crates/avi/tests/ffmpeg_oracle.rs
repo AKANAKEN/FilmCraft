@@ -141,11 +141,47 @@ fn opendml_file_past_1_gb() {
 /// A file on disk as a byte source, read where asked.
 struct FileSource(std::fs::File);
 
+#[test]
+fn file_source_reads_exact_bytes_at_offset() {
+    use filmcraft_avi::ByteSource;
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/ffmpeg_oracle.rs");
+    let expected = std::fs::read(&path).unwrap();
+    let source = FileSource(std::fs::File::open(path).unwrap());
+    let mut bytes = [0; 17];
+    source.read_at(3, &mut bytes).unwrap();
+    assert_eq!(&bytes, &expected[3..20]);
+    source.read_at(0, &mut bytes).unwrap();
+    assert_eq!(&bytes, &expected[..17]);
+    let error = source.read_at(source.len() - 1, &mut bytes).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::UnexpectedEof);
+}
+
 impl filmcraft_avi::ByteSource for FileSource {
     fn len(&self) -> u64 {
         self.0.metadata().map(|m| m.len()).unwrap_or(0)
     }
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> std::io::Result<()> {
-        std::os::unix::fs::FileExt::read_exact_at(&self.0, buf, offset)
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::FileExt::read_exact_at(&self.0, buf, offset)
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::FileExt;
+            let mut offset = offset;
+            let mut remaining = buf;
+            while !remaining.is_empty() {
+                match self.0.seek_read(remaining, offset) {
+                    Ok(0) => return Err(std::io::ErrorKind::UnexpectedEof.into()),
+                    Ok(n) => {
+                        offset = offset.checked_add(n as u64).ok_or(std::io::ErrorKind::InvalidInput)?;
+                        remaining = &mut remaining[n..];
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(e) => return Err(e),
+                }
+            }
+            Ok(())
+        }
     }
 }

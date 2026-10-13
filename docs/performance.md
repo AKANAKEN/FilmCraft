@@ -4,6 +4,57 @@
 and `.md` (options and sections: [testing.md](testing.md) §5). Agents read live counters with
 `perf.stats` ([control-protocol.md](control-protocol.md)).
 
+## Transparent 4:4:4 overlay uploads (2026-10-12)
+
+The GPU planner can trim transparent borders before preparing and uploading a 9–16-bit 4:4:4
+overlay. This is limited to Normal blend, integer translation and one-to-one placement, with no
+effects or colour-management transform. A one-texel transparent rim preserves the samples used
+by bilinear filtering; the crop must remove at least half the source area. Other cases retain
+the full source. The media and CPU renderer are unchanged.
+
+Measured against `71438c627b5cbcfb550526c3971f4d0037733c5c` (0.7.2), on Windows,
+Ryzen 5 4500 (6 cores / 12 threads), 16 GB RAM, RTX 3080, NVIDIA 616.92, Vulkan. Rust 1.99,
+`--release` (thin LTO, one codegen unit), `RAYON_NUM_THREADS=6`. No concurrent build or other
+benchmark was running; normal desktop applications remained open. Host CPU snapshots between
+runs were 24–49%, so this was not an unloaded machine.
+
+The synthetic benchmark includes planning, source preparation, GPU composition, linear-float
+readback and conversion to 8-bit RGBA. **It excludes video decoding, audio, encoding and muxing:**
+these are frame-rendering improvements, not measured whole-export speedups. The background is
+a generated 1080p matte and the overlay is a 12-bit 1920×1080 4:4:4 frame with a partially
+transparent 1720×75 rectangle. The video scenarios cycle 32 distinct source allocations,
+exceeding the compositor's 24-entry upload cache; the still scenario reuses one overlay.
+
+Four runs per binary, in A/B/B/A/A/B/B/A order, each with 10 warm-up and 60 measured frames.
+The table reports the median of the four per-run medians; ranges show the per-run medians.
+
+| Scenario | Before, ms/frame (range) | After, ms/frame (range) | Change in time |
+|---|---:|---:|---:|
+| Sparse video overlay | 33.266 (32.823–35.582) | 26.718 (26.159–28.814) | −19.7% |
+| Opaque video overlay, control | 34.894 (34.683–43.161) | 35.161 (33.466–38.071) | +0.8% |
+| Sparse still overlay | 32.139 (31.764–33.647) | 27.620 (27.336–29.102) | −14.1% |
+
+The cropped overlay retains 1722×77 texels including its rim: four 16-bit planes occupy
+1,060,752 rather than 16,588,800 bytes (**93.6% fewer overlay bytes**). Including the unchanged
+background, `FramePlan::source_bytes()` falls from 24,883,200 to 9,355,152. This is source storage,
+not a claim about total process or GPU memory.
+
+CPU reference comparisons are exact. GPU comparisons cover 48 combinations of 10/12/16-bit
+sources, odd sizes, 1080p, 4K, partial alpha, image edges and fully transparent pictures. Changing
+the quad changes floating-point coordinate interpolation: output is **not byte-identical**.
+On this adapter the maximum difference was one 8-bit channel code, with a maximum mean absolute
+channel difference of 0.000362 (including alpha); maximum linear-float error was 0.000489.
+The regression gate requires a maximum of one output code and mean below 0.001. Scaled,
+rotated, fractional-position, effect, managed-colour and non-Normal layers keep the old path.
+
+Reproduce with the same benchmark source in both revisions:
+
+```sh
+RAYON_NUM_THREADS=6 cargo test --release -p filmcraft-gpu --test transparent_overlay overlay_benchmark -- --ignored --nocapture
+cargo test --release -p filmcraft-gpu --test transparent_overlay planned_overlay_matches_full_source_on_gpu -- --nocapture
+cargo test --release -p filmcraft-render plan::overlay
+```
+
 ## Interactive builds and redraw work
 
 For interactive editing, build with `cargo build --release -p filmcraft --features whisper` and
