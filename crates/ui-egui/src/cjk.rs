@@ -53,6 +53,12 @@ fn find_system_font(sample: &str, preferred: &[&str]) -> Option<Arc<FontData>> {
     Some(Arc::new(FontData { font: std::borrow::Cow::Owned(face.data()?), index: face.info.index, tweak: Default::default() }))
 }
 
+/// Whether [`install`] has a Hangul face to add (an installed system face; none is bundled).
+/// The Korean interface needs one.
+pub(crate) fn korean_available() -> bool {
+    korean_font().is_some()
+}
+
 /// Whether [`install`] has a Chinese face to add: craft-fonts Hans/Hant faces, or an installed
 /// system face (scanned once per process). The Simplified Chinese interface needs one.
 pub(crate) fn available() -> bool {
@@ -100,7 +106,6 @@ pub(crate) fn interface_sample(language: crate::i18n::Language) -> Option<&'stat
     use crate::i18n::Language;
     match language {
         Language::ZhTw => Some("繁體中文臺灣檔案編輯設定軌道匯入匯出"),
-        Language::Ko => Some("한국어파일편집설정트랙가나다"),
         _ => None,
     }
 }
@@ -109,7 +114,6 @@ fn preferred_interface_families(language: crate::i18n::Language) -> &'static [&'
     use crate::i18n::Language;
     match language {
         Language::ZhTw => &["Noto Sans CJK TC", "Microsoft JhengHei UI", "Microsoft JhengHei", "PingFang TC", "Noto Sans TC"],
-        Language::Ko => &["Noto Sans CJK KR", "Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans KR", "NanumGothic"],
         _ => &[],
     }
 }
@@ -117,10 +121,9 @@ fn preferred_interface_families(language: crate::i18n::Language) -> &'static [&'
 /// Cache one owned font per script; collection face indices are retained on Windows.
 fn interface_font(language: crate::i18n::Language, bold: bool) -> Option<Arc<FontData>> {
     use crate::i18n::Language;
-    static FONTS: [OnceLock<Option<Arc<FontData>>>; 4] = [const { OnceLock::new() }; 4];
+    static FONTS: [OnceLock<Option<Arc<FontData>>>; 2] = [const { OnceLock::new() }; 2];
     let script = match language {
         Language::ZhTw => 0,
-        Language::Ko => 1,
         _ => return None,
     };
     let cache = FONTS.get(script * 2 + usize::from(bold))?;
@@ -157,23 +160,22 @@ fn interface_font(language: crate::i18n::Language, bold: bool) -> Option<Arc<Fon
         .clone()
 }
 
-/// Language choices stay readable before the user selects them, including 한국어 in an English UI.
+/// The Traditional Chinese choice stays readable before the user selects it.
 pub(crate) fn install_language_names(fonts: &mut FontDefinitions) {
     use crate::i18n::Language;
-    for language in [Language::ZhTw, Language::Ko] {
-        let Some(font) = interface_font(language, false) else {
-            continue;
-        };
-        let name = format!("interface-{}", language.code());
-        fonts.font_data.insert(name.clone(), font);
-        for stack in fonts.families.values_mut() {
-            stack.push(name.clone());
-        }
+    let language = Language::ZhTw;
+    let Some(font) = interface_font(language, false) else {
+        return;
+    };
+    let name = format!("interface-{}", language.code());
+    fonts.font_data.insert(name.clone(), font);
+    for stack in fonts.families.values_mut() {
+        stack.push(name.clone());
     }
 }
 
 /// Keep the Latin faces first, then this language's CJK face ahead of other script fallbacks.
-/// In particular Traditional Chinese and Korean must not rely on a Japanese-only font.
+/// Traditional Chinese must not rely on a Japanese-only font.
 pub(crate) fn install_interface(fonts: &mut FontDefinitions, language: crate::i18n::Language) -> bool {
     if interface_sample(language).is_none() {
         return true;

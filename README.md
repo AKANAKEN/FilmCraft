@@ -255,7 +255,7 @@ cargo run --release -p filmcraft-cli -- commands           # list every engine c
 cargo run --release -p filmcraft-cli -- mcp                # MCP server (headless)
 ```
 
-Native builds also offer **한국어 (Korean)** and **繁體中文（台灣） (Traditional Chinese, Taiwan)** under **Edit > Language** or **Settings > General > Interface Language**. The choice is saved for the next launch and can follow your system locale. A supporting bundled or installed font is required.
+Native builds also offer **繁體中文（台灣） (Traditional Chinese, Taiwan)** under **Edit > Language** or **Settings > General > Interface Language**. The choice is saved for the next launch and can follow your system locale. A supporting bundled or installed font is required.
 
 Japanese text in the interface and in titles comes from [craft-fonts](https://github.com/storytold/craft-fonts), an optional build input (release builds always include it; without it FilmCraft uses its own and the system's fonts):
 
@@ -348,6 +348,13 @@ Remove-Item Env:WGPU_BACKEND                     # restore the default for later
 
 An explicit `gl` override can bring the driver crash back on affected systems. The macOS, Linux
 and web backend defaults are unchanged.
+
+A PC whose GPUs were installed from different driver packages of one vendor (a laptop with an
+integrated and a discrete AMD GPU, for example) can list one GPU twice, once through each installed
+version of the Vulkan driver, and a window drawn through the stale one crashes inside the driver
+(`amdvlk64.dll`, exit code `0xc0000005`). FilmCraft draws with the newer one and says so in
+`%APPDATA%\FilmCraft\Logs\filmcraft.log`; installing one driver package for every GPU removes the
+duplicate. With one driver per GPU the adapter is the one wgpu picks, as before.
 
 ### macOS
 

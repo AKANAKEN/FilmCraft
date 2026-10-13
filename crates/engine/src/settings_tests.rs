@@ -28,9 +28,9 @@ fn interface_language_persists_and_rejects_hostile_values() {
     let path = dir.join("preferences.json");
     let mut s = Session { prefs_path: Some(path.clone()), ..Session::default() };
     #[cfg(not(target_arch = "wasm32"))]
-    for code in ["zh-tw", "ko"] {
-        set(&mut s, "general.interfaceLanguage", json!(code));
-        assert_eq!(Preferences::load(&path).general.interface_language, code);
+    {
+        set(&mut s, "general.interfaceLanguage", json!("zh-tw"));
+        assert_eq!(Preferences::load(&path).general.interface_language, "zh-tw");
     }
     set(&mut s, "general.interfaceLanguage", json!("es"));
     assert_eq!(Preferences::load(&path).general.interface_language, "es");
@@ -49,6 +49,12 @@ fn interface_language_persists_and_rejects_hostile_values() {
     }
     set(&mut s, "general.interfaceLanguage", json!("id"));
     assert_eq!(Preferences::load(&path).general.interface_language, "id");
+    // Italian is stored as `it`, not a locale tag
+    for value in [json!("it-IT"), json!("IT")] {
+        assert!(s.execute("prefs.set", json!({"key": "general.interfaceLanguage", "value": value})).is_err());
+    }
+    set(&mut s, "general.interfaceLanguage", json!("it"));
+    assert_eq!(Preferences::load(&path).general.interface_language, "it");
     // back to following the operating system (#218)
     set(&mut s, "general.interfaceLanguage", json!("system"));
     assert_eq!(Preferences::load(&path).general.interface_language, "system");
@@ -689,6 +695,24 @@ fn appearance_choices_validate_and_legacy_theme_still_selects() {
         seen.push(a.appearance_mode.clone());
     }
     assert_eq!(seen, ["auto", "light", "dark", "auto"]);
+}
+
+#[test]
+fn favorite_themes_validate_and_persist_without_changing_other_settings() {
+    let dir = tmp_dir("theme-favorites");
+    let path = dir.join("preferences.json");
+    let mut s = Session { prefs_path: Some(path.clone()), ..Session::default() };
+    set(&mut s, "appearance.favoriteThemes", json!(["dark", "light"]));
+    assert_eq!(Preferences::load(&path).appearance.favorite_themes, vec!["dark", "light"]);
+    for value in [json!("light"), json!(["unknown"]), json!(["dark", "dark"]), json!([3]), json!(null)] {
+        assert!(s.execute("prefs.set", json!({"key": "appearance.favoriteThemes", "value": value})).is_err());
+        assert_eq!(s.prefs.appearance.favorite_themes, vec!["dark", "light"]);
+    }
+    let mut corrupt = s.prefs.to_value();
+    corrupt["appearance"]["favoriteThemes"] = json!(["invalid", "invalid"]);
+    let repaired = Preferences::from_value(corrupt);
+    assert!(repaired.appearance.favorite_themes.is_empty());
+    assert_eq!(repaired.appearance.dark_theme, s.prefs.appearance.dark_theme);
 }
 
 fn preset_json(name: &str, n: usize, color: &str) -> Vec<u8> {
