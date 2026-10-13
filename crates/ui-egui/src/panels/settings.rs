@@ -370,7 +370,7 @@ fn modal_frame(t: &Tokens) -> Frame {
 
 fn button(app: &mut FilmcraftApp, ui: &mut Ui, id: &str, label: &str, primary: bool) -> bool {
     let t = app.tokens;
-    let text = RichText::new(label).size(13.0).color(if primary { Color32::WHITE } else { t.text });
+    let text = RichText::new(label).size(13.0).color(if primary { t.on_accent() } else { t.text });
     let b = egui::Button::new(text)
         .min_size(vec2(82.0, 30.0))
         .corner_radius(CornerRadius::same(15))
@@ -961,6 +961,9 @@ mod tests {
         open(&mut app, "appearance").unwrap();
         let mut h = Harness::builder().with_size(vec2(1400.0, 1000.0)).build_eframe(move |_| app);
         h.run_steps(4);
+        if let Some(path) = std::env::var_os("FILMCRAFT_THEME_SCREENSHOT") {
+            h.render().unwrap().save(path).unwrap();
+        }
         h.get_by_label("Add to favorites: Dark").click();
         h.run_steps(3);
         assert_eq!(*get(&h.state().ui.settings.as_ref().unwrap().values, "appearance.favoriteThemes"), json!(["dark"]));

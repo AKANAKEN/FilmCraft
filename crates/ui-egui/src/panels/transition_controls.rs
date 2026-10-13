@@ -519,7 +519,7 @@ pub fn duration_dialog(app: &mut FilmcraftApp, ctx: &egui::Context) -> bool {
             // one row high: a right-to-left layout would otherwise take the window's whole height
             let row = egui::vec2(ui.available_width().max(220.0), ui.spacing().interact_size.y);
             ui.allocate_ui_with_layout(row, egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let o = ui.add(egui::Button::new(RichText::new(tl!("OK")).color(egui::Color32::WHITE)).fill(accent));
+                let o = ui.add(egui::Button::new(RichText::new(tl!("OK")).color(app.tokens.on_accent())).fill(accent));
                 elems.push(("transitionDuration.ok".into(), o.rect, "OK".into()));
                 apply |= o.clicked();
                 let c = ui.button(tl!("Cancel"));

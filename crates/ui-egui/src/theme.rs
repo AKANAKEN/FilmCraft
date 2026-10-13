@@ -150,6 +150,11 @@ pub struct Tokens {
 }
 
 impl Tokens {
+    /// Foreground for a filled accent control in the standard dark palette.
+    pub fn on_accent(&self) -> Color32 {
+        if self.kind == ThemeKind::Dark && self.accent == Color32::from_rgb(0x2d, 0x81, 0xff) { Color32::from_rgb(0x06, 0x06, 0x07) } else { Color32::WHITE }
+    }
+
     pub fn for_kind(kind: ThemeKind) -> Self {
         // Measured from Premiere 26 "Darkest" (plan/premiere/02-ui-ux.md §1).
         let dark = Tokens {
@@ -242,7 +247,38 @@ impl Tokens {
             tab_h: 32.0,
         };
         match kind {
-            ThemeKind::Dark => dark,
+            ThemeKind::Dark => Tokens {
+                // ArtCraft standard dark UI; media, meters and plot roles remain local.
+                app_bg: Color32::from_rgb(0x12, 0x13, 0x16),
+                header_bg: Color32::from_rgb(0x0a, 0x0a, 0x0c),
+                panel_bg: Color32::from_rgb(0x10, 0x10, 0x14),
+                tab_bg: Color32::from_rgb(0x10, 0x10, 0x14),
+                tab_text: Color32::from_rgb(0xa6, 0xa6, 0xa8),
+                tab_text_active: Color32::WHITE,
+                focus: Color32::from_rgb(0x74, 0xaa, 0xff),
+                accent: Color32::from_rgb(0x2d, 0x81, 0xff),
+                accent_hover: Color32::from_rgb(0x59, 0xa7, 0xff),
+                text: Color32::from_rgb(0xf2, 0xf1, 0xee),
+                text_dim: Color32::from_rgb(0xa6, 0xa6, 0xa8),
+                text_faint: Color32::from_rgb(0x71, 0x71, 0x76),
+                icon: Color32::from_rgb(0xa6, 0xa6, 0xa8),
+                icon_active: Color32::WHITE,
+                hover: Color32::from_rgb(0x32, 0x33, 0x37),
+                pressed: Color32::from_rgb(0x41, 0x42, 0x46),
+                field_bg: Color32::from_rgb(0x06, 0x06, 0x07),
+                field_border: Color32::from_rgb(0x36, 0x37, 0x3a),
+                separator: Color32::from_rgb(0x36, 0x37, 0x3a),
+                row_alt: Color32::from_rgb(0x1e, 0x1f, 0x22),
+                row_selected: Color32::from_rgb(0x20, 0x3b, 0x65),
+                hot_text: Color32::from_rgb(0x59, 0xa7, 0xff),
+                pill_active_bg: Color32::from_rgb(0x20, 0x3b, 0x65),
+                control_surface: Color32::from_rgb(0x1e, 0x1f, 0x22),
+                control_well: Color32::from_rgb(0x06, 0x06, 0x07),
+                control_border: Color32::from_rgb(0x36, 0x37, 0x3a),
+                button_hover: Color32::from_rgb(0x32, 0x33, 0x37),
+                button_border: Color32::from_rgb(0x36, 0x37, 0x3a),
+                ..dark
+            },
             ThemeKind::Medium => Tokens {
                 app_bg: Color32::from_rgb(20, 20, 20),
                 header_bg: Color32::from_rgb(0x32, 0x32, 0x32),
@@ -468,8 +504,8 @@ pub fn apply_visuals(ctx: &egui::Context, t: &Tokens) {
     v.extreme_bg_color = t.field_bg;
     v.faint_bg_color = t.row_alt;
     v.override_text_color = Some(t.text);
-    v.selection.bg_fill = t.accent;
-    v.selection.stroke = Stroke::new(1.0, Color32::WHITE);
+    v.selection.bg_fill = if t.kind == ThemeKind::Dark { t.row_selected } else { t.accent };
+    v.selection.stroke = Stroke::new(1.0, if t.kind == ThemeKind::Dark { t.text } else { Color32::WHITE });
     v.hyperlink_color = t.accent;
     v.window_stroke = Stroke::new(1.0, t.field_border);
     v.window_corner_radius = egui::CornerRadius::same(6);
@@ -553,23 +589,26 @@ mod tests {
     }
 
     #[test]
-    fn dark_and_medium_keep_existing_audio_and_effect_palettes() {
-        for kind in [ThemeKind::Dark, ThemeKind::Medium] {
-            let t = Tokens::for_kind(kind);
-            // Existing painted colors, recorded independently of the Light palette.
-            assert_eq!(t.pill_active_bg, Color32::from_gray(0x3a));
-            assert_eq!(t.clip_bar_bg, Color32::from_rgb(58, 58, 70));
-            assert_eq!(t.control_surface, Color32::from_gray(0x24));
-            assert_eq!(t.control_well, Color32::from_gray(0x10));
-            assert_eq!(t.control_handle, Color32::from_gray(0xe0));
-            assert_eq!(t.meter_bg, Color32::BLACK);
-            assert_eq!(t.plot_bg, Color32::from_gray(0x18));
-            assert_eq!(t.plot_grid, Color32::from_gray(0x2c));
-            assert_eq!(t.keyframe_plot_bg, Color32::from_gray(0x19));
-            assert_eq!(t.keyframe_plot_grid, Color32::from_gray(0x2a));
-            assert_eq!(t.keyframe_plot_axis, Color32::from_gray(0x33));
-            assert_eq!(t.keyframe_handle, Color32::from_gray(0xd0));
-        }
+    fn standard_dark_changes_chrome_but_preserves_audio_and_effect_semantics() {
+        let medium = Tokens::for_kind(ThemeKind::Medium);
+        assert_eq!(medium.pill_active_bg, Color32::from_gray(0x3a));
+        assert_eq!(medium.control_surface, Color32::from_gray(0x24));
+        let t = Tokens::for_kind(ThemeKind::Dark);
+        assert_eq!(t.panel_bg, Color32::from_rgb(0x10, 0x10, 0x14));
+        assert_eq!(t.accent, Color32::from_rgb(0x2d, 0x81, 0xff));
+        assert_eq!(t.row_selected, Color32::from_rgb(0x20, 0x3b, 0x65));
+        assert_eq!(t.on_accent(), Color32::from_rgb(0x06, 0x06, 0x07));
+        assert_eq!(medium.on_accent(), Color32::WHITE);
+        // The painted media/effect colors retain their meaning.
+        assert_eq!(t.clip_bar_bg, Color32::from_rgb(58, 58, 70));
+        assert_eq!(t.control_handle, Color32::from_gray(0xe0));
+        assert_eq!(t.meter_bg, Color32::BLACK);
+        assert_eq!(t.plot_bg, Color32::from_gray(0x18));
+        assert_eq!(t.plot_grid, Color32::from_gray(0x2c));
+        assert_eq!(t.keyframe_plot_bg, Color32::from_gray(0x19));
+        assert_eq!(t.keyframe_plot_grid, Color32::from_gray(0x2a));
+        assert_eq!(t.keyframe_plot_axis, Color32::from_gray(0x33));
+        assert_eq!(t.keyframe_handle, Color32::from_gray(0xd0));
     }
 
     /// The colours the highlight drives besides the accent (#707).
@@ -589,6 +628,7 @@ mod tests {
     fn a_highlight_of_ones_own_colours_the_playhead_timecodes_focus_and_targeting() {
         let pink = Color32::from_rgb(0xe0, 0x45, 0x7b);
         let t = Tokens::for_kind(ThemeKind::Dark).with_appearance(Some([0xe0, 0x45, 0x7b]), false);
+        assert_eq!(t.on_accent(), Color32::WHITE, "a custom highlight retains its existing button foreground");
         let hue = |c: Color32| egui::ecolor::HsvaGamma::from(c).h;
         for (c, was) in highlight_blues(&t).into_iter().zip(highlight_blues(&Tokens::for_kind(ThemeKind::Dark))) {
             assert_ne!(c, was);
