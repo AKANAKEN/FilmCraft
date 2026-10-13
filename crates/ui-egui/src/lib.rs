@@ -720,6 +720,9 @@ impl FilmcraftApp {
             } else if language == i18n::Language::ZhCn && !i18n::chinese_font_available() {
                 self.ui.language = i18n::Language::En;
                 self.ui.status = tl!("no Chinese font is installed on this system; the interface stays in English").into();
+            } else if language == i18n::Language::ZhTw && !theme::install_fonts(ctx, language) {
+                self.ui.language = i18n::Language::En;
+                self.ui.status = i18n::fmt(language.tr("No font supporting {language} is available; using English."), &[("language", language.name())]);
             } else if language == i18n::Language::Ko && !i18n::korean_font_available() {
                 self.ui.language = i18n::Language::En;
                 self.ui.status = tl!("no Korean font is installed on this system; the interface stays in English").into();
@@ -2050,6 +2053,7 @@ impl eframe::App for FilmcraftApp {
             if japanese_missing
                 || (self.ui.language == i18n::Language::ZhCn && !i18n::chinese_font_available())
                 || (self.ui.language == i18n::Language::Ko && !i18n::korean_font_available())
+                || (self.ui.language == i18n::Language::ZhTw && !theme::install_fonts(ctx, self.ui.language))
             {
                 self.ui.language = i18n::Language::En;
             }
