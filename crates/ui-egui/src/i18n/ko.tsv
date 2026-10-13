@@ -8,6 +8,9 @@
 # spelling. Hangul is drawn with an installed system font (Malgun Gothic, Apple SD Gothic Neo, Noto
 # Sans CJK KR…, see cjk.rs); native-speaker review welcome.
 
+# Program preview group command
+	Move Preview Group	미리보기 그룹 이동
+
 	   Angle	   각도
 	   Blur	   흐림
 	   Corner Radius	   모서리 반경

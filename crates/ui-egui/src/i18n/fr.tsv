@@ -16,6 +16,9 @@
 # décalage, overwrite = écraser, scopes = oscilloscopes, preferences (also the native macOS
 # Settings menu) = Préférences, settings = paramètres.
 
+# Program preview group command
+	Move Preview Group	Déplacer le groupe dans l’aperçu
+
 	About FilmCraft	À propos de FilmCraft
 	Add Audio Submix Track	Ajouter une piste de sous-mixage audio
 	Add Caption at Playhead	Ajouter un sous-titre à la tête de lecture

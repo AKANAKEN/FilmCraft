@@ -2593,6 +2593,7 @@ fn build() -> Vec<CommandSpec> {
             let clips: Vec<ClipId> =
                 p.get("clips").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_u64().map(ClipId)).collect()).unwrap_or_default();
             let clips = with_links(s, &clips);
+            s.state.preview_elements.clear();
             // selecting clips leaves trim mode (Premiere: clip and edit point selections are exclusive)
             s.state.edit_points.clear();
             s.state.trim_shift = Default::default();
@@ -3001,6 +3002,34 @@ fn build() -> Vec<CommandSpec> {
             run: select_effect,
             journal: false,
         },
+        cmd!(
+            "preview.move",
+            "Move or Duplicate Preview Element",
+            [],
+            None,
+            r#"{"clip":id,"layer":n?,"position":[x,y],"duplicate":bool?,"texts":[clipId]?,"time":ticks?,"gesture":id?,"merge":bool?,"begin":bool?}"#,
+            has_seq,
+            crate::preview::move_clip
+        ),
+        cmd!("preview.select", "Select Preview Element", [], None, r#"{"clip":id,"layer":n?,"add":bool?,"retain":bool?}"#, has_seq, crate::preview::select),
+        cmd!(
+            "preview.translate",
+            "Move Preview Group",
+            [],
+            None,
+            r#"{"moves":[{"clip":id,"layer":n?,"position":[x,y]}],"time":ticks?,"merge":bool?,"begin":bool?}"#,
+            has_seq,
+            crate::preview::translate
+        ),
+        cmd!(
+            "motion.set",
+            "Transform Clip",
+            [],
+            None,
+            r#"{"clip":id,"position":[x,y]?,"scale":0..10000?,"scaleWidth":0..10000?,"time":ticks?,"merge":bool?,"begin":bool?} (atomic Motion edit; animated values are changed at the requested timeline time)"#,
+            has_seq,
+            crate::motion::set
+        ),
         cmd!(
             "effects.setParam",
             "Set Effect Parameter",

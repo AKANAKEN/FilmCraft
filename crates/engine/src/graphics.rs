@@ -2,7 +2,8 @@
 //!
 //! A graphic clip's layers are the `graphic_text` / `graphic_shape` effect instances on the clip
 //! (see `filmcraft_project::graphic`). Commands address a clip by `clip` (default: the first
-//! selected graphic clip, else the topmost graphic clip under the playhead) and a layer by
+//! selected graphic clip at the playhead, else the first selected graphic, else the topmost
+//! graphic clip under the playhead) and a layer by
 //! `layer` = index among the clip's graphic layers, 0 = back (default: the selected layer, else
 //! the frontmost). Property values are keyframe-aware: on an animated property they set the value
 //! at the playhead.
@@ -19,6 +20,10 @@ use crate::{EngineError, Result, Session};
 
 type Run = fn(&mut Session, &Value) -> Result<Value>;
 type Enabled = fn(&Session) -> std::result::Result<(), String>;
+
+// Timeline titles often contain thousands of short speech fragments. This bound is
+// separate from the smaller limit for simultaneously visible preview elements.
+pub(crate) const MAX_TIMELINE_TEXT_CLIPS: usize = 10_000;
 
 fn spec(
     id: &'static str,
@@ -40,14 +45,15 @@ pub fn is_graphic(s: &Session, seq: &Sequence, c: ClipId) -> bool {
     seq.find_item(c).and_then(|(_, it)| s.project.item(it.item)).is_some_and(|p| matches!(p.kind, ItemKind::Graphic { .. }))
 }
 
-/// The graphic clip a command acts on: `clip`, else the first selected graphic clip, else the
-/// topmost graphic clip under the playhead.
+/// The graphic clip a command acts on: `clip`, else a selected graphic at the playhead, else
+/// the first selected graphic, else the topmost graphic under the playhead.
 pub fn target_clip(s: &Session, p: &Value) -> Option<ClipId> {
     let seq = s.active_sequence()?;
     if let Some(c) = u64_p(p, "clip").map(ClipId) {
         return is_graphic(s, seq, c).then_some(c);
     }
-    if let Some(c) = s.state.selection.iter().copied().find(|c| is_graphic(s, seq, *c)) {
+    let selected = || s.state.selection.iter().copied().filter(|c| is_graphic(s, seq, *c));
+    if let Some(c) = selected().find(|c| seq.find_item(*c).is_some_and(|(_, it)| it.range().contains(s.playhead()))).or_else(|| selected().next()) {
         return Some(c);
     }
     let t = s.playhead();
@@ -279,6 +285,47 @@ pub(crate) fn set_props(
         let mt = it.source_time_at(tl.clamp(it.start, it.end() - Tick(1)));
         let e = it.effects.get_mut(eidx).ok_or_else(|| bad("graphics.set", "no such layer"))?;
         apply_props(e, &props, mt)?;
+        Ok(())
+    })
+}
+
+/// A timeline selection synchronizes text appearance/geometry, including inactive title clips.
+/// Wording and layer identity stay local. Explicit preview groups retain their relative behavior.
+fn set_selected_text_props(s: &mut Session, clip: ClipId, eidx: usize, props: &serde_json::Map<String, Value>, tl: Tick, merge: Option<&str>) -> Result<()> {
+    let q = s.active_sequence().ok_or(EngineError::NoSequence)?;
+    let (_, source) = q.find_item(clip).ok_or(filmcraft_edit::EditError::NoItem(clip))?;
+    let bulk = source.effects.get(eidx).is_some_and(|e| e.effect == graphic::TEXT_LAYER)
+        && s.state.selection.contains(&clip)
+        && crate::preview::selected(s).len() <= 1;
+    let shared: serde_json::Map<String, Value> =
+        props.iter().filter(|(k, _)| !["text", "name", "enabled"].contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect();
+    let mut targets = Vec::new();
+    if bulk && !shared.is_empty() {
+        if s.state.selection.len() > MAX_TIMELINE_TEXT_CLIPS {
+            return Err(bad("graphics.set", format!("at most {MAX_TIMELINE_TEXT_CLIPS} selected clips")));
+        }
+        for id in &s.state.selection {
+            if *id == clip {
+                continue;
+            }
+            let Some((track, it)) = q.find_item(*id) else { continue };
+            if q.track(track).is_none_or(|t| t.locked || !t.enabled) || !is_graphic(s, q, *id) {
+                continue;
+            }
+            for (ei, e) in it.effects.iter().enumerate() {
+                if e.effect == graphic::TEXT_LAYER && !targets.contains(&(*id, ei)) {
+                    targets.push((*id, ei));
+                }
+            }
+        }
+    }
+    s.edit_sequence_as("Change Graphic Property", merge, |q, _, _| {
+        for (id, ei) in std::iter::once((clip, eidx)).chain(targets) {
+            let (_, it) = q.find_item_mut(id).ok_or(filmcraft_edit::EditError::NoItem(id))?;
+            let mt = it.source_time_at(tl.clamp(it.start, (it.end() - Tick(1)).max(it.start)));
+            let e = it.effects.get_mut(ei).ok_or_else(|| bad("graphics.set", "no such layer"))?;
+            apply_props(e, if id == clip { props } else { &shared }, mt)?;
+        }
         Ok(())
     })
 }
@@ -1068,7 +1115,7 @@ pub fn commands() -> Vec<CommandSpec> {
                 if bool_p(p, "begin").unwrap_or(false) {
                     s.history.merge_key = None;
                 }
-                set_props(s, clip, ei, &props, tl, "Change Graphic Property", merge.as_deref())?;
+                set_selected_text_props(s, clip, ei, &props, tl, merge.as_deref())?;
                 Ok(Value::Null)
             },
         ),
@@ -1082,6 +1129,7 @@ pub fn commands() -> Vec<CommandSpec> {
             set_text_type,
         ),
         spec("graphics.selectLayer", "Select Graphic Layer", &[], None, r#"{"clip":id?,"layers":[n]}"#, has_graphic, |s, p| {
+            s.state.preview_elements.clear();
             let clip = target_clip(s, p).ok_or_else(|| bad("graphics.selectLayer", "no graphic clip"))?;
             let layers: Vec<usize> =
                 p.get("layers").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_u64).map(|v| v as usize).collect()).unwrap_or_default();
