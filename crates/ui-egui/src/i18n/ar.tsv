@@ -3584,3 +3584,21 @@
 	Export the labels to a preset file…	تصدير التسميات إلى ملف إعداد مسبق…
 	Show the presets folder	إظهار مجلد الإعدادات المسبقة
 	Delete this preset	حذف هذا الإعداد المسبق
+
+# The strings that landed on main with the Korean and Italian interface and the Ripple Delete
+# Head Frame fix, and the ones the older rows had left untranslated.
+	32 bit	32 بت
+	32 bit float	32 بت فاصلة عائمة
+	Clear Recent Files	مسح الملفات الأخيرة
+	Couldn't open your web browser	تعذر فتح متصفح الويب
+	FLAC stores whole-number samples only	FLAC يخزّن العينات الصحيحة فقط
+	MXF export writes integer PCM only	تصدير MXF يكتب PCM صحيحًا فقط
+	Open Recent	فتح الأحدث
+	Open this address in your browser yourself:	افتح هذا العنوان في متصفحك بنفسك:
+	Opens in your web browser: {url}	يفتح في متصفح الويب: {url}
+	Recent	الأحدث
+	Ripple Delete Head Frame	الحذف التتابعي لإطار البدء
+	Saves this session's log and shows it in your file manager.	يحفظ سجل هذه الجلسة ويعرضه في مدير الملفات.
+	Shows a report on this computer.	يعرض تقريرًا على هذا الحاسوب.
+	Shows the version, community links and credits in a FilmCraft window.	يعرض الإصدار وروابط المجتمع وقائمة الشكر في نافذة FilmCraft.
+	no Korean font is installed on this system; the interface stays in English	لا توجد خطوط كورية مثبتة على هذا النظام؛ تبقى الواجهة بالإنجليزية

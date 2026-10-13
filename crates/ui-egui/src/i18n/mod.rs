@@ -23,7 +23,10 @@
 //!
 //! العربية (Arabic) uses the right-to-left fallback faces `theme::install` always adds (craft-fonts
 //! Noto Sans Arabic, otherwise one installed system face, see `rtl.rs`); without an Arabic face,
-//! switching to Arabic is refused the same way ([`arabic_font_available`]).
+//! switching to Arabic is refused the same way ([`arabic_font_available`]). Its labels are stored
+//! in the visual order egui draws its runs in ([`crate::rtl::visual_line`]), so the interface
+//! reads right to left; what a user types keeps the logical order, and the mirrored layout of the
+//! chrome is a separate, larger step.
 
 mod catalog;
 
@@ -174,18 +177,18 @@ impl Language {
     fn catalog(self) -> Option<&'static Catalog> {
         match self {
             Self::En => None,
-            Self::Ja => Some(JAPANESE.get_or_init(|| Catalog::parse(include_str!("ja.tsv")))),
-            Self::Es => Some(SPANISH.get_or_init(|| Catalog::parse(include_str!("es.tsv")))),
-            Self::PtBr => Some(PORTUGUESE.get_or_init(|| Catalog::parse(include_str!("pt-br.tsv")))),
-            Self::Uk => Some(UKRAINIAN.get_or_init(|| Catalog::parse(include_str!("uk.tsv")))),
-            Self::ZhCn => Some(CHINESE.get_or_init(|| Catalog::parse(include_str!("zh-cn.tsv")))),
-            Self::De => Some(GERMAN.get_or_init(|| Catalog::parse(include_str!("de.tsv")))),
-            Self::Ru => Some(RUSSIAN.get_or_init(|| Catalog::parse(include_str!("ru.tsv")))),
-            Self::Fr => Some(FRENCH.get_or_init(|| Catalog::parse(include_str!("fr.tsv")))),
-            Self::Id => Some(INDONESIAN.get_or_init(|| Catalog::parse(include_str!("id.tsv")))),
-            Self::It => Some(ITALIAN.get_or_init(|| Catalog::parse(include_str!("it.tsv")))),
-            Self::Ko => Some(KOREAN.get_or_init(|| Catalog::parse(include_str!("ko.tsv")))),
-            Self::Ar => Some(ARABIC.get_or_init(|| Catalog::parse(include_str!("ar.tsv")))),
+            Self::Ja => Some(JAPANESE.get_or_init(|| Catalog::parse(include_str!("ja.tsv"), false))),
+            Self::Es => Some(SPANISH.get_or_init(|| Catalog::parse(include_str!("es.tsv"), false))),
+            Self::PtBr => Some(PORTUGUESE.get_or_init(|| Catalog::parse(include_str!("pt-br.tsv"), false))),
+            Self::Uk => Some(UKRAINIAN.get_or_init(|| Catalog::parse(include_str!("uk.tsv"), false))),
+            Self::ZhCn => Some(CHINESE.get_or_init(|| Catalog::parse(include_str!("zh-cn.tsv"), false))),
+            Self::De => Some(GERMAN.get_or_init(|| Catalog::parse(include_str!("de.tsv"), false))),
+            Self::Ru => Some(RUSSIAN.get_or_init(|| Catalog::parse(include_str!("ru.tsv"), false))),
+            Self::Fr => Some(FRENCH.get_or_init(|| Catalog::parse(include_str!("fr.tsv"), false))),
+            Self::Id => Some(INDONESIAN.get_or_init(|| Catalog::parse(include_str!("id.tsv"), false))),
+            Self::It => Some(ITALIAN.get_or_init(|| Catalog::parse(include_str!("it.tsv"), false))),
+            Self::Ko => Some(KOREAN.get_or_init(|| Catalog::parse(include_str!("ko.tsv"), false))),
+            Self::Ar => Some(ARABIC.get_or_init(|| Catalog::parse(include_str!("ar.tsv"), true))),
         }
     }
 
@@ -437,7 +440,7 @@ mod tests {
         assert_eq!(Language::parse("it-IT"), None, "the preference stores the bare code");
         assert_eq!(Language::Ar.name(), "العربية");
         assert_eq!(Language::Ar.tr("File"), "ملف");
-        assert_eq!(Language::Ar.tr("Save As…"), "حفظ باسم…");
+        assert_eq!(Language::Ar.tr("Save As…"), "…باسم حفظ"); // visual order (rtl.rs)
         assert_eq!(Language::Ar.tr("مقطع العطلة.mp4"), "مقطع العطلة.mp4");
         assert_eq!(Language::Ar.tr("An untranslated label"), "An untranslated label");
         assert_eq!(Language::parse("ar"), Some(Language::Ar));
@@ -1428,10 +1431,10 @@ mod tests {
         // beyond the menus: panels, effects and their parameters, settings, status messages
         for (en, ar) in [
             ("Settings", "الإعدادات"),
-            ("Gaussian Blur", "ضبابية غاوسية"),
-            ("Audio Track Mixer", "مازج مسارات الصوت"),
+            ("Gaussian Blur", "غاوسية ضبابية"), // visual order (rtl.rs)
+            ("Audio Track Mixer", "الصوت مسارات مازج"),
             ("Sequence", "تسلسل"),
-            ("Playhead", "رأس التشغيل"),
+            ("Playhead", "التشغيل رأس"),
         ] {
             assert_eq!(Language::Ar.tr(en), ar);
         }
