@@ -2773,7 +2773,6 @@ mod screen_px_tests {
     }
 }
 
-#[cfg(test)]
 mod native_menu_tests {
     use super::*;
     use std::cell::RefCell;
@@ -2810,5 +2809,33 @@ mod native_menu_tests {
         app.sync_native_menu();
         assert_eq!(last(&sent, "edit.undo"), Some(false));
         assert_eq!(last(&sent, "edit.redo"), Some(true), "the undone edit can be redone");
+    }
+}
+
+#[cfg(test)]
+mod native_file_dialog_tests {
+    use super::*;
+
+    /// The Open Files handoff preserves every selected file: the whole dialog answer reaches
+    /// `file.import` (#1324).
+    #[test]
+    fn open_files_imports_every_chosen_path() {
+        let paths = vec!["/media/a.mp4".to_string(), "/media/b.mp4".to_string(), "/media/c.mp4".to_string()];
+        let mut app = FilmcraftApp::new(Session::default());
+        let (answer_tx, answer_rx) = std::sync::mpsc::channel::<Vec<String>>();
+        answer_tx.send(paths.clone()).unwrap();
+        drop(answer_tx);
+        app.hooks.run_dialog = Some(Box::new(move |_| {
+            let (tx, rx) = std::sync::mpsc::channel::<Vec<String>>();
+            for path in answer_rx.try_recv().unwrap_or_default() {
+                let _ = tx.send(vec![path]);
+            }
+            rx
+        }));
+        let r = app.file_dialog("file.import", &json!({})).unwrap();
+        assert_eq!(r, json!({"dialog":"open"}));
+        app.poll_native_dialog(&egui::Context::default());
+        // File imports are synchronous once the dialog answers.
+        assert_eq!(app.session.project.items.len(), paths.len(), "every chosen path imported");
     }
 }
