@@ -409,19 +409,33 @@ fn pcr_range_unwraps_the_33_bit_base() {
 }
 
 #[test]
-fn timestamps_of_different_streams_unwrap_independently() {
-    // audio A starts near 0, audio B on a base just below the wrap: they must not disturb each other
-    let mut mux = TsMux::new(false);
-    mux.psi(&[(0x03, 0x1100), (0x03, 0x1101)]);
-    let b0 = (1i64 << 33) - 1000;
-    for k in 0..3u8 {
-        mux.pes(0x1100, &pes(0xC0, Some(1000 + 2160 * k as i64), None, &mp2_frame(k), true));
-        mux.pes(0x1101, &pes(0xC0, Some(b0 + 2160 * k as i64), None, &mp2_frame(k), true));
+fn streams_sharing_a_clock_stay_in_step_across_the_33_bit_wrap() {
+    // video's first PTS is just before the wrap, audio's just after: one clock, so audio is
+    // 2^33 + 500, not 500 (26.5 hours apart)
+    let w = 1i64 << 33;
+    for audio_first in [false, true] {
+        let mut mux = TsMux::new(false);
+        mux.psi(&[(0x03, 0x1100), (0x03, 0x1101)]);
+        let (v0, a0) = (w - 1000, 500);
+        let video = |mux: &mut TsMux, k: u8| mux.pes(0x1101, &pes(0xC0, Some((v0 + 2160 * k as i64) % w), None, &mp2_frame(k), true));
+        let audio = |mux: &mut TsMux, k: u8| mux.pes(0x1100, &pes(0xC0, Some(a0 + 2160 * k as i64), None, &mp2_frame(k), true));
+        for k in 0..3u8 {
+            if audio_first {
+                audio(&mut mux, k);
+                video(&mut mux, k);
+            } else {
+                video(&mut mux, k);
+                audio(&mut mux, k);
+            }
+        }
+        let f = open(&mux.out).unwrap();
+        let pts = |s: usize| f.streams[s].units.iter().map(|u| u.pts.unwrap()).collect::<Vec<_>>();
+        // one timeline: audio starts 1500 ticks after video (-1000 and 500 around the wrap), whichever
+        // stream the unwrapper saw first, and video steps by 2160
+        let (a, v) = (pts(0), pts(1));
+        assert_eq!(a[0] - v[0], 1500, "audio_first {audio_first}: audio {a:?} video {v:?}");
+        assert_eq!(v[1] - v[0], 2160, "video {v:?}");
     }
-    let f = open(&mux.out).unwrap();
-    let pts = |s: usize| f.streams[s].units.iter().map(|u| u.pts.unwrap()).collect::<Vec<_>>();
-    assert_eq!(pts(0), vec![1000, 3160, 5320]);
-    assert_eq!(pts(1), vec![b0, b0 + 2160, b0 + 4320]);
 }
 
 #[test]

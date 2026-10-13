@@ -300,8 +300,9 @@ pub(crate) fn scan<S: ByteSource + ?Sized>(src: &S, packet_size: usize, sync_off
     let mut es: HashMap<u16, EsState> = HashMap::new();
     let mut order: Vec<u16> = Vec::new();
     let mut pmt_version: Option<u8> = None;
-    // one timestamp unwrapper per PID: streams can have independent time bases
-    let mut unwraps: HashMap<u16, Unwrap> = HashMap::new();
+    // one timestamp unwrapper for the program: its streams share one clock, so a stream whose
+    // first timestamp lies just after the 33-bit wrap stays in step with one just before it
+    let mut unwrap = Unwrap::default();
     // one clock per PID that carries PCRs, and the PMT's PCR_PID; the PCR_PID's clock is the
     // file's `pcr_range`, the first PCR PID seen stands in until (or unless) a PMT names one
     let mut clocks: HashMap<u16, ClockRange> = HashMap::new();
@@ -431,7 +432,6 @@ pub(crate) fn scan<S: ByteSource + ?Sized>(src: &S, packet_size: usize, sync_off
             let (hdr, bytes) = e.asm.packet(pk.pusi, pk.payload);
             if let Some(h) = hdr {
                 e.stream.pes_packets += 1;
-                let unwrap = unwraps.entry(pk.pid).or_default();
                 let pts = h.pts.map(|t| unwrap.unwrap(t));
                 let dts = h.dts.map(|t| unwrap.unwrap(t));
                 e.split.pes_start(pts, dts);
