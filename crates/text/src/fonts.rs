@@ -237,6 +237,12 @@ impl Face {
         }
         self.font().map(f)
     }
+    /// A face outside the database, so no other test can load it. Its id is 0: keep it away from
+    /// the caches keyed by face id.
+    #[cfg(test)]
+    pub(crate) fn unregistered(info: FaceInfo) -> Self {
+        Face { id: 0, info, bytes: OnceLock::new(), shaper: OnceLock::new() }
+    }
     #[cfg(test)]
     pub(crate) fn is_loaded(&self) -> bool {
         self.bytes.get().is_some()

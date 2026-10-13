@@ -263,6 +263,10 @@ pub fn preview(family: &str, text: &str, px: f32, w: usize, h: usize) -> Option<
         return None;
     }
     let face = fonts::regular_face(family)?;
+    sample(&face, text, px, w, h)
+}
+
+fn sample(face: &fonts::Face, text: &str, px: f32, w: usize, h: usize) -> Option<Mask> {
     let path = face
         .with_font_transient(|font| {
             let size = Size::new(px);
@@ -393,17 +397,24 @@ mod tests {
     /// Browsing the font menu reads each installed face for its sample and drops it.
     #[test]
     fn previews_leave_installed_faces_unloaded() {
-        fonts::scan_system();
-        let candidates = fonts::all_faces()
-            .into_iter()
-            .filter(|f| matches!(f.info.data, fonts::FaceData::File(_)) && !f.is_loaded() && fonts::regular_face(&f.info.family).is_some_and(|r| r.id == f.id));
-        for f in candidates {
-            if preview(&f.info.family, "Aa", 16.0, 60, 22).is_some() {
-                assert!(!f.is_loaded(), "{} stays unloaded", f.info.family);
-                return;
-            }
-        }
-        eprintln!("SKIPPED: no installed font to preview");
+        // A face of its own: the installed ones are shared with tests that load every system face
+        // while probing for a Japanese font.
+        let path = std::env::temp_dir().join(format!("filmcraft-preview-{}.ttf", std::process::id()));
+        std::fs::write(&path, fonts::INTER_REGULAR).expect("write temp font");
+        let info = fonts::FaceInfo {
+            family: "Inter".into(),
+            style: "Regular".into(),
+            weight: 400,
+            italic: false,
+            index: 0,
+            data: fonts::FaceData::File(path.clone()),
+            origin: "system",
+        };
+        let f = fonts::Face::unregistered(info);
+        let drawn = sample(&f, "Aa", 16.0, 60, 22);
+        let _ = std::fs::remove_file(&path);
+        assert!(drawn.is_some_and(|m| ink(&m) > 5.0), "the sample is drawn from the file");
+        assert!(!f.is_loaded(), "the file is not kept after the sample");
     }
 
     #[test]
