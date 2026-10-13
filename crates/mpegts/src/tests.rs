@@ -400,6 +400,15 @@ fn h264_recovery_point_is_a_random_access_point() {
 }
 
 #[test]
+fn h264_intra_refresh_recovery_point_is_not_a_random_access_point() {
+    // recovery_frame_cnt 1 (ue(v) "010"): decoding from here shows broken pictures
+    let sei = nal(&[0x06], &[0x00, 0x02, 0xAA, 0xBB, 0x06, 0x01, 0x44, 0x80]);
+    let au = [nal(&AUD, &[]), sei, slice(&[0x41], 0x88, 300)].concat();
+    let (_, f) = h264_units(&[(Some(1000), au), (Some(4600), h264_p(300))]);
+    assert_eq!(f.streams[0].units.iter().map(|u| u.key).collect::<Vec<_>>(), [false, false]);
+}
+
+#[test]
 fn h264_several_access_units_in_one_pes_are_separate_units() {
     // IDR, then in one PES a non-reference B picture and a reference P picture, only the first
     // access unit of the PES has a timestamp

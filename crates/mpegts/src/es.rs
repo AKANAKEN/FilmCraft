@@ -267,7 +267,7 @@ fn eac3_joins_unit(b: &[u8]) -> bool {
 const SEI_WINDOW: usize = 2048;
 
 /// Whether an H.264 SEI NAL (`nal` is the NAL header byte and the payload, as in the stream)
-/// holds a recovery point message (payloadType 6, H.264 D.1.7).
+/// holds a recovery point message (payloadType 6, H.264 D.1.7) with recovery_frame_cnt 0.
 fn sei_has_recovery_point(nal: &[u8]) -> bool {
     // undo emulation prevention so that payload sizes are in RBSP bytes
     let mut b = Vec::with_capacity(nal.len());
@@ -297,7 +297,9 @@ fn sei_has_recovery_point(nal: &[u8]) -> bool {
     while i + 2 <= b.len() {
         let ty = read(&mut i);
         let size = read(&mut i);
-        if ty == 6 {
+        // recovery_frame_cnt is ue(v): a leading 1 bit is the value 0, i.e. decoding from here is
+        // correct at once. A count above 0 (gradual intra refresh) is not a safe seek point.
+        if ty == 6 && b.get(i).is_some_and(|x| x & 0x80 != 0) {
             return true;
         }
         i = i.saturating_add(size);
@@ -519,8 +521,11 @@ impl Splitter {
                 break;
             }
             // a four-byte start code begins with the zero_byte that belongs to its NAL
-            let at = self.buf_start + k as u64 - (k > 0 && self.buf[k - 1] == 0) as u64;
-            let h = self.buf[k + 3];
+            let at = self.buf_start + k as u64 - (k > 0 && self.buf.get(k - 1) == Some(&0)) as u64;
+            let (Some(&h), Some(&h1)) = (self.buf.get(k + 3), self.buf.get(k + if hevc { 5 } else { 4 })) else {
+                blocked = Some(k);
+                break;
+            };
             let (key, vcl, non_ref, au_start) = if hevc {
                 let t = (h >> 1) & 0x3F;
                 (
@@ -530,7 +535,7 @@ impl Splitter {
                     t < 16 && t.is_multiple_of(2),
                     // first_slice_segment_in_pic_flag, or a NAL that precedes the first slice
                     // (VPS, SPS, PPS, AUD, prefix SEI, 41..=44, 48..=55; H.265 7.4.2.4.4)
-                    if t < 32 { self.buf[k + 5] & 0x80 != 0 } else { matches!(t, 32..=35 | 39 | 41..=44 | 48..=55) },
+                    if t < 32 { h1 & 0x80 != 0 } else { matches!(t, 32..=35 | 39 | 41..=44 | 48..=55) },
                 )
             } else {
                 let t = h & 0x1F;
@@ -541,7 +546,7 @@ impl Splitter {
                     // first_mb_in_slice == 0 (ue(v) "1"), or a NAL that precedes the first slice
                     // (SEI, SPS, PPS, AUD, 14..=18; H.264 7.4.1.2.3)
                     match t {
-                        1 | 2 | 5 => self.buf[k + 4] & 0x80 != 0,
+                        1 | 2 | 5 => h1 & 0x80 != 0,
                         6..=9 | 14..=18 => true,
                         _ => false,
                     },
