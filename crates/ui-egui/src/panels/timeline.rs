@@ -284,33 +284,27 @@ pub(crate) fn reveal_playhead(app: &mut FilmcraftApp, ctx: &egui::Context) {
     }
 }
 
-/// The view `(start, end)` inside `0..=total` after a zoom bar's handle is dragged. The span
-/// changes exponentially with the drag: `drag` is how far the pointer has moved since the press, in
-/// widths of the bar, positive toward zooming out, and a whole width takes the view from `min_span`
-/// to `total`. The same distance zooms by the same factor at any level, so a few points of drag stay
-/// controllable at high zoom, where a distance on the bar is much longer than the view. The view
-/// stays centred on `playhead` (moved in from the ends as far as needed). Time units are the
-/// caller's (seconds for the Timeline, a fraction of the clip for a monitor).
-///
-/// The view's centre eases from where it was (`start_centre`) onto the playhead over the first
-/// `CENTRE_DRAG` bar widths of drag, so pressing a handle never moves the view, and the thumb does
-/// not jump away from the pointer.
-pub fn zoom_by_drag(start_span: f64, start_centre: f64, drag: f64, playhead: f64, total: f64, min_span: f64) -> (f64, f64) {
+/// The view `(start, end)` inside `0..=total` after a zoom bar's handle is dragged. `start` and
+/// `span` are the view when the handle was pressed and `grow` is how far the handle has moved
+/// since, as a fraction of the thumb's width (positive toward zooming out), so the thumb's edge
+/// follows the pointer. The view ends up centred on the playhead (moved in from the ends as far as
+/// needed): its centre moves onto the playhead as the span changes, all the way once the span has
+/// halved or doubled, so a press never moves the view and the thumb does not jump. Time units are
+/// the caller's (seconds for the Timeline, a fraction of the clip for a monitor).
+pub fn zoom_by_drag(start: f64, span: f64, grow: f64, playhead: f64, total: f64, min_span: f64) -> (f64, f64) {
     let total = if total.is_finite() { total.max(0.0) } else { 0.0 };
     let min_span = if min_span.is_finite() { min_span.clamp(0.0, total) } else { total };
-    let at = if playhead.is_finite() { playhead.clamp(0.0, total) } else { 0.0 };
-    let drag = if drag.is_finite() { drag.clamp(-4.0, 4.0) } else { 0.0 };
-    let start_span = if start_span.is_finite() { start_span.clamp(min_span, total) } else { total };
-    let span = if min_span > 0.0 && total > min_span { start_span * (drag * (total / min_span).ln()).exp() } else { total };
-    let span = span.clamp(min_span, total);
-    let from = if start_centre.is_finite() { start_centre.clamp(0.0, total) } else { at };
-    let centre = from + (at - from) * (drag.abs() / CENTRE_DRAG).min(1.0);
-    let start = (centre - span / 2.0).clamp(0.0, total - span);
-    (start, start + span)
+    let span = if span.is_finite() { span.clamp(min_span, total) } else { total };
+    let start = if start.is_finite() { start.clamp(0.0, total - span) } else { 0.0 };
+    let grow = if grow.is_finite() { grow.max(-1.0) } else { 0.0 };
+    let new = (span * (1.0 + grow)).clamp(min_span, total);
+    let from = start + span / 2.0;
+    let at = if playhead.is_finite() { playhead.clamp(0.0, total) } else { from };
+    let eased = if span > 0.0 && new > 0.0 { ((new / span).ln().abs() / std::f64::consts::LN_2).min(1.0) } else { 1.0 };
+    let centre = from + (at - from) * eased;
+    let start = (centre - new / 2.0).clamp(0.0, total - new);
+    (start, start + new)
 }
-
-/// How far, in bar widths, a handle is dragged before the view is centred on the playhead.
-const CENTRE_DRAG: f64 = 0.35;
 
 /// Zoom about a time (keeps it under the same screen x).
 pub fn zoom_about(v: &mut TimelineView, factor: f64, anchor_secs: f64, width: f32) {
@@ -1721,14 +1715,15 @@ fn zoom_scrollbar(app: &mut FilmcraftApp, ui: &mut egui::Ui, bar: Rect, seq_seco
                     v.scroll = v.target_scroll;
                 }
             }
-            // a handle: zoom about the playhead, by the distance dragged (the right handle out to
-            // the right, the left handle out to the left)
+            // a handle: zoom about the playhead, the thumb's edge following the pointer (the right
+            // handle out to the right, the left handle out to the left)
             _ => {
                 if let Some(pos) = resp.interact_pointer_pos() {
-                    let drag = (pos.x - grab) as f64 / bar.width().max(1.0) as f64 * if mode == 1 { -1.0 } else { 1.0 };
+                    let (_, thumb_w, _) = zoom_thumb(bar, seq_seconds, start, start_pps);
+                    let grow = (pos.x - grab) as f64 / thumb_w.max(1.0) as f64 * if mode == 1 { -1.0 } else { 1.0 };
                     let min_span = (bar.width() as f64 / 24_000.0).max(0.05);
                     let start_span = bar.width() as f64 / start_pps.max(1e-9);
-                    let (ns, ne) = zoom_by_drag(start_span, start + start_span / 2.0, drag, playhead, total, min_span);
+                    let (ns, ne) = zoom_by_drag(start, start_span, grow, playhead, total, min_span);
                     v.pps = (bar.width() as f64 / (ne - ns).max(min_span)).clamp(0.05, 24_000.0);
                     v.scroll = ns;
                     v.target_scroll = ns;
@@ -3457,44 +3452,44 @@ mod zoom_by_drag_tests {
 
     #[test]
     fn a_press_without_drag_leaves_the_view_where_it_was() {
-        // centre 30 of 100, span 20: the view stays 20..40 whatever the playhead
-        assert_eq!(zoom_by_drag(20.0, 30.0, 0.0, 80.0, 100.0, 1.0), (20.0, 40.0));
-        assert_eq!(zoom_by_drag(20.0, 30.0, 0.0, 5.0, 100.0, 1.0), (20.0, 40.0));
+        // 20..40 of 100, whatever the playhead (in the view, outside it, at an end)
+        for playhead in [80.0, 5.0, 20.0, 40.0, 30.0] {
+            assert_eq!(zoom_by_drag(20.0, 20.0, 0.0, playhead, 100.0, 1.0), (20.0, 40.0), "playhead {playhead}");
+        }
     }
 
     #[test]
-    fn the_view_eases_onto_the_playhead_as_the_drag_goes_on() {
-        // a drag of the whole centring distance centres it on the playhead; half of it, halfway there
-        let (s, e) = zoom_by_drag(20.0, 30.0, 0.35, 70.0, 100.0, 1.0);
-        assert!(((s + e) / 2.0 - 70.0).abs() < 1e-6 || e > 99.0, "centred on 70: {s}..{e}");
-        let (s, e) = zoom_by_drag(20.0, 30.0, 0.175, 70.0, 100.0, 1.0);
-        assert!(((s + e) / 2.0 - 50.0).abs() < 1e-6 || s == 0.0, "halfway from 30 to 70: {s}..{e}");
-        // near an end the view is moved in from it
-        assert_eq!(zoom_by_drag(20.0, 10.0, 0.3, 5.0, 100.0, 1.0).0, 0.0);
-        assert_eq!(zoom_by_drag(20.0, 90.0, 0.3, 99.0, 100.0, 1.0).1, 100.0);
+    fn the_view_moves_onto_the_playhead_as_the_span_changes() {
+        // 20..60 (centre 40), playhead 70: halving the span takes the centre all the way there
+        let (s, e) = zoom_by_drag(20.0, 40.0, -0.5, 70.0, 100.0, 1.0);
+        assert!((e - s - 20.0).abs() < 1e-9 && ((s + e) / 2.0 - 70.0).abs() < 1e-9, "{s}..{e}");
+        // doubling it does too
+        let (s, e) = zoom_by_drag(20.0, 40.0, 1.0, 70.0, 100.0, 1.0);
+        assert!((e - s - 80.0).abs() < 1e-9, "{s}..{e}");
+        assert!(e == 100.0 || ((s + e) / 2.0 - 70.0).abs() < 1e-9, "{s}..{e}");
+        // a smaller change goes part of the way: a fifth of the way for a span narrowed by a tenth
+        let (s, e) = zoom_by_drag(20.0, 40.0, -0.1, 70.0, 100.0, 1.0);
+        let part = (0.9f64).ln().abs() / std::f64::consts::LN_2;
+        assert!(((s + e) / 2.0 - (40.0 + 30.0 * part)).abs() < 1e-9, "{s}..{e}");
     }
 
     #[test]
-    fn a_whole_bar_of_drag_goes_from_the_narrowest_view_to_the_whole_range() {
-        let (s, e) = zoom_by_drag(1.0, 50.0, 1.0, 50.0, 100.0, 1.0);
-        assert_eq!((s, e), (0.0, 100.0), "out: the whole range");
-        let (s, e) = zoom_by_drag(100.0, 50.0, -1.0, 50.0, 100.0, 1.0);
+    fn the_view_stays_inside_the_range_and_above_the_narrowest() {
+        assert_eq!(zoom_by_drag(20.0, 20.0, 50.0, 30.0, 100.0, 1.0), (0.0, 100.0), "out: the whole range");
+        let (s, e) = zoom_by_drag(20.0, 20.0, -1.0, 30.0, 100.0, 1.0);
         assert!((e - s - 1.0).abs() < 1e-9, "in: the narrowest view, {s}..{e}");
-        assert!(((s + e) / 2.0 - 50.0).abs() < 1e-9, "centred on the playhead");
+        assert!(((s + e) / 2.0 - 30.0).abs() < 1e-9, "centred on the playhead");
+        // near an end the view is moved in from it
+        assert_eq!(zoom_by_drag(20.0, 40.0, -0.5, 2.0, 100.0, 1.0).0, 0.0);
+        assert_eq!(zoom_by_drag(20.0, 40.0, -0.5, 99.0, 100.0, 1.0).1, 100.0);
     }
 
     #[test]
-    fn the_same_drag_zooms_by_the_same_factor_at_every_level() {
-        // a twentieth of the bar: the span changes by the same ratio whether it is wide or narrow
-        let ratio = |start: f64| {
-            let (s, e) = zoom_by_drag(start, 500.0, 0.05, 500.0, 1000.0, 0.05);
-            (e - s) / start
-        };
-        let (wide, narrow) = (ratio(10.0), ratio(0.2));
-        assert!((wide - narrow).abs() < 1e-9, "{wide} vs {narrow}");
-        // a few points of a 700 point bar at a 0.3 s view stay a small change
-        let (s, e) = zoom_by_drag(0.3, 100.0, 3.0 / 700.0, 100.0, 640.0, 0.05);
-        assert!((e - s) / 0.3 < 1.05, "3 points changed the span by {}", (e - s) / 0.3);
+    fn a_few_points_on_a_minimum_width_thumb_stay_a_small_change() {
+        // the thumb is drawn at least 24 points wide, so 3 points of drag are an eighth of the span
+        // however long the sequence is
+        let (s, e) = zoom_by_drag(100.0, 0.3, 3.0 / 24.0, 100.2, 640.0, 0.05);
+        assert!(((e - s) / 0.3 - 1.125).abs() < 1e-9, "3 points changed the span by {}", (e - s) / 0.3);
     }
 
     #[test]
@@ -3506,6 +3501,6 @@ mod zoom_by_drag_tests {
         let (s, e) = zoom_by_drag(1.0, 1.0, 1.0, 1.0, f64::NAN, f64::NAN);
         assert!(s.is_finite() && e.is_finite());
         // no room to zoom: the whole range
-        assert_eq!(zoom_by_drag(5.0, 2.0, 1.0, 1.0, 5.0, 5.0), (0.0, 5.0));
+        assert_eq!(zoom_by_drag(2.0, 2.0, 1.0, 1.0, 5.0, 5.0), (0.0, 5.0));
     }
 }
