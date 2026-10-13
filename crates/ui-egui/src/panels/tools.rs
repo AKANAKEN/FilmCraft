@@ -25,7 +25,9 @@ fn button_pos(rect: Rect, i: usize, n: usize) -> Option<egui::Pos2> {
         return None;
     }
     let lines = n.div_ceil(per_line).min(room);
-    let start = (across - (lines as f32 * step - GAP)) / 2.0;
+    // in a row the lines are centred on the whole strip, the grip above the panel included
+    let grip = if horizontal { crate::dock::COMPACT_GRIP_H } else { 0.0 };
+    let start = (across - grip - (lines as f32 * step - GAP)) / 2.0;
     let (a, c) = (GAP + (i % per_line) as f32 * step, start + line as f32 * step);
     Some(if horizontal { pos2(rect.min.x + a, rect.min.y + c) } else { pos2(rect.min.x + c, rect.min.y + a) })
 }
@@ -160,7 +162,8 @@ mod tests {
         assert!(column.iter().all(|p| p.is_some_and(|p| p.x == 5.0)), "centred across a 42 wide panel: {column:?}");
         assert_eq!(column[1].map(|p| p.y), Some(40.0));
         let row = positions(700.0, 42.0);
-        assert!(row.iter().all(|p| p.is_some_and(|p| p.y == 5.0)), "{row:?}");
+        // the 42 point strip sits under an 8 point grip: centred on the 50 points of both
+        assert!(row.iter().all(|p| p.is_some_and(|p| p.y == 1.0)), "{row:?}");
         assert_eq!(row[1].map(|p| p.x), Some(40.0));
     }
 
