@@ -131,6 +131,18 @@ fn file_type_filter() {
 }
 
 #[test]
+fn unopenable_formats_are_not_offered() {
+    // #1292: no opener reads YUV4MPEG2 and nothing imports ALE, so neither may be offered.
+    assert!(media_browser::kind_of("clip.y4m").is_none());
+    assert!(media_browser::kind_of("clips.ale").is_none());
+    assert!(media_browser::extensions().iter().all(|e| *e != "y4m" && *e != "ale"));
+    assert!(!filmcraft_media::is_importable(std::path::Path::new("/home/me/Movies/clip.y4m")));
+    // the formats FilmCraft does read stay listed
+    assert_eq!(media_browser::kind_of("clip.mov"), Some("video"));
+    assert_eq!(media_browser::kind_of("edit.edl"), Some("project"));
+}
+
+#[test]
 fn navigation_back_forward_up_and_recent() {
     let mut s = session();
     s.execute("mediaBrowser.navigate", json!({"path": "/home/me/Movies"})).unwrap();
