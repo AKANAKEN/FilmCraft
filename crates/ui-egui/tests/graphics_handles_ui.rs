@@ -1,5 +1,5 @@
-//! Headless UI tests of the handles of graphic layers in the Program monitor: point text scales
-//! about its anchor point, a paragraph-text box is resized, a shape's Size follows the handle
+//! Headless UI tests of the handles of graphic layers in the Program monitor: text corners change
+//! font size, paragraph edges resize its box, and a shape's Size follows the handle
 //! while its opposite side and anchor point stay (docs/graphics.md).
 //!
 //! With `FILMCRAFT_UI_SHOTS=<dir>` the tests also render the UI with wgpu and save PNGs there.
@@ -164,58 +164,55 @@ fn num(v: &Value) -> f64 {
     v.as_f64().unwrap_or_else(|| panic!("not a number: {v}"))
 }
 
+fn font_size(d: &Driver, clip: u64) -> f64 {
+    let s = &d.harness.state().session;
+    let (_, it) = s.active_sequence().unwrap().find_item(filmcraft_project::ClipId(clip)).unwrap();
+    it.effects.iter().find(|e| e.effect == "graphic_text").unwrap().param("size").unwrap().value_at(it.source_time_at(s.playhead())).as_f64().unwrap()
+}
+
 #[test]
-fn point_text_handles_scale_it_about_its_anchor() {
+fn timeline_bulk_text_corners_and_sides_sync_size_without_changing_words() {
+    let mut d = Driver::new();
+    let (a, pre) = d.paragraph_text();
+    let time = d.harness.state().session.playhead() + filmcraft_time::Tick::from_seconds_f64(10.0);
+    let b = d.exec("graphics.newText", json!({"text":"Al doilea text","time":time.0,"box":[900,300],"size":60}))["clip"].as_u64().unwrap();
+    d.exec("timeline.select", json!({"clips":[a,b]}));
+    d.ok("ui.click", json!({"id":format!("program.layer.{a}.0")}));
+    let n = d.exec("history.list", json!({}))["undo"].as_array().unwrap().len();
+    d.drag_handle(&pre, 2, 30.0, 30.0);
+    assert!(font_size(&d, a) > 80.0);
+    assert_eq!(font_size(&d, a), font_size(&d, b));
+    assert_eq!(d.exec("history.list", json!({}))["undo"].as_array().unwrap().len(), n + 1);
+    d.drag_handle(&pre, 5, -50.0, 0.0);
+    assert_eq!(d.layer(a)["box"], d.layer(b)["box"]);
+    d.drag_handle(&pre, 7, 30.0, 0.0);
+    assert_eq!(d.layer(a)["box"], d.layer(b)["box"]);
+    assert_eq!(d.layer(a)["anchor"], d.layer(b)["anchor"]);
+    assert_eq!(d.layer(a)["text"], FOX);
+    assert_eq!(d.layer(b)["text"], "Al doilea text");
+    assert_eq!(d.harness.state().session.state.selection.len(), 2);
+}
+
+#[test]
+fn point_text_corners_change_font_size_and_edges_keep_scaling() {
     let mut d = Driver::new();
     let (clip, pre) = d.point_text();
     let before = d.layer(clip);
-    assert_eq!(before["textType"], "point");
-    let (anchor, tl, br) = (d.at(&pre, "anchor"), d.handle(&pre, 0), d.handle(&pre, 2));
-    assert!(
-        (anchor.0 - tl.0).abs() < 1.5 && anchor.1 > tl.1 && anchor.1 < br.1,
-        "the anchor is on the first baseline's left end: {anchor:?} in {tl:?}..{br:?}"
-    );
-
-    // a corner dragged down: the text grows, both axes alike, and the anchor does not move
-    d.drag_handle(&pre, 2, 0.0, 40.0);
-    let after = d.layer(clip);
-    let f = num(&after["scale"]) / 100.0;
-    assert!(f > 1.2, "bigger: {f}");
-    assert_eq!(after["scale"], after["scaleWidth"], "uniform");
-    assert_eq!(after["position"], before["position"]);
-    assert_eq!(after["anchor"], before["anchor"]);
-    assert!(near(d.at(&pre, "anchor"), anchor), "the anchor stays put");
-    d.shot("point-text-scaled");
-    let (tl2, br2) = (d.handle(&pre, 0), d.handle(&pre, 2));
-    for (was, now) in [(tl, tl2), (br, br2)] {
-        let want = (anchor.0 + (was.0 - anchor.0) * f, anchor.1 + (was.1 - anchor.1) * f);
-        assert!(near(now, want), "every corner moves away from the anchor by the scale: {was:?} -> {now:?}, expected {want:?}");
+    let anchor = d.at(&pre, "anchor");
+    for (corner, dx, dy) in [(0, -25.0, -25.0), (1, 25.0, -25.0), (2, 25.0, 25.0), (3, -25.0, 25.0)] {
+        d.drag_handle(&pre, corner, dx, dy);
+        assert!(font_size(&d, clip) > 120.0, "corner {corner}, font {}, layer {}", font_size(&d, clip), d.layer(clip));
+        let after = d.layer(clip);
+        assert_eq!(after["scale"], before["scale"]);
+        assert_eq!(after["position"], before["position"]);
+        assert!(near(d.at(&pre, "anchor"), anchor));
+        d.exec("edit.undo", json!({}));
+        assert_eq!(font_size(&d, clip), 120.0);
+        d.frames(4);
     }
-    // the handle is nearer than 60 points to the anchor, so it scales as if 60 points further away
-    let reach = (br.1 - anchor.1) + 60.0;
-    assert!((f - (1.0 + 40.0 / reach)).abs() < 0.02, "scale {f} for 40 points with the handle {} from the anchor", br.1 - anchor.1);
-
-    // sideways travel of a corner does nothing
-    d.drag_handle(&pre, 2, 80.0, 0.0);
-    assert!((num(&d.layer(clip)["scale"]) / 100.0 - f).abs() < 0.01);
-
-    // an edge handle scales the whole text too: the right edge follows the pointer, since it is
-    // further than 60 points from the anchor
-    let (right, top) = (d.handle(&pre, 5), d.handle(&pre, 4));
-    d.drag_handle(&pre, 5, 50.0, 0.0);
-    let l = d.layer(clip);
-    assert_eq!(l["scale"], l["scaleWidth"], "still uniform");
-    let (right2, top2) = (d.handle(&pre, 5), d.handle(&pre, 4));
-    assert!((right2.0 - right.0 - 50.0).abs() < 2.0, "right edge follows the pointer: {right:?} -> {right2:?}");
-    assert!(top2.1 < top.1 - 2.0, "and the text got taller with it: {top:?} -> {top2:?}");
-    assert!(near(d.at(&pre, "anchor"), anchor));
-
-    // towards the anchor shrinks; one undo step per drag
-    let s = num(&l["scale"]);
-    d.drag_handle(&pre, 4, 0.0, 30.0);
-    assert!(num(&d.layer(clip)["scale"]) < s - 5.0);
-    d.exec("edit.undo", json!({}));
-    assert_eq!(num(&d.layer(clip)["scale"]), s);
+    d.drag_handle(&pre, 5, 40.0, 0.0);
+    assert_eq!(font_size(&d, clip), 120.0);
+    assert!(num(&d.layer(clip)["scale"]) > 100.0);
 }
 
 #[test]
@@ -238,7 +235,8 @@ fn the_anchor_point_can_be_dragged_without_moving_the_layer() {
     // now a handle scales about the moved anchor
     d.drag_handle(&pre, 2, 0.0, 30.0);
     assert!(near(d.at(&pre, "anchor"), (anchor.0 + 90.0, anchor.1 - 40.0)));
-    assert!(num(&d.layer(clip)["scale"]) > 201.0);
+    assert!(font_size(&d, clip) > 120.0);
+    assert_eq!(num(&d.layer(clip)["scale"]), 200.0);
 }
 
 #[test]
@@ -252,15 +250,21 @@ fn paragraph_text_handles_resize_the_box_and_the_text_reflows() {
     assert!(near(anchor, tl), "the anchor is on the box's top-left corner: {anchor:?} vs {tl:?}");
     let k = (br.0 - tl.0) / 700.0; // screen points per canvas pixel
 
-    // bottom-right corner: it follows the pointer on both axes, the top-left stays, nothing scales
-    let (dx, dy) = (-70.0 * k, 50.0 * k);
-    d.drag_handle(&pre, 2, dx, dy);
+    // Corners change the actual font size without resizing the paragraph box.
+    d.drag_handle(&pre, 2, 30.0, 30.0);
+    assert!(font_size(&d, clip) > 80.0);
+    assert_eq!(d.layer(clip)["box"], before["box"]);
+    assert_eq!(d.layer(clip)["scale"], before["scale"]);
+    d.exec("edit.undo", json!({}));
+    assert_eq!(font_size(&d, clip), 80.0);
+
+    // Side handles resize the box and reflow text while retaining the font size.
+    d.drag_handle(&pre, 5, -70.0 * k, 0.0);
+    d.drag_handle(&pre, 6, 0.0, 50.0 * k);
     let after = d.layer(clip);
     assert!(near(d.handle(&pre, 0), tl));
-    assert!(near(d.handle(&pre, 2), (br.0 + dx, br.1 + dy)), "the corner follows the pointer");
-    assert!((num(&after["box"][0]) - 630.0).abs() < 1.0 && (num(&after["box"][1]) - 550.0).abs() < 1.0, "{}", after["box"]);
-    assert_eq!(after["overflow"], false);
-    assert_eq!(after["scale"], 100.0);
+    assert!((num(&after["box"][0]) - 630.0).abs() < 1.0 && (num(&after["box"][1]) - 550.0).abs() < 1.0);
+    assert_eq!(font_size(&d, clip), 80.0);
     assert_eq!(after["position"], before["position"]);
     assert_eq!(after["anchor"], before["anchor"]);
 
@@ -372,7 +376,7 @@ fn text_properties_switches_between_point_and_paragraph_text() {
     assert!(d.ok("ui.elements", json!({"prefix": "graphics.textProperties.ok"})).as_array().unwrap().is_empty(), "the dialog closed");
     // its handles scale it now
     d.drag_handle(&pre, 2, 0.0, 40.0);
-    assert!(num(&d.layer(clip)["scale"]) > 101.0);
+    assert!(font_size(&d, clip) > 80.0);
 
     // Cancel changes nothing
     d.ok("ui.click", json!({"id": "graphics.textProperties"}));

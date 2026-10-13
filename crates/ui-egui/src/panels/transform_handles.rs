@@ -192,7 +192,10 @@ fn selected_placement(app: &FilmcraftApp, pic: Rect, reach: Rect, frame: (u32, u
     }
     let seq = app.session.active_sequence()?;
     let ph = app.session.playhead();
-    let (_, it) = seq.find_item(sel.clip)?;
+    let (track, it) = seq.find_item(sel.clip)?;
+    if seq.track(track).is_none_or(|t| t.locked) {
+        return None;
+    }
     if !it.range().contains(ph) {
         return None;
     }
@@ -201,6 +204,20 @@ fn selected_placement(app: &FilmcraftApp, pic: Rect, reach: Rect, frame: (u32, u
     let def = e.def().filter(|d| d.id == "motion" || d.id == "transform")?;
     let pl = placement(app, it, e, it.source_time_at(ph), pic, reach, frame)?;
     Some(((sel.clip, index), def, pl))
+}
+
+/// Explicit Motion/Transform editing owns a media gesture; ordinary Selection still uses the
+/// direct move/resize controls. Graphic layers keep their text/shape editing controls.
+pub(super) fn owns_media(app: &FilmcraftApp, pic: Rect, frame: (u32, u32)) -> bool {
+    if filmcraft_engine::preview::selected(&app.session).len() > 1 {
+        return false;
+    }
+    selected_placement(app, pic, pic, frame).is_some_and(|((clip, _), _, _)| {
+        app.session
+            .active_sequence()
+            .and_then(|q| q.find_item(clip))
+            .is_some_and(|(_, it)| app.session.project.item(it.item).is_some_and(|item| !matches!(item.kind, filmcraft_project::ItemKind::Graphic { .. })))
+    })
 }
 
 fn grab_at(pl: &Placement, p: Pos2) -> Option<Grab> {
@@ -394,7 +411,12 @@ fn clip_under(app: &FilmcraftApp, pic: Rect, frame: (u32, u32), p: Pos2) -> Opti
 /// The selected effect's box on the Program monitor picture `pic`, and double-clicking a clip's
 /// picture to select its Motion.
 pub fn monitor_overlay(app: &mut FilmcraftApp, ui: &mut egui::Ui, pic: Rect, frame: (u32, u32)) {
-    if app.ui.tool != Tool::Selection || app.ui.mask_pen.is_some() {
+    if app.ui.tool != Tool::Selection
+        || app.ui.mask_pen.is_some()
+        || app.playback.playing
+        || filmcraft_engine::preview::selected(&app.session).len() > 1
+        || ui.input(|i| i.modifiers.alt)
+    {
         return;
     }
     let mut actions: Vec<(String, Value)> = Vec::new();

@@ -42,10 +42,13 @@ A text layer is one of two types, as in Premiere Pro (behaviour observed in Prem
 | Lines | only where Return was typed | wrap at the box's width; lines below the box's bottom are not shown, and the bottom-right handle turns into a red plus |
 | Selection box | fits the text | the box, whatever it holds |
 | New layer's anchor point | the origin (left end of the first baseline) | the box's top-left corner |
-| Dragging a handle | scales the layer about its anchor point: every handle scales both axes alike (Uniform Scale stays on), the font size is untouched | moves that side or corner of the box to the pointer, the opposite side stays; the text re-wraps at the same size and Scale is untouched |
+| Dragging a corner | changes font size, retaining Position and Scale | changes font size, retaining the paragraph box, Position and Scale |
+| Dragging a middle-side handle | scales the layer about its anchor point; font size stays fixed | moves that side of the box to the pointer, the opposite side stays; the text re-wraps at the same font size and Scale is untouched |
 
+- **Font size.** Corner travel along the box's diagonal changes the numeric font size, for both
+  point and paragraph text. The paragraph's wrapping width stays fixed.
 - **Point-text scale.** Only the pointer's travel along one side of the box counts: along its
-  width for the two side handles, along its height for the corners and the top and bottom handles.
+  width for the two side handles, along its height for the top and bottom handles.
   Travel `d` away from the anchor scales by `1 + d / r`, where `r` is the handle's distance from
   the anchor along that side, plus 60 points when the handle is nearer than 60 points (so a handle
   on the anchor does not scale without bound). A handle exactly on the anchor grows the text when
@@ -54,9 +57,17 @@ A text layer is one of two types, as in Premiere Pro (behaviour observed in Prem
   left side moves, the layer's origin moves with the corner, so the anchor point is renumbered to
   stay on the same spot of the picture and Position does not change.
 - **Anchor point.** Drag it with the Selection tool: the anchor moves, the layer stays (Position
-  and Anchor Point change together). It is picked before anything under it: a shape dragged by
-  its exact centre moves its anchor, not the shape, and the top-left handle of a new paragraph
-  box is reached only after moving the anchor.
+  and Anchor Point change together). Square handles take priority when they overlap the anchor,
+  so a new paragraph's top-left corner changes font size. A shape dragged by its exact centre
+  moves its anchor.
+- **Visual editing.** Double-click text with Selection, then click before or after a letter to
+  place the caret there. Hit testing follows the shaped text, including Unicode and line wraps.
+- **Timeline bulk edits.** Select multiple text clips and edit the visible selected title. Font,
+  style, font size, appearance and geometry changes through `graphics.set` also apply to the
+  other selected text clips, including titles at other times; wording stays local. Paragraph
+  edge drags assign the same box dimensions and anchor. Locked/disabled follower tracks are
+  skipped. Each gesture is one Undo; inactive clips edit at their clamped source time. Explicit
+  Program groups retain their existing relative translation behavior.
 - **Switching type.** Properties ▸ Text ▸ wrench ▸ **Text Properties** ▸ Text Layer Type
   (`graphics.setTextType`). To point text: the wrapped lines become real lines (also those the
   box hid). To paragraph text: the box is fitted to the text. Either way the text stays where it
@@ -106,8 +117,8 @@ Timecode and Clip Name effects also draw with the text engine.
 | `graphics.list` | (query) | `clip` — layers with names, kinds, text, `textType` (point / paragraph), `box`, `overflow` (the box hides text), position, anchor, scale and on-canvas quads |
 | `fonts.list` | (query) | `system` (scan system font folders, default true) — families and styles |
 
-Without `clip`, commands use the selected graphic clip, else the topmost graphic clip under the
-playhead. Without `layer`, they use the selected layer, else the front one. New graphic clips are
+Without `clip`, commands prefer a selected graphic clip at the playhead, then any selected
+graphic clip, then the topmost graphic clip under the playhead. Without `layer`, they use the selected layer, else the front one. New graphic clips are
 placed at the playhead on the first video track above the clips there that is free for the
 duration (a track is added if needed).
 
@@ -116,13 +127,30 @@ duration (a track is added if needed).
 | Tool | On the Program monitor |
 |---|---|
 | Type (T) | Click empty picture: new point-text layer with a caret. Drag on empty picture: new paragraph-text layer with that box. Click a text layer: caret there. The box of the text being typed into is red. Type; ←/→ (⌥ word, ⌘ line), ↑/↓, Home/End, Shift to select, ⌘A, ⌘C/⌘X/⌘V, Return = new line, Backspace/Delete, Esc = stop editing. Drag inside the edited text to select. |
-| Selection (V) | Click a layer to select it (box with handles and anchor point; only selected layers have a box, and a layer whose visibility is off has none and cannot be clicked); drag to move; drag the anchor point to move it alone; drag a handle to scale point text about its anchor, resize a paragraph-text box (see *Point text and paragraph text*), or change a shape's Size: the dragged side or corner follows the pointer while the opposite one and the anchor point stay, Scale is untouched, and Shift on a corner keeps the proportions (a path, which has no Size, stretches instead); double-click a text layer to edit it with all its text selected, so typing replaces it; while text is edited, Select All (Cmd/Ctrl+A or Edit ▸ Select All) selects all of that text instead of the timeline clips. |
+| Selection (V) | Click a layer to select it (box with handles and anchor point; only selected layers have a box, and a layer whose visibility is off has none and cannot be clicked); drag to move; drag the anchor point to move it alone; drag a corner to change text font size, a middle handle to resize its paragraph box (see *Point text and paragraph text*), or a shape handle to change its Size: the dragged side or corner follows the pointer while the opposite one and the anchor point stay, Scale is untouched, and Shift on a corner keeps the proportions (a path, which has no Size, stretches instead); double-click a text layer to edit it with all its text selected, so typing replaces it; while text is edited, Select All (Cmd/Ctrl+A or Edit ▸ Select All) selects all of that text instead of the timeline clips. |
 | Rectangle / Ellipse | Drag to draw a shape layer. |
 | Pen (P) | Click to place points; click the first point (or Return) to close the path; Esc cancels. |
 
 Moving a layer snaps its edges or centre to the frame edges, the frame centre and the guides
 (View ▸ Snap in Program Monitor, on by default; hold ⌘/Ctrl to move freely). See
 [monitors.md](monitors.md) for rulers and guides.
+
+Option/Alt-drag duplicates the grabbed text layer, image or video on a new video track above
+its original with the same start time, source range and duration. Shift-click adds visible
+elements, including layers inside the same graphic clip, to an explicit preview group. Dragging
+a selected member moves that group by a common screen offset and preserves its spacing.
+
+A multi-title timeline selection has a different purpose: dragging the visible title aligns
+all selected titles to the same frame position, including titles outside the current frame.
+Changes through `graphics.set` synchronize text style and geometry across those selected clips
+(up to 10,000), while each clip retains its own wording and layer identity. Locked tracks are
+excluded. Explicit preview groups retain their relative movement and per-element property edits.
+
+The gestures are command-driven: `motion.set` atomically changes a media clip's position and
+scale; `preview.select` stores clip/layer pairs; `preview.translate` applies absolute positions
+to a visible group; `preview.move` moves or duplicates one element and optionally synchronizes
+other timeline titles. Drag updates merge into one undo step. Command schemas are available
+through `commands.list`.
 
 Automation ids: `program.layer.<clip>.<layer>`, `program.layer.<clip>.<layer>.handle.<n>`
 (0–3 the corners from the top-left clockwise, 4–7 the top, right, bottom and left sides),
