@@ -105,3 +105,21 @@ fn a_track_header_menu_adds_and_deletes_tracks() {
     d.frames(3);
     assert!(d.harness.state().dialog.is_some(), "Add Tracks… opens its dialog");
 }
+
+#[test]
+fn the_empty_part_of_the_header_column_offers_the_dialogs() {
+    let mut d = Driver::demo();
+    // short tracks leave room above the top video track: the header column has no track there
+    d.ok("ui.set", json!({"timeline": {"videoTrackHeight": 30.0}}));
+    d.frames(4);
+    let n = d.harness.state().session.active_sequence().unwrap().video_tracks.len();
+    let top = rect(&mut d, &format!("timeline.track.V{n}.sourcePatch"));
+    let (x, y) = (top[0] + 30.0, top[1] - 25.0);
+    d.ok("ui.click", json!({"x": x, "y": y, "button": "right"}));
+    assert!(has(&mut d, "timeline.tracks.menu.addTracks"), "Add Tracks… is offered");
+    assert!(has(&mut d, "timeline.tracks.menu.deleteTracks"));
+    assert!(!has(&mut d, &format!("timeline.track.V{n}.menu.addTrack")), "not a track's menu");
+    d.ok("ui.click", json!({"id": "timeline.tracks.menu.addTracks"}));
+    d.frames(3);
+    assert!(d.harness.state().dialog.is_some(), "the dialog opens");
+}
