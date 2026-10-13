@@ -43,6 +43,7 @@ pub mod export_renderer;
 pub mod fx;
 pub mod lut;
 pub mod mask;
+mod packed_export;
 mod transition;
 pub use export_renderer::ExportRenderer;
 pub use lut::GpuLut;
@@ -82,6 +83,7 @@ pub struct GpuCompositor {
     backdrop: Option<(wgpu::Texture, wgpu::TextureView, (u32, u32))>,
     output: Option<(wgpu::Texture, wgpu::TextureView, (u32, u32))>,
     accum_readback_buf: Option<(wgpu::Buffer, u64)>,
+    packed_export: Option<packed_export::PackedExport>,
     uploads: HashMap<(usize, u32, u32), Uploaded>,
     clock: u64,
     dummy: wgpu::TextureView,
@@ -418,6 +420,7 @@ impl GpuCompositor {
             backdrop: None,
             output: None,
             accum_readback_buf: None,
+            packed_export: None,
             uploads: HashMap::new(),
             clock: 0,
             dummy,
@@ -978,6 +981,21 @@ impl GpuCompositor {
         self.queue.submit([enc.finish()]);
         export_renderer::timing::add_submit(t.elapsed());
         self.map_accumulator(size)
+    }
+
+    /// Export an opaque SDR frame as exact sRGB RGBA8, packing on the GPU before readback.
+    /// Returns `None` for non-layer plans or an unavailable/readback-failed accumulator.
+    pub fn render_export_rgba8_prepared(&mut self, plan: &FramePlan, prep: Option<&PreparedPlan>) -> Option<(u32, u32, Vec<u8>)> {
+        if matches!(plan, FramePlan::Composite { .. }) || !packed_export::PackedExport::supported(&self.device.limits()) {
+            return None;
+        }
+        let submitted = std::time::Instant::now();
+        self.render_plan(plan, prep, true, false);
+        export_renderer::timing::add_submit(submitted.elapsed());
+        let (view, (w, h)) = self.accum.as_ref().map(|(_, view, size)| (view, *size))?;
+        let packed = self.packed_export.get_or_insert_with(|| packed_export::PackedExport::new(&self.device, &self.queue));
+        let pixels = packed.pack(&self.device, &self.queue, view, w, h)?;
+        Some((w, h, pixels))
     }
 
     /// Run the effect stage of a layer alone: `frame` decoded into its working image and `fx`

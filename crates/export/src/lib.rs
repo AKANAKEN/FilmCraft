@@ -913,6 +913,19 @@ pub fn encoder_registered(f: EncoderFactory) -> bool {
 /// linear-light RGBA), or `None` to let the CPU render this frame (no adapter, a plan the GPU
 /// cannot draw, any internal error): the CPU renderer is the reference and the fallback.
 pub trait FrameRenderer: Send {
+    /// Optional opaque SDR output, byte-identical to `render().over_black_rgba8()`.
+    /// Returning None retains the linear render path; no export effects are bypassed.
+    fn render_rgba8(
+        &mut self,
+        _project: &Project,
+        _seq: ItemId,
+        _t: Tick,
+        _opts: filmcraft_render::RenderOptions,
+        _sources: &dyn SourceProvider,
+    ) -> Option<(u32, u32, Vec<u8>)> {
+        None
+    }
+
     fn render(
         &mut self,
         project: &Project,
