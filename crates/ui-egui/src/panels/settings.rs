@@ -26,6 +26,7 @@ use crate::{AudioDevices, Dialog, FilmcraftApp};
 const W: f32 = 900.0;
 const BODY_H: f32 = 600.0;
 const LIST_W: f32 = 216.0;
+const LIST_MAX_W: f32 = 300.0;
 const ROW_H: f32 = 24.6;
 const LABEL_W: f32 = 250.0;
 
@@ -400,14 +401,24 @@ fn group(ui: &mut Ui, t: &Tokens, title: &str, add: impl FnOnce(&mut Ui)) {
     ui.add_space(4.0);
 }
 
-/// A right-aligned field label in the fixed label column.
+/// A right-aligned field label in the fixed label column. A label longer than the column (#1517:
+/// French, Spanish, Portuguese) wraps onto more lines instead of growing leftwards out of the page.
 fn field_label(ui: &mut Ui, text: &str) {
     let w = LABEL_W.min(ui.available_width() * 0.45);
     ui.allocate_ui_with_layout(vec2(w, 24.0), Layout::right_to_left(Align::Center), |ui| {
         if !text.is_empty() {
-            ui.label(RichText::new(format!("{}:", crate::i18n::t(text))).size(12.5));
+            ui.add(egui::Label::new(RichText::new(format!("{}:", crate::i18n::t(text))).size(12.5)).wrap());
         }
     });
+}
+
+/// Width of the category list: `LIST_W`, or wider when a translated title would not fit (#1517).
+fn list_width(ui: &Ui) -> f32 {
+    let widest = settings::categories()
+        .iter()
+        .map(|c| ui.painter().layout_no_wrap(crate::i18n::t(c.title).to_string(), Tokens::ui(12.5), Color32::WHITE).size().x)
+        .fold(0.0, f32::max);
+    (widest + 18.0).clamp(LIST_W, LIST_MAX_W)
 }
 
 fn unit(ui: &mut Ui, u: &str) {
@@ -425,14 +436,18 @@ fn choice_text(v: &Value) -> String {
     }
 }
 
-/// A dropdown of (value, label) options; returns the chosen value.
+/// A dropdown of (value, label) options; returns the chosen value. A long translated choice is
+/// cut short with "…" where the page ends instead of widening the dialog (#1517).
 fn combo(app: &mut FilmcraftApp, ui: &mut Ui, key: &str, current: &str, opts: &[(String, String)], width: f32) -> Option<String> {
     let shown = opts.iter().find(|o| o.0 == current).map(|o| o.1.clone()).unwrap_or_else(|| current.to_string());
     let mut chosen = None;
     let mut items: Vec<(String, Rect, String)> = Vec::new();
-    let r = egui::ComboBox::from_id_salt(("settings", key)).selected_text(RichText::new(crate::i18n::t(&shown)).size(12.5)).width(width).height(480.0).show_ui(
-        ui,
-        |ui| {
+    let r = egui::ComboBox::from_id_salt(("settings", key))
+        .selected_text(RichText::new(crate::i18n::t(&shown)).size(12.5))
+        .width(width.min(ui.available_width()))
+        .truncate()
+        .height(480.0)
+        .show_ui(ui, |ui| {
             for (v, l) in opts {
                 let r = ui.selectable_label(v == current, crate::i18n::t(l));
                 items.push((format!("settings.{key}.{v}"), r.rect, l.clone()));
@@ -440,8 +455,7 @@ fn combo(app: &mut FilmcraftApp, ui: &mut Ui, key: &str, current: &str, opts: &[
                     chosen = Some(v.clone());
                 }
             }
-        },
-    );
+        });
     app.auto.add(&format!("settings.{key}"), r.response.rect, &shown);
     for (id, rect, l) in items {
         app.auto.add(&id, rect, &l);
@@ -488,6 +502,8 @@ fn draw_field(app: &mut FilmcraftApp, ui: &mut Ui, d: &mut SettingsDraft, f: &Fi
             match f.kind {
                 Kind::Bool => {
                     let mut b = cur.as_bool().unwrap_or(false);
+                    // a row extends its text by default: a long translation would run off the page
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
                     let r = ui.checkbox(&mut b, RichText::new(crate::i18n::t(f.label)).size(12.5));
                     app.auto.add(&format!("settings.{}", f.key), r.rect, f.label);
                     if r.changed() {
@@ -554,7 +570,18 @@ fn draw_field(app: &mut FilmcraftApp, ui: &mut Ui, d: &mut SettingsDraft, f: &Fi
                         Kind::Font => tl!("Font family"),
                         _ => "",
                     };
-                    let r = ui.add(egui::TextEdit::singleline(&mut s).desired_width(if matches!(f.kind, Kind::Path) { 300.0 } else { 220.0 }).hint_text(hint));
+                    let width = if matches!(f.kind, Kind::Path) {
+                        // leave room for Browse… on the same row (#1517)
+                        let browse = ui
+                            .painter()
+                            .layout_no_wrap(tl!("Browse…").to_string(), egui::TextStyle::Button.resolve(ui.style()), ui.visuals().text_color())
+                            .size()
+                            .x;
+                        300.0_f32.min(ui.available_width() - browse - 2.0 * ui.spacing().button_padding.x - 2.0 * ui.spacing().item_spacing.x)
+                    } else {
+                        220.0
+                    };
+                    let r = ui.add(egui::TextEdit::singleline(&mut s).desired_width(width).hint_text(hint));
                     app.auto.add(&format!("settings.{}", f.key), r.rect, f.label);
                     if r.changed() {
                         put(&mut d.values, f.key, json!(s));
@@ -844,10 +871,11 @@ pub fn show(app: &mut FilmcraftApp, ctx: &egui::Context) -> bool {
         ui.horizontal_top(|ui| {
             ui.add_space(20.0);
             // category list
-            let (list, _) = ui.allocate_exact_size(vec2(LIST_W, BODY_H), Sense::hover());
+            let list_w = list_width(ui);
+            let (list, _) = ui.allocate_exact_size(vec2(list_w, BODY_H), Sense::hover());
             ui.painter().rect(list, 2.0, t.field_bg, Stroke::new(1.0, t.separator), egui::StrokeKind::Inside);
             for (i, c) in settings::categories().iter().enumerate() {
-                let row = Rect::from_min_size(list.min + vec2(1.0, 1.0 + i as f32 * ROW_H), vec2(LIST_W - 2.0, ROW_H));
+                let row = Rect::from_min_size(list.min + vec2(1.0, 1.0 + i as f32 * ROW_H), vec2(list_w - 2.0, ROW_H));
                 let r = ui.interact(row, egui::Id::new(("settings-cat", c.id)), Sense::click());
                 let sel = d.page == c.id;
                 if sel {
@@ -872,7 +900,7 @@ pub fn show(app: &mut FilmcraftApp, ctx: &egui::Context) -> bool {
             // the page
             let Some(cat) = settings::category(&d.page) else { return };
             ui.vertical(|ui| {
-                ui.set_width(W - LIST_W - 60.0);
+                ui.set_width(W - list_w - 60.0);
                 ui.set_height(BODY_H);
                 egui::ScrollArea::vertical().id_salt(("settings-page", cat.id)).auto_shrink([false, false]).max_height(BODY_H).show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 6.0;
@@ -1050,6 +1078,55 @@ mod tests {
         system.store(2, Ordering::Relaxed);
         app.apply_prefs(&ctx);
         assert_eq!(app.tokens.kind, ThemeKind::Dark);
+    }
+
+    /// #1517: in French, Spanish and Portuguese, long category titles ran past the category list
+    /// and long field labels grew leftwards out of the page, over the list.
+    #[test]
+    fn translated_pages_stay_inside_the_dialog() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        use filmcraft_engine::settings::categories;
+        let langs = [crate::i18n::Language::Fr, crate::i18n::Language::Es, crate::i18n::Language::PtBr];
+        let mut app = FilmcraftApp::new(filmcraft_engine::Session::default());
+        open(&mut app, "general").unwrap();
+        let mut h = Harness::builder().with_size(vec2(1400.0, 1000.0)).build_eframe(move |_| app);
+        for lang in langs {
+            for c in categories() {
+                h.state_mut().ui.language = lang;
+                h.state_mut().ui.settings.as_mut().unwrap().page = c.id.into();
+                h.run_steps(3);
+                if let Some(dir) = std::env::var_os("FILMCRAFT_SETTINGS_SCREENSHOTS") {
+                    h.render().unwrap().save(std::path::Path::new(&dir).join(format!("{}-{}.png", lang.code(), c.id))).unwrap();
+                }
+                crate::i18n::set_current(lang);
+                let app = h.state();
+                let rect = |id: &str| {
+                    let e = app.auto.find(id).unwrap();
+                    Rect::from_min_size(egui::pos2(e.rect[0], e.rect[1]), vec2(e.rect[2], e.rect[3]))
+                };
+                let window = rect("settings.window");
+                for row in categories() {
+                    let r = rect(&format!("settings.category.{}", row.id));
+                    let w = h.ctx.fonts_mut(|f| f.layout_no_wrap(crate::i18n::t(row.title).to_string(), Tokens::ui(12.5), Color32::WHITE).size().x);
+                    assert!(w + 8.0 <= r.width(), "{lang:?}: category “{}” is {w} wide in a {} row", crate::i18n::t(row.title), r.width());
+                }
+                let list_right = rect("settings.category.general").right();
+                let body =
+                    h.query_all(egui_kittest::kittest::by().predicate(|n| matches!(n.role(), egui::accesskit::Role::Label | egui::accesskit::Role::CheckBox)));
+                for n in body {
+                    let r = n.rect();
+                    if r.top() > window.bottom() && r.bottom() < window.top() + 30.0 + 14.0 + BODY_H {
+                        assert!(
+                            r.left() >= list_right && r.right() <= window.right(),
+                            "{lang:?} {}: {n:?} at {r:?} leaves the page ({list_right}..{})",
+                            c.id,
+                            window.right()
+                        );
+                    }
+                }
+            }
+        }
+        crate::i18n::set_current(crate::i18n::Language::En);
     }
 
     #[test]
