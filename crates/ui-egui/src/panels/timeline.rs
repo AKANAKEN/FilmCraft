@@ -157,6 +157,27 @@ pub enum Drag {
         start: Tick,
         duration: Tick,
     },
+    /// A marker's range end dragged on the ruler (#1348); `duration` is shown live, committed on
+    /// release as one `markers.edit`.
+    MarkerEnd {
+        marker: MarkerId,
+        /// As in [`Drag::Trim`].
+        from: Tick,
+        before: Tick,
+        duration: Tick,
+        /// Where the playhead was: it follows the range end while dragging, Escape puts it back.
+        playhead: Tick,
+    },
+    /// A marker dragged along the ruler (#1348); `start` is shown live, committed on release.
+    MarkerMove {
+        marker: MarkerId,
+        /// As in [`Drag::Trim`].
+        from: Tick,
+        before: Tick,
+        start: Tick,
+        /// As in [`Drag::MarkerEnd`]; the playhead follows the start.
+        playhead: Tick,
+    },
     Pan {
         last: Pos2,
         start_scroll: f64,
@@ -1548,7 +1569,21 @@ fn draw_top(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, seq: &Sequenc
         }
     }
     // markers: 8 × 12 pt pentagons in the marker colour, on the top row
+    // a marker being moved or stretched (#1348) is drawn where the pointer has it
+    let dragged = match &app.tl.drag {
+        Some(Drag::MarkerEnd { marker, duration, .. }) => seq.markers.iter().find(|m| m.id == *marker).map(|m| (*marker, m.start, *duration)),
+        Some(Drag::MarkerMove { marker, start, .. }) => seq.markers.iter().find(|m| m.id == *marker).map(|m| (*marker, *start, m.duration)),
+        _ => None,
+    };
     for m in &seq.markers {
+        let shown;
+        let m = match dragged {
+            Some((id, start, duration)) if id == m.id => {
+                shown = filmcraft_project::Marker { start, duration, ..m.clone() };
+                &shown
+            }
+            _ => m,
+        };
         let x = layout.x_of(m.start);
         let c = m.custom_color.map_or_else(|| app.session.prefs.labels.rgb(m.color), |c| c.0);
         let c = Color32::from_rgb(c[0], c[1], c[2]);
@@ -1565,6 +1600,20 @@ fn draw_top(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, seq: &Sequenc
             egui::Tooltip::always_open(ui.ctx().clone(), ui.layer_id(), egui::Id::new(("mk", m.id.0)), egui::PopupAnchor::Pointer).show(|ui| {
                 ui.label(&m.name);
             });
+        }
+    }
+    // the exact time a marker drag lands on (#1348)
+    if let Some((id, start, duration)) = dragged {
+        let tc = |t: Tick| format_time(t, rate, seq.settings.drop_frame, TimeDisplay::Timecode, seq.settings.sample_rate as i64);
+        let text = if duration > Tick::ZERO {
+            format!("{} {}\n{} {}\n{} {}", tl!("In"), tc(start), tl!("Out"), tc(Tick(start.0.saturating_add(duration.0))), tl!("Duration"), tc(duration))
+        } else {
+            tc(start)
+        };
+        let r =
+            egui::Tooltip::always_open(ui.ctx().clone(), ui.layer_id(), egui::Id::new(("mkdrag", id.0)), egui::PopupAnchor::Pointer).show(|ui| ui.label(&text));
+        if let Some(r) = r {
+            app.auto.add("timeline.markerDrag.time", r.response.rect, &text);
         }
     }
     app.auto.add("timeline.ruler", ruler, "time ruler");
@@ -1758,10 +1807,15 @@ pub fn hit_json(app: &FilmcraftApp, pos: Pos2, mods: egui::Modifiers) -> Value {
     let kind = match grab {
         Grab::Edge { kind, .. } => json!(kind.name()),
         Grab::Volume { .. } => json!("volume"),
+        Grab::MarkerEnd(_) => json!("markerEnd"),
+        Grab::Marker(_) => json!("marker"),
         Grab::Other(_) => Value::Null,
     };
     match grab.hit() {
-        Hit::Ruler => json!({"hit": "ruler", "time": t.0}),
+        Hit::Ruler => match grab {
+            Grab::MarkerEnd(m) | Grab::Marker(m) => json!({"hit": "ruler", "time": t.0, "kind": kind, "marker": m.0}),
+            _ => json!({"hit": "ruler", "time": t.0}),
+        },
         Hit::Clip { track, clip, edge } => {
             json!({"hit": "clip", "track": track.0, "clip": clip.0, "edge": edge.map(|e| format!("{e:?}")), "kind": kind, "time": t.0})
         }
@@ -2148,7 +2202,7 @@ fn interact(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence, layout: &
         app.tl.cancelled = false;
         let grab = grab_at(seq, layout, p, tool, mods, roll_ripple);
         // the playhead jumps to a press on the ruler at once, not only once the pointer has moved (#1090)
-        if matches!(grab, Grab::Other(Hit::Ruler)) {
+        if matches!(grab, Grab::Other(Hit::Ruler) | Grab::Marker(_)) {
             scrub_playhead(app, seq, layout, p, mods.shift);
         }
         app.tl.pressed = Some(Pressed { pos: p, tick: layout.tick_at(p.x), grab });
@@ -2201,7 +2255,8 @@ fn interact(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence, layout: &
     {
         let g = grab_at(seq, layout, p, tool, mods, roll_ripple);
         let cur = match (tool, g) {
-            (_, Grab::Edge { .. }) => CursorIcon::ResizeColumn,
+            (_, Grab::Edge { .. } | Grab::MarkerEnd(_)) => CursorIcon::ResizeColumn,
+            (_, Grab::Marker(_)) => CursorIcon::Grab,
             (Tool::Selection, Grab::Other(Hit::Transition { edge: Some(_), .. })) => CursorIcon::ResizeColumn,
             (Tool::Selection, Grab::Other(Hit::Transition { edge: None, .. })) => CursorIcon::Grab,
             (_, Grab::Volume { .. }) if tool == Tool::Pen || mods.command => CursorIcon::Crosshair,
@@ -2246,6 +2301,20 @@ fn interact(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence, layout: &
             g => g,
         };
         let started = match (tool, grab) {
+            (_, Grab::MarkerEnd(marker)) => seq.markers.iter().find(|m| m.id == marker).map(|m| Drag::MarkerEnd {
+                marker,
+                from: t,
+                before: m.duration,
+                duration: m.duration,
+                playhead: app.session.playhead(),
+            }),
+            (_, Grab::Marker(marker)) => seq.markers.iter().find(|m| m.id == marker).map(|m| Drag::MarkerMove {
+                marker,
+                from: t,
+                before: m.start,
+                start: m.start,
+                playhead: app.session.playhead(),
+            }),
             (_, Grab::Other(Hit::Ruler)) => Some(Drag::Scrub { initial: app.session.playhead() }),
             (Tool::Hand, _) => Some(Drag::Pan { last: p, start_scroll: app.ui.timeline.target_scroll, start_v: app.ui.timeline.v_scroll }),
             (Tool::Zoom, _) => {
@@ -2404,7 +2473,7 @@ fn interact(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence, layout: &
     if (app.tl.drag.is_some() || app.tl.pressed.is_some()) && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
         if let Some(d) = app.tl.drag.take() {
             match d {
-                Drag::Scrub { initial } => {
+                Drag::Scrub { initial } | Drag::MarkerEnd { playhead: initial, .. } | Drag::MarkerMove { playhead: initial, .. } => {
                     app.session.set_playhead(initial);
                 }
                 Drag::Volume(v) if v.changed() => {
@@ -2515,6 +2584,19 @@ fn interact(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence, layout: &
                 let (start, duration) = span.unwrap_or((start, duration));
                 Some(Drag::Transition { id, edge, from, start, duration })
             }
+            // the playhead follows the dragged edge, so the Program monitor shows the frame aimed at
+            Drag::MarkerEnd { marker, from, before, playhead, .. } => {
+                let duration = rate.snap_nearest(Tick(before.0.saturating_add(t_here.0.saturating_sub(from.0)))).max(Tick::ZERO);
+                if let Some(m) = seq.markers.iter().find(|m| m.id == marker) {
+                    app.session.set_playhead(Tick(m.start.0.saturating_add(duration.0)));
+                }
+                Some(Drag::MarkerEnd { marker, from, before, duration, playhead })
+            }
+            Drag::MarkerMove { marker, from, before, playhead, .. } => {
+                let start = rate.snap_nearest(Tick(before.0.saturating_add(t_here.0.saturating_sub(from.0)))).max(Tick::ZERO);
+                app.session.set_playhead(start);
+                Some(Drag::MarkerMove { marker, from, before, start, playhead })
+            }
             Drag::Volume(v) => Some(Drag::Volume(super::timeline_volume::drag(app, ui, seq, layout, v, p.y))),
             Drag::Marquee { start, before, add } => {
                 let r = Rect::from_two_pos(start, p);
@@ -2575,6 +2657,13 @@ fn interact(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence, layout: &
                 Drag::Roll { left, right, delta, .. } if delta != Tick::ZERO => Some(app.session.execute("timeline.roll", json!({"left": left.0, "right": right.0, "delta": delta.0}))),
                 Drag::Slip { clip, delta } if delta != Tick::ZERO => Some(app.session.execute("timeline.slip", json!({"clip": clip.0, "delta": delta.0}))),
                 Drag::Slide { clip, delta } if delta != Tick::ZERO => Some(app.session.execute("timeline.slide", json!({"clip": clip.0, "delta": delta.0}))),
+                Drag::MarkerEnd { marker, before, duration, .. } if duration != before => {
+                    Some(app.session.execute("markers.edit", json!({"target": "program", "marker": marker.0, "durationFrames": rate.frame_at(duration)})))
+                }
+                // the playhead stays on the new start, so the moved marker stays the selected one (#695)
+                Drag::MarkerMove { marker, before, start, .. } if start != before => {
+                    Some(app.session.execute("markers.edit", json!({"target": "program", "marker": marker.0, "time": start.0})))
+                }
                 Drag::Transition { id, start, duration, .. } => {
                     let moved = seq.all_tracks().find_map(|tr| tr.transitions.iter().find(|x| x.id == id)).is_some_and(|x| (x.start, x.duration) != (start, duration));
                     moved.then(|| app.session.execute("sequence.setTransition", json!({"transition": id.0, "start": start.0, "duration": duration.0})))
