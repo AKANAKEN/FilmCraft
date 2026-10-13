@@ -50,14 +50,25 @@ fn vs(@builtin(vertex_index) vi: u32) -> VOut {
     return out;
 }
 
-fn load4(t: texture_2d<f32>, p: vec2<f32>) -> vec4<f32> {
-    let d = vec2<i32>(textureDimensions(t));
+// The top-left texel of the 2×2 bilinear footprint at p and the weights towards the others.
+struct Taps {
+    i: vec2<i32>,
+    f: vec2<f32>,
+};
+
+fn taps(p: vec2<f32>) -> Taps {
     var q = p - 0.5;
     let rq = round(q);
     if abs(q.x - rq.x) < 1e-4 { q.x = rq.x; }
     if abs(q.y - rq.y) < 1e-4 { q.y = rq.y; }
-    let i = vec2<i32>(floor(q));
-    let f = q - floor(q);
+    return Taps(vec2<i32>(floor(q)), q - floor(q));
+}
+
+fn load4(t: texture_2d<f32>, p: vec2<f32>) -> vec4<f32> {
+    let d = vec2<i32>(textureDimensions(t));
+    let tp = taps(p);
+    let i = tp.i;
+    let f = tp.f;
     let a = textureLoad(t, clamp(i, vec2(0), d - 1), 0);
     let b = textureLoad(t, clamp(i + vec2(1, 0), vec2(0), d - 1), 0);
     let cc = textureLoad(t, clamp(i + vec2(0, 1), vec2(0), d - 1), 0);
@@ -179,8 +190,22 @@ fn sample(p: vec2<f32>) -> vec4<f32> {
     if kind == 1u {
         return load4(tex0, p);
     }
+    // Y'CbCr: the four texels are converted to linear light before they are interpolated, as
+    // the CPU resamples its linear image; mixing code values darkens fine bright detail (#1558)
+    let tp = taps(p);
+    let i = tp.i;
+    let f = tp.f;
+    let top = mix(yuv_texel(i), yuv_texel(i + vec2(1, 0)), f.x);
+    let bottom = mix(yuv_texel(i + vec2(0, 1)), yuv_texel(i + vec2(1, 1)), f.x);
+    return mix(top, bottom, f.y);
+}
+
+// One Y'CbCr texel (luma position, clamped to the picture) as linear premultiplied colour.
+fn yuv_texel(texel: vec2<i32>) -> vec4<f32> {
+    let t = clamp(texel, vec2(0), vec2<i32>(textureDimensions(tex0)) - 1);
+    let p = vec2<f32>(t) + 0.5;
     let cs = u.p2.z;
-    let yc = load4(tex0, p).r * cs;
+    let yc = textureLoad(tex0, t, 0).r * cs;
     let cp = p * u.src.zw / u.src.xy;
     let cb = load4(tex1, cp).r * cs;
     let cr = load4(tex2, cp).r * cs;
@@ -194,7 +219,7 @@ fn sample(p: vec2<f32>) -> vec4<f32> {
     // straight alpha from the alpha plane (full resolution, like luma), premultiplied here
     var a = 1.0;
     if u.p3.y > 0.0 {
-        a = clamp(load4(tex3, p).r * u.p3.y, 0.0, 1.0);
+        a = clamp(textureLoad(tex3, t, 0).r * u.p3.y, 0.0, 1.0);
     }
     var lin = to_linear(vec3(R, G, B));
     if u.q0.x > 0.5 { lin = managed(vec3(R, G, B)); }
