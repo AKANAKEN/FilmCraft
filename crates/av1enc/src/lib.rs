@@ -110,9 +110,11 @@ pub struct Encoder {
 fn compute_block_sad(src: &[u8], src_stride: usize, ref_plane: &[u8], ref_stride: usize, x0: usize, y0: usize, w: usize, h: usize) -> u64 {
     let mut sad = 0u64;
     for r in 0..h {
-        let src_off = (y0 + r) * src_stride + x0;
-        let ref_off = (y0 + r) * ref_stride + x0;
-        if let (Some(s_row), Some(r_row)) = (src.get(src_off..src_off + w), ref_plane.get(ref_off..ref_off + w)) {
+        let Some(y) = y0.checked_add(r) else { continue };
+        let Some(src_off) = y.checked_mul(src_stride).and_then(|o| o.checked_add(x0)) else { continue };
+        let Some(ref_off) = y.checked_mul(ref_stride).and_then(|o| o.checked_add(x0)) else { continue };
+        let (Some(src_end), Some(ref_end)) = (src_off.checked_add(w), ref_off.checked_add(w)) else { continue };
+        if let (Some(s_row), Some(r_row)) = (src.get(src_off..src_end), ref_plane.get(ref_off..ref_end)) {
             let (chunks_s, rem_s) = s_row.as_chunks::<16>();
             let (chunks_r, rem_r) = r_row.as_chunks::<16>();
             for (cs, cr) in chunks_s.iter().zip(chunks_r.iter()) {
@@ -133,9 +135,11 @@ fn compute_block_sad(src: &[u8], src_stride: usize, ref_plane: &[u8], ref_stride
 #[inline]
 fn copy_block(src: &[u8], src_stride: usize, dst: &mut [u8], dst_stride: usize, x0: usize, y0: usize, w: usize, h: usize) {
     for r in 0..h {
-        let src_off = (y0 + r) * src_stride + x0;
-        let dst_off = (y0 + r) * dst_stride + x0;
-        if let (Some(s), Some(d)) = (src.get(src_off..src_off + w), dst.get_mut(dst_off..dst_off + w)) {
+        let Some(y) = y0.checked_add(r) else { continue };
+        let Some(src_off) = y.checked_mul(src_stride).and_then(|o| o.checked_add(x0)) else { continue };
+        let Some(dst_off) = y.checked_mul(dst_stride).and_then(|o| o.checked_add(x0)) else { continue };
+        let (Some(src_end), Some(dst_end)) = (src_off.checked_add(w), dst_off.checked_add(w)) else { continue };
+        if let (Some(s), Some(d)) = (src.get(src_off..src_end), dst.get_mut(dst_off..dst_end)) {
             d.copy_from_slice(s);
         }
     }
@@ -155,6 +159,17 @@ impl Encoder {
         }
         if config.fps_num == 0 || config.fps_den == 0 || config.key_int == 0 {
             return Err(Error::Invalid("frame rate and keyframe interval must be positive"));
+        }
+        if let Some(rc) = config.rate_control {
+            match rc {
+                RateControl::Cbr { kbps: 0 } => {
+                    return Err(Error::Invalid("CBR bitrate must be positive"));
+                }
+                RateControl::Vbr { target_kbps, max_kbps } if target_kbps == 0 || max_kbps < target_kbps => {
+                    return Err(Error::Invalid("VBR target bitrate must be positive and <= max bitrate"));
+                }
+                _ => {}
+            }
         }
         let initial_qindex = match config.rate_control {
             Some(RateControl::ConstantQuality(crf)) => (crf * 4.0).round().clamp(0.0, 255.0) as u8,
@@ -199,6 +214,33 @@ impl Encoder {
         let width = self.config.width as usize;
         let height = self.config.height as usize;
 
+        if frame.y_stride < width {
+            return Err(Error::Invalid("y_stride must be at least frame width"));
+        }
+        let uv_w = width / 2;
+        let uv_h = height / 2;
+        if frame.uv_stride < uv_w {
+            return Err(Error::Invalid("uv_stride must be at least half frame width"));
+        }
+
+        let required_y = height
+            .checked_sub(1)
+            .and_then(|h| h.checked_mul(frame.y_stride))
+            .and_then(|o| o.checked_add(width))
+            .ok_or(Error::Invalid("frame buffer dimensions or stride overflow"))?;
+        if frame.y.len() < required_y {
+            return Err(Error::BufferTooSmall);
+        }
+
+        let required_uv = uv_h
+            .checked_sub(1)
+            .and_then(|h| h.checked_mul(frame.uv_stride))
+            .and_then(|o| o.checked_add(uv_w))
+            .ok_or(Error::Invalid("chroma buffer dimensions or stride overflow"))?;
+        if frame.u.len() < required_uv || frame.v.len() < required_uv {
+            return Err(Error::BufferTooSmall);
+        }
+
         let mut is_key = self.frame_count == 0 || (self.frame_count.saturating_sub(self.last_key_frame)) >= u64::from(self.config.key_int);
 
         if !is_key && self.config.scene_cut_detection && self.frame_count > 0 {
@@ -206,9 +248,10 @@ impl Encoder {
             let mut diff_sum = 0u64;
             let mut sample_count = 0u64;
             for r in (0..height).step_by(4) {
-                let curr_off = r * frame.y_stride;
-                let prev_off = r * width;
-                if let (Some(curr_row), Some(prev_row)) = (frame.y.get(curr_off..curr_off + width), self.ref_src_y.get(prev_off..prev_off + width)) {
+                let Some(curr_off) = r.checked_mul(frame.y_stride) else { continue };
+                let Some(prev_off) = r.checked_mul(width) else { continue };
+                let (Some(curr_end), Some(prev_end)) = (curr_off.checked_add(width), prev_off.checked_add(width)) else { continue };
+                if let (Some(curr_row), Some(prev_row)) = (frame.y.get(curr_off..curr_end), self.ref_src_y.get(prev_off..prev_end)) {
                     for (&c, &p) in curr_row.iter().step_by(4).zip(prev_row.iter().step_by(4)) {
                         diff_sum += c.abs_diff(p) as u64;
                         sample_count += 1;
@@ -1047,10 +1090,11 @@ impl Encoder {
         if let Some(rc) = self.config.rate_control {
             match rc {
                 RateControl::Cbr { kbps } => {
-                    let target_bits = (u64::from(kbps) * 1000 * u64::from(self.config.fps_den)) / u64::from(self.config.fps_num).max(1);
-                    let frame_bits = (tu.len() as u64) * 8;
-                    self.bit_reservoir = self.bit_reservoir.saturating_add((target_bits as i64) - (frame_bits as i64));
-                    let buffer_threshold = (target_bits as i64).saturating_mul(2);
+                    let target_bits_128 = (u128::from(kbps) * 1000 * u128::from(self.config.fps_den)) / u128::from(self.config.fps_num).max(1);
+                    let target_bits = target_bits_128.min((i64::MAX / 4) as u128) as i64;
+                    let frame_bits = (tu.len() as i64).saturating_mul(8);
+                    self.bit_reservoir = self.bit_reservoir.saturating_add(target_bits.saturating_sub(frame_bits));
+                    let buffer_threshold = target_bits.saturating_mul(2);
                     if self.bit_reservoir < -buffer_threshold {
                         self.active_qindex = self.active_qindex.saturating_add(6);
                     } else if self.bit_reservoir > buffer_threshold {
@@ -1058,14 +1102,16 @@ impl Encoder {
                     }
                 }
                 RateControl::Vbr { target_kbps, max_kbps } => {
-                    let target_bits = (u64::from(target_kbps) * 1000 * u64::from(self.config.fps_den)) / u64::from(self.config.fps_num).max(1);
-                    let max_bits = (u64::from(max_kbps) * 1000 * u64::from(self.config.fps_den)) / u64::from(self.config.fps_num).max(1);
-                    let frame_bits = (tu.len() as u64) * 8;
+                    let target_bits_128 = (u128::from(target_kbps) * 1000 * u128::from(self.config.fps_den)) / u128::from(self.config.fps_num).max(1);
+                    let target_bits = target_bits_128.min((i64::MAX / 4) as u128) as i64;
+                    let max_bits_128 = (u128::from(max_kbps) * 1000 * u128::from(self.config.fps_den)) / u128::from(self.config.fps_num).max(1);
+                    let max_bits = max_bits_128.min((i64::MAX / 4) as u128) as i64;
+                    let frame_bits = (tu.len() as i64).saturating_mul(8);
                     if frame_bits > max_bits {
                         self.active_qindex = self.active_qindex.saturating_add(8);
                     } else {
-                        self.bit_reservoir = self.bit_reservoir.saturating_add((target_bits as i64) - (frame_bits as i64));
-                        let buffer_threshold = (target_bits as i64).saturating_mul(3);
+                        self.bit_reservoir = self.bit_reservoir.saturating_add(target_bits.saturating_sub(frame_bits));
+                        let buffer_threshold = target_bits.saturating_mul(3);
                         if self.bit_reservoir < -buffer_threshold {
                             self.active_qindex = self.active_qindex.saturating_add(4);
                         } else if self.bit_reservoir > buffer_threshold {
@@ -1100,8 +1146,11 @@ fn should_split_64x64(y_plane: &[u8], stride: usize, x0: usize, y0: usize, block
     for (idx, &(dx, dy)) in [(0, 0), (32, 0), (0, 32), (32, 32)].iter().enumerate() {
         let mut sum = 0i64;
         for y in 0..32 {
-            let row_off = (y0 + dy + y) * stride + x0 + dx;
-            if let Some(row) = y_plane.get(row_off..row_off + 32) {
+            let Some(row_y) = y0.checked_add(dy).and_then(|v| v.checked_add(y)) else { continue };
+            let Some(row_x) = x0.checked_add(dx) else { continue };
+            let Some(row_off) = row_y.checked_mul(stride).and_then(|o| o.checked_add(row_x)) else { continue };
+            let Some(row_end) = row_off.checked_add(32) else { continue };
+            if let Some(row) = y_plane.get(row_off..row_end) {
                 sum += row.iter().map(|&p| p as i64).sum::<i64>();
             }
         }
@@ -1128,7 +1177,12 @@ fn should_split_64x64(y_plane: &[u8], stride: usize, x0: usize, y0: usize, block
         Preset::Speed => u64::MAX,
     };
 
-    let var = if let Some(sub) = y_plane.get(y0 * stride + x0..) { intra::block_variance(sub, stride, block_w, block_h) } else { 0 };
+    let var = y0
+        .checked_mul(stride)
+        .and_then(|o| o.checked_add(x0))
+        .and_then(|idx| y_plane.get(idx..))
+        .map(|sub| intra::block_variance(sub, stride, block_w, block_h))
+        .unwrap_or(0);
 
     var >= var_threshold
 }
@@ -1151,8 +1205,9 @@ fn compute_and_reconstruct_plane_dc(
     let mut src_sum = 0i64;
     let mut count = 0i64;
     for i in 0..block_h {
-        let row_off = (y0 + i) * src_stride + x0;
-        if let Some(row) = src_plane.get(row_off..row_off + block_w) {
+        let Some(row_off) = y0.checked_add(i).and_then(|y| y.checked_mul(src_stride)).and_then(|o| o.checked_add(x0)) else { continue };
+        let Some(row_end) = row_off.checked_add(block_w) else { continue };
+        if let Some(row) = src_plane.get(row_off..row_end) {
             for &p in row {
                 src_sum += p as i64;
                 count += 1;
@@ -1166,31 +1221,36 @@ fn compute_and_reconstruct_plane_dc(
 
     let pred_mean = match mode {
         intra::V_PRED if avail_u && y0 > 0 => {
-            let row_offset = (y0 - 1) * recon_stride + x0;
-            recon_plane.get(row_offset..row_offset + block_w).map(|row| row.iter().map(|&p| p as i64).sum::<i64>() / block_w.max(1) as i64).unwrap_or(128)
+            let row_offset = y0.saturating_sub(1).checked_mul(recon_stride).and_then(|o| o.checked_add(x0));
+            row_offset
+                .and_then(|off| off.checked_add(block_w).and_then(|end| recon_plane.get(off..end)))
+                .map(|row| row.iter().map(|&p| p as i64).sum::<i64>() / (block_w.max(1) as i64))
+                .unwrap_or(128)
         }
         intra::H_PRED if avail_l && x0 > 0 => {
             let mut left_sum = 0i64;
             for i in 0..block_h {
-                if let Some(&p) = recon_plane.get((y0 + i) * recon_stride + x0 - 1) {
+                let off = y0.checked_add(i).and_then(|y| y.checked_mul(recon_stride)).and_then(|o| o.checked_add(x0.saturating_sub(1)));
+                if let Some(&p) = off.and_then(|idx| recon_plane.get(idx)) {
                     left_sum += p as i64;
                 }
             }
-            left_sum / block_h.max(1) as i64
+            left_sum / (block_h.max(1) as i64)
         }
         _ => {
             let mut sum = 0i64;
             let mut n = 0i64;
             if avail_u && y0 > 0 {
-                let row_offset = (y0 - 1) * recon_stride + x0;
-                if let Some(row) = recon_plane.get(row_offset..row_offset + block_w) {
+                let row_offset = y0.saturating_sub(1).checked_mul(recon_stride).and_then(|o| o.checked_add(x0));
+                if let Some(row) = row_offset.and_then(|off| off.checked_add(block_w).and_then(|end| recon_plane.get(off..end))) {
                     sum += row.iter().map(|&p| p as i64).sum::<i64>();
                     n += block_w as i64;
                 }
             }
             if avail_l && x0 > 0 {
                 for i in 0..block_h {
-                    if let Some(&p) = recon_plane.get((y0 + i) * recon_stride + x0 - 1) {
+                    let off = y0.checked_add(i).and_then(|y| y.checked_mul(recon_stride)).and_then(|o| o.checked_add(x0.saturating_sub(1)));
+                    if let Some(&p) = off.and_then(|idx| recon_plane.get(idx)) {
                         sum += p as i64;
                         n += 1;
                     }
@@ -1208,23 +1268,23 @@ fn compute_and_reconstruct_plane_dc(
     let recon_shift = if dc_level == 0 {
         0
     } else {
-        let mag = (dc_level as i64 * dc_q) / scale;
+        let mag = (dc_level as i64 * dc_q) / scale.max(1);
         if is_negative { -mag } else { mag }
     };
 
     let recon_val = (pred_mean + recon_shift).clamp(0, 255) as u8;
     match mode {
         intra::V_PRED if avail_u && y0 > 0 => {
-            let above_off = (y0 - 1) * recon_stride + x0;
-            if let Some(above_slice) = recon_plane.get(above_off..above_off + block_w) {
+            let above_off = y0.saturating_sub(1).checked_mul(recon_stride).and_then(|o| o.checked_add(x0));
+            if let Some(above_slice) = above_off.and_then(|off| off.checked_add(block_w).and_then(|end| recon_plane.get(off..end))) {
                 let mut temp = [0u8; 64];
                 let len = block_w.min(64);
                 for (dst, &src) in temp[..len].iter_mut().zip(&above_slice[..len]) {
                     *dst = (src as i64 + recon_shift).clamp(0, 255) as u8;
                 }
                 for i in 0..block_h {
-                    let row_off = (y0 + i) * recon_stride + x0;
-                    if let Some(row) = recon_plane.get_mut(row_off..row_off + len) {
+                    let row_off = y0.checked_add(i).and_then(|y| y.checked_mul(recon_stride)).and_then(|o| o.checked_add(x0));
+                    if let Some(row) = row_off.and_then(|off| off.checked_add(len).and_then(|end| recon_plane.get_mut(off..end))) {
                         row.copy_from_slice(&temp[..len]);
                     }
                 }
@@ -1232,18 +1292,19 @@ fn compute_and_reconstruct_plane_dc(
         }
         intra::H_PRED if avail_l && x0 > 0 => {
             for i in 0..block_h {
-                let left_val = recon_plane.get((y0 + i) * recon_stride + x0.saturating_sub(1)).copied().unwrap_or(128) as i64;
+                let left_off = y0.checked_add(i).and_then(|y| y.checked_mul(recon_stride)).and_then(|o| o.checked_add(x0.saturating_sub(1)));
+                let left_val = left_off.and_then(|idx| recon_plane.get(idx)).copied().unwrap_or(128) as i64;
                 let val = (left_val + recon_shift).clamp(0, 255) as u8;
-                let row_off = (y0 + i) * recon_stride + x0;
-                if let Some(row) = recon_plane.get_mut(row_off..row_off + block_w) {
+                let row_off = y0.checked_add(i).and_then(|y| y.checked_mul(recon_stride)).and_then(|o| o.checked_add(x0));
+                if let Some(row) = row_off.and_then(|off| off.checked_add(block_w).and_then(|end| recon_plane.get_mut(off..end))) {
                     row.fill(val);
                 }
             }
         }
         _ => {
             for i in 0..block_h {
-                let row_off = (y0 + i) * recon_stride + x0;
-                if let Some(row) = recon_plane.get_mut(row_off..row_off + block_w) {
+                let row_off = y0.checked_add(i).and_then(|y| y.checked_mul(recon_stride)).and_then(|o| o.checked_add(x0));
+                if let Some(row) = row_off.and_then(|off| off.checked_add(block_w).and_then(|end| recon_plane.get_mut(off..end))) {
                     row.fill(recon_val);
                 }
             }
@@ -1447,6 +1508,79 @@ mod tests {
         let mut c = EncoderConfig::new(64, 64, 25, 1);
         c.key_int = 0;
         assert!(matches!(Encoder::new(c), Err(Error::Invalid(_))));
+
+        // Hostile rate control configs
+        let mut c_cbr_zero = EncoderConfig::new(64, 64, 25, 1);
+        c_cbr_zero.rate_control = Some(RateControl::Cbr { kbps: 0 });
+        assert!(matches!(Encoder::new(c_cbr_zero), Err(Error::Invalid(_))));
+
+        let mut c_vbr_zero = EncoderConfig::new(64, 64, 25, 1);
+        c_vbr_zero.rate_control = Some(RateControl::Vbr { target_kbps: 0, max_kbps: 1000 });
+        assert!(matches!(Encoder::new(c_vbr_zero), Err(Error::Invalid(_))));
+
+        let mut c_vbr_inv = EncoderConfig::new(64, 64, 25, 1);
+        c_vbr_inv.rate_control = Some(RateControl::Vbr { target_kbps: 2000, max_kbps: 1000 });
+        assert!(matches!(Encoder::new(c_vbr_inv), Err(Error::Invalid(_))));
+    }
+
+    #[test]
+    fn test_hostile_buffers_and_strides_do_not_panic() {
+        let mut enc = Encoder::new(EncoderConfig::new(64, 64, 24, 1)).unwrap();
+        let valid_y = vec![128u8; 64 * 64];
+        let valid_uv = vec![128u8; 32 * 32];
+
+        // Empty buffers must return BufferTooSmall without panicking
+        let empty_frame = YuvFrame { y: &[], u: &[], v: &[], y_stride: 64, uv_stride: 32 };
+        assert!(matches!(enc.encode(&empty_frame, 0), Err(Error::BufferTooSmall)));
+
+        // Undersized Y buffer
+        let short_y = YuvFrame { y: &valid_y[..10], u: &valid_uv, v: &valid_uv, y_stride: 64, uv_stride: 32 };
+        assert!(matches!(enc.encode(&short_y, 0), Err(Error::BufferTooSmall)));
+
+        // Undersized UV buffer
+        let short_uv = YuvFrame { y: &valid_y, u: &valid_uv[..5], v: &valid_uv, y_stride: 64, uv_stride: 32 };
+        assert!(matches!(enc.encode(&short_uv, 0), Err(Error::BufferTooSmall)));
+
+        // Hostile strides: usize::MAX must return Err without overflow panic
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let max_stride_frame = YuvFrame { y: &valid_y, u: &valid_uv, v: &valid_uv, y_stride: usize::MAX, uv_stride: 32 };
+            enc.encode(&max_stride_frame, 0)
+        }));
+        assert!(res.is_ok());
+        assert!(res.unwrap().is_err());
+
+        // Stride smaller than width
+        let narrow_stride_frame = YuvFrame { y: &valid_y, u: &valid_uv, v: &valid_uv, y_stride: 32, uv_stride: 32 };
+        assert!(matches!(enc.encode(&narrow_stride_frame, 0), Err(Error::Invalid(_))));
+
+        let narrow_uv_stride_frame = YuvFrame { y: &valid_y, u: &valid_uv, v: &valid_uv, y_stride: 64, uv_stride: 16 };
+        assert!(matches!(enc.encode(&narrow_uv_stride_frame, 0), Err(Error::Invalid(_))));
+    }
+
+    #[test]
+    fn test_hostile_rate_control_extremes_do_not_panic() {
+        let mut cfg = EncoderConfig::new(64, 64, 1, u32::MAX);
+        cfg.rate_control = Some(RateControl::Cbr { kbps: u32::MAX });
+        let mut enc = Encoder::new(cfg).unwrap();
+
+        let y = vec![128u8; 64 * 64];
+        let uv = vec![128u8; 32 * 32];
+        let frame = YuvFrame { y: &y, u: &uv, v: &uv, y_stride: 64, uv_stride: 32 };
+
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = enc.encode(&frame, 0);
+            let _ = enc.encode(&frame, 1);
+        }));
+        assert!(res.is_ok());
+
+        let mut vbr_cfg = EncoderConfig::new(64, 64, 1, u32::MAX);
+        vbr_cfg.rate_control = Some(RateControl::Vbr { target_kbps: u32::MAX, max_kbps: u32::MAX });
+        let mut vbr_enc = Encoder::new(vbr_cfg).unwrap();
+        let res_vbr = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = vbr_enc.encode(&frame, 0);
+            let _ = vbr_enc.encode(&frame, 1);
+        }));
+        assert!(res_vbr.is_ok());
     }
 
     #[test]

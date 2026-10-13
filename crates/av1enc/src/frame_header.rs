@@ -161,6 +161,8 @@ pub fn write_frame_header(cfg: &FrameHeaderConfig, seq: &SequenceConfig) -> Vec<
         }
     }
 
+    // Trailing bit and byte-alignment (spec 5.9.2 trailing_bits)
+    w.rbsp_trailing();
     w.finish()
 }
 
@@ -170,4 +172,32 @@ fn tile_log2(blk: u32, target: u32) -> u32 {
         k += 1;
     }
     k
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_write_frame_header_has_spec_conforming_trailing_bits() {
+        let seq = SequenceConfig { width: 64, height: 64, bit_depth: 8, mono_chrome: false, enable_cdef: true };
+        let cfg =
+            FrameHeaderConfig { frame_type: KEY_FRAME, show_frame: true, error_resilient_mode: false, disable_cdf_update: false, qindex: 100, order_hint: 0 };
+
+        let obu_payload = write_frame_header(&cfg, &seq);
+        assert!(!obu_payload.is_empty());
+
+        // AV1 spec 5.9.2: trailing_bits() consists of a trailing_one_bit (1) followed
+        // by trailing_zero_bit (0) until byte-aligned.
+        // The last byte must have at least one bit set (the trailing_one_bit) and any bits
+        // following it must be 0.
+        let last_byte = *obu_payload.last().unwrap();
+        assert_ne!(last_byte, 0, "Last byte of frame header OBU must contain trailing_one_bit");
+        // The lowest set bit is the trailing_one_bit. All bits below it (if any) are 0.
+        // For example:
+        // if trailing_one_bit is at bit pos 7: 0b1000_0000 (0x80) -> last byte has zeros below it.
+        // In general, last_byte & (last_byte.trailing_zeros() mask) == 0 is guaranteed.
+        let tz = last_byte.trailing_zeros();
+        assert_eq!(last_byte & ((1 << tz) - 1), 0);
+    }
 }

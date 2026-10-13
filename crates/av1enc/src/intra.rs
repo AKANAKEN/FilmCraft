@@ -14,65 +14,79 @@ pub const PAETH_PRED: u8 = 12;
 /// `left`: pixel column left of the block (length >= h).
 /// `mode`: DC_PRED, V_PRED, H_PRED, SMOOTH_PRED, or PAETH_PRED.
 pub fn predict_intra_block(mode: u8, w: usize, h: usize, above: Option<&[u8]>, left: Option<&[u8]>, dst: &mut [u8], dst_stride: usize) {
+    let valid_above = above.and_then(|a| a.get(..w));
+    let valid_left = left.and_then(|l| l.get(..h));
     match mode {
         V_PRED => {
-            if let Some(ab) = above {
+            if let Some(ab) = valid_above {
                 for y in 0..h {
-                    let row = &mut dst[y * dst_stride..y * dst_stride + w];
-                    row.copy_from_slice(&ab[..w]);
+                    let Some(start) = y.checked_mul(dst_stride) else { continue };
+                    let Some(end) = start.checked_add(w) else { continue };
+                    if let Some(row) = dst.get_mut(start..end) {
+                        row.copy_from_slice(ab);
+                    }
                 }
             } else {
                 fill_dc(128, w, h, dst, dst_stride);
             }
         }
         H_PRED => {
-            if let Some(lf) = left {
+            if let Some(lf) = valid_left {
                 for y in 0..h {
-                    let val = lf[y];
-                    let row = &mut dst[y * dst_stride..y * dst_stride + w];
-                    row.fill(val);
+                    if let Some(&val) = lf.get(y) {
+                        let Some(start) = y.checked_mul(dst_stride) else { continue };
+                        let Some(end) = start.checked_add(w) else { continue };
+                        if let Some(row) = dst.get_mut(start..end) {
+                            row.fill(val);
+                        }
+                    }
                 }
             } else {
                 fill_dc(128, w, h, dst, dst_stride);
             }
         }
         SMOOTH_PRED => {
-            if let (Some(ab), Some(lf)) = (above, left) {
+            if let (Some(ab), Some(lf)) = (valid_above, valid_left) {
                 predict_smooth(ab, lf, w, h, dst, dst_stride);
             } else {
-                let dc_val = get_dc_val(above, left, w, h);
+                let dc_val = get_dc_val(valid_above, valid_left, w, h);
                 fill_dc(dc_val, w, h, dst, dst_stride);
             }
         }
         PAETH_PRED => {
-            if let (Some(ab), Some(lf)) = (above, left) {
+            if let (Some(ab), Some(lf)) = (valid_above, valid_left) {
                 let top_left = ab.first().copied().unwrap_or(128);
                 predict_paeth(ab, lf, top_left, w, h, dst, dst_stride);
             } else {
-                let dc_val = get_dc_val(above, left, w, h);
+                let dc_val = get_dc_val(valid_above, valid_left, w, h);
                 fill_dc(dc_val, w, h, dst, dst_stride);
             }
         }
         _ => {
-            let dc_val = get_dc_val(above, left, w, h);
+            let dc_val = get_dc_val(valid_above, valid_left, w, h);
             fill_dc(dc_val, w, h, dst, dst_stride);
         }
     }
 }
 
 pub fn get_dc_val(above: Option<&[u8]>, left: Option<&[u8]>, w: usize, h: usize) -> u8 {
-    match (above, left) {
+    let valid_above = above.and_then(|a| a.get(..w));
+    let valid_left = left.and_then(|l| l.get(..h));
+    match (valid_above, valid_left) {
         (Some(ab), Some(lf)) => {
-            let sum: u32 = ab[..w].iter().map(|&x| x as u32).sum::<u32>() + lf[..h].iter().map(|&x| x as u32).sum::<u32>();
-            ((sum + ((w + h) as u32 >> 1)) / (w + h) as u32) as u8
+            let sum: u32 = ab.iter().map(|&x| x as u32).sum::<u32>() + lf.iter().map(|&x| x as u32).sum::<u32>();
+            let count = (w.saturating_add(h)) as u32;
+            (sum + (count >> 1)).checked_div(count).map(|v| v as u8).unwrap_or(128)
         }
         (Some(ab), None) => {
-            let sum: u32 = ab[..w].iter().map(|&x| x as u32).sum();
-            ((sum + (w as u32 >> 1)) / w as u32) as u8
+            let sum: u32 = ab.iter().map(|&x| x as u32).sum();
+            let count = w as u32;
+            (sum + (count >> 1)).checked_div(count).map(|v| v as u8).unwrap_or(128)
         }
         (None, Some(lf)) => {
-            let sum: u32 = lf[..h].iter().map(|&x| x as u32).sum();
-            ((sum + (h as u32 >> 1)) / h as u32) as u8
+            let sum: u32 = lf.iter().map(|&x| x as u32).sum();
+            let count = h as u32;
+            (sum + (count >> 1)).checked_div(count).map(|v| v as u8).unwrap_or(128)
         }
         (None, None) => 128,
     }
@@ -81,8 +95,9 @@ pub fn get_dc_val(above: Option<&[u8]>, left: Option<&[u8]>, w: usize, h: usize)
 pub fn sad_dc(src: &[u8], src_stride: usize, w: usize, h: usize, dc: u8) -> u64 {
     let mut sad = 0u64;
     for y in 0..h {
-        let row_start = y * src_stride;
-        let Some(row) = src.get(row_start..row_start + w) else {
+        let Some(row_start) = y.checked_mul(src_stride) else { continue };
+        let Some(row_end) = row_start.checked_add(w) else { continue };
+        let Some(row) = src.get(row_start..row_end) else {
             continue;
         };
         let (chunks, remainder) = row.as_chunks::<16>();
@@ -105,8 +120,9 @@ pub fn sad_v(src: &[u8], src_stride: usize, w: usize, h: usize, above: &[u8]) ->
     };
     let (ab_chunks, ab_remainder) = ab.as_chunks::<16>();
     for y in 0..h {
-        let row_start = y * src_stride;
-        let Some(row) = src.get(row_start..row_start + w) else {
+        let Some(row_start) = y.checked_mul(src_stride) else { continue };
+        let Some(row_end) = row_start.checked_add(w) else { continue };
+        let Some(row) = src.get(row_start..row_end) else {
             continue;
         };
         let (chunks, remainder) = row.as_chunks::<16>();
@@ -128,8 +144,9 @@ pub fn sad_h(src: &[u8], src_stride: usize, w: usize, h: usize, left: &[u8]) -> 
         let Some(&p) = left.get(y) else {
             continue;
         };
-        let row_start = y * src_stride;
-        let Some(row) = src.get(row_start..row_start + w) else {
+        let Some(row_start) = y.checked_mul(src_stride) else { continue };
+        let Some(row_end) = row_start.checked_add(w) else { continue };
+        let Some(row) = src.get(row_start..row_end) else {
             continue;
         };
         let (chunks, remainder) = row.as_chunks::<16>();
@@ -167,8 +184,9 @@ pub fn sad_smooth(src: &[u8], src_stride: usize, w: usize, h: usize, above: &[u8
         let wy = ((h - 1 - y) as u32 * 256) / (h as u32).max(1);
         let term_bot_left = (256 - wy) * bot_left;
         let p_left = lf[y] as u32;
-        let row_start = y * src_stride;
-        let Some(row) = src.get(row_start..row_start + w) else {
+        let Some(row_start) = y.checked_mul(src_stride) else { continue };
+        let Some(row_end) = row_start.checked_add(w) else { continue };
+        let Some(row) = src.get(row_start..row_end) else {
             continue;
         };
 
@@ -194,8 +212,9 @@ pub fn sad_paeth(src: &[u8], src_stride: usize, w: usize, h: usize, above: &[u8]
 
     for y in 0..h {
         let l = lf[y] as i32;
-        let row_start = y * src_stride;
-        let Some(row) = src.get(row_start..row_start + w) else {
+        let Some(row_start) = y.checked_mul(src_stride) else { continue };
+        let Some(row_end) = row_start.checked_add(w) else { continue };
+        let Some(row) = src.get(row_start..row_end) else {
             continue;
         };
         for (x, &px) in row.iter().enumerate() {
@@ -226,8 +245,9 @@ pub fn block_variance(src: &[u8], stride: usize, w: usize, h: usize) -> u64 {
     let mut sum = 0u64;
     let mut sum_sq = 0u64;
     for y in 0..h {
-        let row_start = y * stride;
-        let Some(row) = src.get(row_start..row_start + w) else {
+        let Some(row_start) = y.checked_mul(stride) else { continue };
+        let Some(row_end) = row_start.checked_add(w) else { continue };
+        let Some(row) = src.get(row_start..row_end) else {
             continue;
         };
         let (chunks, remainder) = row.as_chunks::<16>();
@@ -317,7 +337,9 @@ fn predict_smooth(above: &[u8], left: &[u8], w: usize, h: usize, dst: &mut [u8],
         let wy = ((h - 1 - y) as u32 * 256) / (h as u32).max(1);
         let term_bot_left = (256 - wy) * bot_left;
         let p_left = lf[y] as u32;
-        let Some(row) = dst.get_mut(y * dst_stride..y * dst_stride + w) else {
+        let Some(row_start) = y.checked_mul(dst_stride) else { continue };
+        let Some(row_end) = row_start.checked_add(w) else { continue };
+        let Some(row) = dst.get_mut(row_start..row_end) else {
             continue;
         };
         for (x, slot) in row.iter_mut().enumerate() {
@@ -339,7 +361,9 @@ fn predict_paeth(above: &[u8], left: &[u8], top_left: u8, w: usize, h: usize, ds
 
     for y in 0..h {
         let l = lf[y] as i32;
-        let Some(row) = dst.get_mut(y * dst_stride..y * dst_stride + w) else {
+        let Some(row_start) = y.checked_mul(dst_stride) else { continue };
+        let Some(row_end) = row_start.checked_add(w) else { continue };
+        let Some(row) = dst.get_mut(row_start..row_end) else {
             continue;
         };
         for (x, slot) in row.iter_mut().enumerate() {
@@ -361,7 +385,67 @@ fn predict_paeth(above: &[u8], left: &[u8], top_left: u8, w: usize, h: usize, ds
 
 fn fill_dc(val: u8, w: usize, h: usize, dst: &mut [u8], dst_stride: usize) {
     for y in 0..h {
-        let row = &mut dst[y * dst_stride..y * dst_stride + w];
-        row.fill(val);
+        let Some(row_start) = y.checked_mul(dst_stride) else { continue };
+        let Some(row_end) = row_start.checked_add(w) else { continue };
+        if let Some(row) = dst.get_mut(row_start..row_end) {
+            row.fill(val);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_predict_intra_block_hostile_inputs_do_not_panic() {
+        let mut dst = [0u8; 64];
+
+        // Empty above slice with V_PRED
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            predict_intra_block(V_PRED, 4, 4, Some(&[]), None, &mut dst, 4);
+        }));
+        assert!(res.is_ok());
+
+        // Empty left slice with H_PRED
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            predict_intra_block(H_PRED, 4, 4, None, Some(&[]), &mut dst, 4);
+        }));
+        assert!(res.is_ok());
+
+        // Undersized slices for Smooth and Paeth
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            predict_intra_block(SMOOTH_PRED, 8, 8, Some(&[1, 2]), Some(&[3]), &mut dst, 8);
+            predict_intra_block(PAETH_PRED, 8, 8, Some(&[1]), Some(&[2, 3]), &mut dst, 8);
+        }));
+        assert!(res.is_ok());
+
+        // Hostile stride usize::MAX
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            predict_intra_block(DC_PRED, 4, 4, Some(&[1, 2, 3, 4]), Some(&[1, 2, 3, 4]), &mut dst, usize::MAX);
+            predict_intra_block(V_PRED, 4, 4, Some(&[1, 2, 3, 4]), Some(&[1, 2, 3, 4]), &mut dst, usize::MAX);
+        }));
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_intra_sad_and_dc_hostile_inputs_do_not_panic() {
+        let src = [42u8; 64];
+        let above = [10u8; 8];
+        let left = [20u8; 8];
+
+        assert_eq!(get_dc_val(Some(&[]), None, 4, 4), 128);
+        assert_eq!(get_dc_val(None, Some(&[]), 4, 4), 128);
+        assert_eq!(get_dc_val(Some(&[]), Some(&[]), 0, 0), 128);
+
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = sad_dc(&src, usize::MAX, 4, 4, 128);
+            let _ = sad_v(&src, usize::MAX, 4, 4, &above);
+            let _ = sad_h(&src, usize::MAX, 4, 4, &left);
+            let _ = sad_smooth(&src, usize::MAX, 4, 4, &above, &left);
+            let _ = sad_paeth(&src, usize::MAX, 4, 4, &above, &left, 128);
+            let _ = block_variance(&src, usize::MAX, 4, 4);
+        }));
+        assert!(res.is_ok());
     }
 }
