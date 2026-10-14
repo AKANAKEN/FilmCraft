@@ -22,6 +22,8 @@ pub struct StreamResampler {
 
 /// Most source frames one block may pull.
 const MAX_PULL: i64 = 1 << 24;
+/// Output frames per internal block of a long request (so ratios up to 256:1 are never capped).
+const BLOCK: usize = 1 << 16;
 
 impl StreamResampler {
     /// Rates of zero are treated as 1 Hz rather than dividing by zero.
@@ -45,6 +47,29 @@ impl StreamResampler {
     /// `[start, start + frames)`, planar (missing samples read as silence). A block that does not
     /// continue the previous one (a seek) starts the stream afresh.
     pub fn process(&mut self, out: i64, n: usize, mut pull: impl FnMut(i64, usize) -> Vec<Vec<f32>>) -> Vec<Vec<f32>> {
+        // Long requests run in bounded blocks (continuity is kept by `next_out`), so the pull cap
+        // in `block` only trips on absurd rate ratios, never on a legitimate long call.
+        if n <= BLOCK {
+            return self.block(out, n, &mut pull);
+        }
+        let mut acc: Vec<Vec<f32>> = Vec::new();
+        let mut done = 0usize;
+        while done < n {
+            let len = BLOCK.min(n - done);
+            let part = self.block(out.saturating_add(done as i64), len, &mut pull);
+            if acc.is_empty() {
+                acc = part;
+            } else {
+                for (a, p) in acc.iter_mut().zip(part) {
+                    a.extend(p);
+                }
+            }
+            done += len;
+        }
+        acc
+    }
+
+    fn block(&mut self, out: i64, n: usize, pull: &mut dyn FnMut(i64, usize) -> Vec<Vec<f32>>) -> Vec<Vec<f32>> {
         if n == 0 {
             return vec![Vec::new(); self.held.len().max(1)];
         }
@@ -103,6 +128,22 @@ impl StreamResampler {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_downsample_in_one_call_matches_chunked_and_is_not_silence() {
+        // 192 kHz -> 8 kHz, well past MAX_PULL source frames in one request
+        let n = 1_000_000usize;
+        let src = |start: i64, k: usize| vec![(0..k).map(|i| (((start + i as i64) as f32) * 0.001).sin()).collect::<Vec<f32>>()];
+        let whole = StreamResampler::new(192_000, 8_000).process(0, n, src);
+        assert_eq!(whole[0].len(), n);
+        assert!(whole[0].iter().any(|v| v.abs() > 0.5), "silenced");
+        let mut r = StreamResampler::new(192_000, 8_000);
+        let mut chunked = Vec::new();
+        for start in (0..n).step_by(70_000) {
+            chunked.extend(r.process(start as i64, 70_000.min(n - start), src).remove(0));
+        }
+        assert_eq!(whole[0], chunked);
+    }
 
     /// A sine at `hz`, sampled at `rate`, from absolute frame `start`; logs every pull.
     fn sine(hz: f64, rate: u32, pulls: &mut Vec<(i64, usize)>) -> impl FnMut(i64, usize) -> Vec<Vec<f32>> + '_ {

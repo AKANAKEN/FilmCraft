@@ -73,11 +73,13 @@ impl std::fmt::Debug for EffectInfo {
 /// DSP designs and delay-line sizes stay finite.
 const MIN_RATE: f32 = 1_000.0;
 const MAX_RATE: f32 = 1_000_000.0;
-/// Channels beyond this are passed through untouched, so effects are never built wider.
+/// Effects are built for at most this many channels; per the `AudioEffect` contract extra
+/// channels in `process` are passed through (channel-generic effects still process them).
 const MAX_CHANNELS: usize = 64;
 
 fn sane_rate(sr: f32) -> f32 {
-    if sr.is_nan() { 48_000.0 } else { sr.clamp(MIN_RATE, MAX_RATE) }
+    // NaN, zero and negative rates are meaningless: the usual default; the rest is clamped
+    if sr > 0.0 { sr.clamp(MIN_RATE, MAX_RATE) } else { 48_000.0 }
 }
 
 macro_rules! entry {

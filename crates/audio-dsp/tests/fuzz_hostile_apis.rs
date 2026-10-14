@@ -8,6 +8,21 @@ use filmcraft_audio_dsp::fft::Fft;
 use filmcraft_audio_dsp::{LoudnessMeter, Smoothed, ducking, loudness, oversample, remix, resample::StreamResampler, sync};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
+/// Run `f` on a worker thread and fail fast if it does not finish: a regression to a hang must
+/// not stall CI.
+fn with_deadline(secs: u64, f: impl FnOnce() + Send + 'static) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        f();
+        let _ = tx.send(());
+    });
+    match rx.recv_timeout(std::time::Duration::from_secs(secs)) {
+        Ok(()) => {}
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => panic!("hostile-input test did not finish in {secs}s (hang)"),
+        Err(_) => panic!("hostile-input test panicked"),
+    }
+}
+
 struct Rng(u64);
 impl Rng {
     fn next(&mut self) -> u64 {
@@ -62,6 +77,10 @@ macro_rules! guard {
 
 #[test]
 fn analysis_and_design_apis_survive_hostile_arguments() {
+    with_deadline(120, body);
+}
+
+fn body() {
     let mut rng = Rng(0x0bad_cafe_1234_5678);
     let mut failures: Vec<&str> = Vec::new();
     let (music, _) = remix::test_music(44100, 120.0, 8, 1);

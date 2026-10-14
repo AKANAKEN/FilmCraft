@@ -16,8 +16,8 @@ pub struct Fft {
 }
 
 impl Fft {
-    /// Plan an FFT of size `n`. Other than a power of two ≥ 2 (at most 2^26) is rounded to the
-    /// nearest size in that set, so a hostile length can neither panic nor allocate wildly.
+    /// Plan an FFT of size `n`. A size that is not a power of two ≥ 2 (at most 2^26) is rounded up
+    /// to the next one in that range, so a hostile length can neither panic nor allocate wildly.
     pub fn new(n: usize) -> Fft {
         let n = n.clamp(2, 1 << 26).next_power_of_two();
         let bits = n.trailing_zeros();

@@ -5,6 +5,21 @@ use filmcraft_audio_dsp::{create_effect, effects};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::time::Instant;
 
+/// Run `f` on a worker thread and fail fast if it does not finish: a regression to a hang must
+/// not stall CI.
+fn with_deadline(secs: u64, f: impl FnOnce() + Send + 'static) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        f();
+        let _ = tx.send(());
+    });
+    match rx.recv_timeout(std::time::Duration::from_secs(secs)) {
+        Ok(()) => {}
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => panic!("hostile-input test did not finish in {secs}s (hang)"),
+        Err(_) => panic!("hostile-input test panicked"),
+    }
+}
+
 struct Rng(u64);
 impl Rng {
     fn next(&mut self) -> u64 {
@@ -70,6 +85,10 @@ fn run(id: &str, sr: f32, ch: usize, rng: &mut Rng) {
 
 #[test]
 fn effects_survive_hostile_setups() {
+    with_deadline(120, body);
+}
+
+fn body() {
     let mut rng = Rng(0x1357_9bdf_2468_ace1);
     let rates = [0.0f32, 1.0, 100.0, 8000.0, 44100.0, 48000.0, 192_000.0, 768_000.0, -1.0, f32::NAN, f32::INFINITY, 1e-30];
     let chans = [0usize, 1, 2, 6, 9];
