@@ -1,11 +1,11 @@
-//! Blackmagic RAW (`.braw`) through Blackmagic's own decoder (Linux).
+//! Blackmagic RAW (`.braw`) through Blackmagic's own decoder (Linux and Windows).
 //!
 //! Blackmagic RAW has no public specification: the only decoder is Blackmagic's, in its free
 //! Blackmagic RAW SDK. FilmCraft does not include it. When its runtime library
-//! (`libBlackmagicRawAPI.so`, from Blackmagic RAW 6.0 for Linux, or DaVinci Resolve 21's copy) is
-//! installed where FilmCraft looks for it ([`RUNTIME_ENV`], next to FilmCraft, Blackmagic's and
-//! Resolve's install folders, or the system library path), [`open_path`] opens `.braw` files through
-//! it as movies: frames decoded and
+//! (`libBlackmagicRawAPI.so` / `BlackmagicRawAPI.dll`, from Blackmagic RAW 6.0, or DaVinci Resolve
+//! 21's copy on Linux) is installed where FilmCraft looks for it ([`RUNTIME_ENV`], next to FilmCraft,
+//! where Blackmagic's installers put it, or the system's library search), [`open_path`]
+//! opens `.braw` files through it as movies: frames decoded and
 //! processed by Blackmagic's decoder with the clip's own settings (as recorded, or as its sidecar
 //! file sets them) to 8-bit RGB, the clip's PCM audio, frame rate and start time code. Without the
 //! runtime a `.braw` file fails to open with a message saying what to install. A runtime with other
@@ -35,12 +35,38 @@ pub const RUNTIME_ENV: &str = "FILMCRAFT_BRAW_RUNTIME";
 
 /// Where Blackmagic RAW for Linux installs the runtime (its SDK and its Player), then DaVinci
 /// Resolve's copies.
-const INSTALL_DIRS: &[&str] = &[
-    "/usr/lib64/blackmagic/BlackmagicRAWSDK/Linux/Libraries",
-    "/usr/lib64/blackmagic/BlackmagicRAWPlayer/BlackmagicRawAPI",
-    "/opt/resolve/libs",
-    "/opt/resolve/BlackmagicRAWPlayer/BlackmagicRawAPI",
-];
+#[cfg(target_os = "linux")]
+fn install_dirs() -> Vec<PathBuf> {
+    [
+        "/usr/lib64/blackmagic/BlackmagicRAWSDK/Linux/Libraries",
+        "/usr/lib64/blackmagic/BlackmagicRAWPlayer/BlackmagicRawAPI",
+        "/opt/resolve/libs",
+        "/opt/resolve/BlackmagicRAWPlayer/BlackmagicRawAPI",
+    ]
+    .into_iter()
+    .map(PathBuf::from)
+    .collect()
+}
+
+/// Where Blackmagic RAW's Windows installer puts the runtime (its MSI's directory table): the SDK's
+/// libraries (the ARM64 build in a subfolder), then the Player's and Speed Test's copies, under the
+/// Program Files folders.
+#[cfg(target_os = "windows")]
+fn install_dirs() -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    for var in ["ProgramW6432", "ProgramFiles", "ProgramFiles(x86)"] {
+        let Some(base) = std::env::var_os(var).filter(|b| !b.is_empty()) else { continue };
+        let root = PathBuf::from(base).join("Blackmagic Design").join("Blackmagic RAW");
+        let libraries = root.join("Blackmagic RAW SDK").join("Win").join("Libraries");
+        let sdk = if cfg!(target_arch = "aarch64") { libraries.join("ARM64") } else { libraries };
+        for dir in [sdk, root.join("Blackmagic RAW Player").join("BlackmagicRawAPI"), root.join("Blackmagic RAW Speed Test").join("BlackmagicRawAPI")] {
+            if !dirs.contains(&dir) {
+                dirs.push(dir);
+            }
+        }
+    }
+    dirs
+}
 
 /// Largest picture side a clip may report.
 const MAX_SIDE: u32 = 32_768;
@@ -55,7 +81,8 @@ const OUTPUT_COLOR: ColorInfo = ColorInfo { matrix: Matrix::Bt709, transfer: Tra
 
 /// Where the runtime is looked for, in order: [`RUNTIME_ENV`], a `BlackmagicRawAPI` folder next to
 /// FilmCraft's executable and the executable's own folder (the SDK's convention for applications
-/// that ship it), then [`INSTALL_DIRS`]; after them the system library path is searched.
+/// that ship it), then where Blackmagic's installers (and on Linux DaVinci Resolve) put it; after
+/// them the system's library search.
 fn runtime_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Some(dir) = std::env::var_os(RUNTIME_ENV).filter(|d| !d.is_empty()) {
@@ -65,7 +92,7 @@ fn runtime_dirs() -> Vec<PathBuf> {
         dirs.push(exe_dir.join("BlackmagicRawAPI"));
         dirs.push(exe_dir);
     }
-    dirs.extend(INSTALL_DIRS.iter().map(PathBuf::from));
+    dirs.extend(install_dirs());
     dirs
 }
 
@@ -114,7 +141,7 @@ impl BrawSource {
         let sdk = sdk::sdk(runtime_dirs).map_err(|e| {
             MediaError::Unsupported(format!(
                 "{name}: Blackmagic RAW is decoded by Blackmagic's free Blackmagic RAW runtime, which FilmCraft does not include, and {e}. \
-                 Install Blackmagic RAW {} or later for Linux from Blackmagic Design's website (or set {RUNTIME_ENV} to the folder that holds its {}), then restart FilmCraft.",
+                 Install Blackmagic RAW {} or later from Blackmagic Design's website (or set {RUNTIME_ENV} to the folder that holds its {}), then restart FilmCraft.",
                 sdk::SDK_VERSION,
                 sdk::LIBRARY
             ))

@@ -1,8 +1,8 @@
-//! Blackmagic RAW through Blackmagic's runtime (Linux). Skipped unless both are available:
-//! `FILMCRAFT_BRAW_RUNTIME` names the folder holding `libBlackmagicRawAPI.so` (or the runtime is
+//! Blackmagic RAW through Blackmagic's runtime (Linux, Windows). Skipped unless both are available:
+//! `FILMCRAFT_BRAW_RUNTIME` names the folder holding `libBlackmagicRawAPI.so` / `BlackmagicRawAPI.dll` (or the runtime is
 //! installed where FilmCraft looks for it), and `FILMCRAFT_BRAW_SAMPLES` names a folder of `.braw`
 //! clips (the SDK's `sample.braw`, a camera's clips). Media are never committed.
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "windows"))]
 
 use std::path::PathBuf;
 

@@ -7,9 +7,10 @@
 //! completes jobs on its worker threads through the callback object below: those callbacks never
 //! take the lock (the API may hold its own while calling back) and never unwind into the API.
 
-use std::ffi::{CStr, CString, c_void};
+use std::ffi::c_void;
+#[cfg(not(windows))]
+use std::ffi::{CStr, CString};
 use std::mem::ManuallyDrop;
-use std::os::unix::ffi::OsStrExt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::ptr::{self, NonNull};
@@ -20,7 +21,11 @@ use std::time::{Duration, Instant};
 use super::ffi::*;
 
 /// The runtime library's file name.
+#[cfg(not(windows))]
 pub const LIBRARY: &str = "libBlackmagicRawAPI.so";
+/// The runtime library's file name.
+#[cfg(windows)]
+pub const LIBRARY: &str = "BlackmagicRawAPI.dll";
 /// The Blackmagic RAW SDK whose headers `ffi` transcribes: its runtime (or a later one keeping
 /// these interfaces) is needed.
 pub const SDK_VERSION: &str = "6.0";
@@ -36,9 +41,93 @@ const MAX_AUDIO_FRAMES: u32 = 1 << 20;
 /// Longest a closing clip waits for its jobs before leaking its API objects instead.
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(10);
 
+#[cfg(not(windows))]
 unsafe extern "C" {
-    /// The C library's `free`: the API returns some strings (time codes) allocated with `malloc`.
+    /// The C library's `free`: on Linux the API returns some strings (time codes) allocated with
+    /// `malloc`.
     fn free(p: *mut c_void);
+}
+
+/// A path as the API takes it: UTF-8 on Linux, a `BSTR` on Windows (alive while the call runs).
+#[cfg(not(windows))]
+struct ApiPath(CString);
+#[cfg(not(windows))]
+impl ApiPath {
+    fn new(path: &Path) -> Result<Self, String> {
+        use std::os::unix::ffi::OsStrExt;
+        CString::new(path.as_os_str().as_bytes()).map(Self).map_err(|_| "the path has a NUL byte".into())
+    }
+    fn as_ptr(&self) -> BrawString {
+        self.0.as_ptr()
+    }
+}
+#[cfg(windows)]
+struct ApiPath(windows::core::BSTR);
+#[cfg(windows)]
+impl ApiPath {
+    fn new(path: &Path) -> Result<Self, String> {
+        use std::os::windows::ffi::OsStrExt;
+        let wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+        if wide.is_empty() || wide.contains(&0) {
+            return Err("the path is empty or has a NUL character".into());
+        }
+        Ok(Self(windows::core::BSTR::from_wide(&wide)))
+    }
+    fn as_ptr(&self) -> BrawString {
+        self.0.as_ptr()
+    }
+}
+
+/// Read, then free, a string the API handed over to the caller: a time code (allocated with
+/// `malloc` on Linux, as the SDK's samples free it), or on Windows any `[out] BSTR`.
+///
+/// # Safety
+/// `s` is null or such a string.
+unsafe fn take_string(s: BrawString) -> Option<String> {
+    if s.is_null() {
+        return None;
+    }
+    #[cfg(not(windows))]
+    {
+        // SAFETY: a NUL-terminated string the caller owns (the function's contract).
+        let text = unsafe { CStr::from_ptr(s) }.to_string_lossy().into_owned();
+        // SAFETY: allocated by the API with malloc for the caller.
+        unsafe { free(s.cast_mut().cast()) };
+        Some(text)
+    }
+    #[cfg(windows)]
+    {
+        // SAFETY: a BSTR the caller owns (the function's contract); dropping it frees it.
+        Some(unsafe { windows::core::BSTR::from_raw(s) }.to_string())
+    }
+}
+
+/// Read a string the API keeps on Linux (the version: it is copied, never freed); on Windows every
+/// `[out] BSTR` is the caller's to free.
+///
+/// # Safety
+/// `s` is null or a string a call just returned.
+unsafe fn read_kept_string(s: BrawString) -> Option<String> {
+    #[cfg(not(windows))]
+    {
+        // SAFETY: a non-null string from the API is NUL-terminated.
+        (!s.is_null()).then(|| unsafe { CStr::from_ptr(s) }.to_string_lossy().into_owned())
+    }
+    #[cfg(windows)]
+    {
+        // SAFETY: the function's contract.
+        unsafe { take_string(s) }
+    }
+}
+
+/// How an id is passed to `QueryInterface` (by value on Linux, by reference on Windows).
+#[cfg(not(windows))]
+fn iid_arg(iid: &Iid) -> IidArg {
+    *iid
+}
+#[cfg(windows)]
+fn iid_arg(iid: &Iid) -> IidArg {
+    iid
 }
 
 fn check(code: Hresult, call: &str) -> Result<(), String> {
@@ -105,7 +194,7 @@ impl<V: Vtable> ComPtr<V> {
     unsafe fn query<W: Vtable>(&self, iid: Iid) -> Option<ComPtr<W>> {
         let mut out: *mut c_void = ptr::null_mut();
         // SAFETY: a live object; on success the API stores an owned reference in `out`.
-        let code = unsafe { (self.unknown().query_interface)(self.this(), iid, &mut out) };
+        let code = unsafe { (self.unknown().query_interface)(self.this(), iid_arg(&iid), &mut out) };
         // SAFETY: `out` is the requested interface (caller's contract) with a reference we own.
         if code == S_OK { unsafe { ComPtr::from_raw(out.cast()) } } else { None }
     }
@@ -127,6 +216,7 @@ impl<V: Vtable> Drop for ComPtr<V> {
 /// The loaded runtime and its process-wide codec.
 pub struct Sdk {
     _library: libloading::Library,
+    #[cfg(not(windows))]
     variant_clear: VariantClearFn,
     codec: ComPtr<CodecVtbl>,
     _factory: ComPtr<FactoryVtbl>,
@@ -148,12 +238,20 @@ pub fn sdk(dirs: impl FnOnce() -> Vec<PathBuf>) -> Result<&'static Sdk, String> 
     SDK.get_or_init(|| Sdk::load(&dirs())).as_ref().map_err(Clone::clone)
 }
 
+#[cfg(not(windows))]
 fn open_library(path: &Path) -> Result<libloading::Library, String> {
     use libloading::os::unix::{Library, RTLD_GLOBAL, RTLD_NOW};
     // SAFETY: loading Blackmagic's runtime runs its initialisers, which only set up the library.
     // RTLD_GLOBAL as the SDK's own loader does: the runtime loads its decoder plug-ins
     // (libDecoderCUDA.so, libInstructionSetServicesAVX2.so…) from its folder, and they link back to it.
     unsafe { Library::open(Some(path), RTLD_NOW | RTLD_GLOBAL) }.map(Into::into).map_err(|e| e.to_string())
+}
+
+#[cfg(windows)]
+fn open_library(path: &Path) -> Result<libloading::Library, String> {
+    // SAFETY: loading Blackmagic's runtime runs its DllMain, which only sets up the library. Plain
+    // LoadLibraryEx flags, as the SDK's own loader uses.
+    unsafe { libloading::Library::new(path) }.map_err(|e| e.to_string())
 }
 
 impl Sdk {
@@ -181,13 +279,12 @@ impl Sdk {
                 Err(_) => return Err(format!("the Blackmagic RAW runtime could not be loaded: {}", tried.join("; "))),
             },
         };
-        // SAFETY: both symbols have these C signatures in BlackmagicRawAPI.h; the copies stay
-        // valid while `library` is loaded, which is for the life of the process (SDK is static).
-        let (create_factory, variant_clear) = unsafe {
-            let create: CreateFactoryFn = *library.get(b"CreateBlackmagicRawFactoryInstance\0").map_err(|e| e.to_string())?;
-            let clear: VariantClearFn = *library.get(b"VariantClear\0").map_err(|e| e.to_string())?;
-            (create, clear)
-        };
+        // SAFETY: the symbols have these C signatures in BlackmagicRawAPI.h; the copies stay valid
+        // while `library` is loaded, which is for the life of the process (SDK is static).
+        let create_factory: CreateFactoryFn = unsafe { *library.get(b"CreateBlackmagicRawFactoryInstance\0").map_err(|e| e.to_string())? };
+        #[cfg(not(windows))]
+        // SAFETY: as above.
+        let variant_clear: VariantClearFn = unsafe { *library.get(b"VariantClear\0").map_err(|e| e.to_string())? };
         // SAFETY: returns a new factory with one reference for us, or null.
         let factory = unsafe { ComPtr::from_raw(create_factory()) }.ok_or("the Blackmagic RAW runtime made no factory")?;
         // Interfaces are only used once the runtime confirms their ids: a runtime built from other
@@ -213,10 +310,10 @@ impl Sdk {
                 // SAFETY: a live configuration, read before the first OpenClip as the API requires.
                 let _ = unsafe { (config.vtbl().set_pipeline)(config.this(), blackmagicRawPipelineCPU, ptr::null_mut(), ptr::null_mut()) };
                 let mut v: BrawString = ptr::null();
-                // SAFETY: on success `v` is a NUL-terminated string the API keeps (it is copied, never freed).
+                // SAFETY: a live configuration and a valid out-pointer.
                 let code = unsafe { (config.vtbl().get_version)(config.this(), &mut v) };
-                // SAFETY: a non-null string from a successful call is NUL-terminated.
-                (code == S_OK && !v.is_null()).then(|| unsafe { CStr::from_ptr(v) }.to_string_lossy().into_owned())
+                // SAFETY: what a successful call returned.
+                if code == S_OK { unsafe { read_kept_string(v) } } else { None }
             }
             None => None,
         };
@@ -224,12 +321,19 @@ impl Sdk {
         // on its threads, and it outlives the codec (both live for the whole process).
         check(unsafe { (codec.vtbl().set_callback)(codec.this(), ptr::addr_of!(CALLBACK.0).cast_mut()) }, "SetCallback")?;
         log::info!("Blackmagic RAW runtime {} loaded from {}", version.as_deref().unwrap_or("(unknown version)"), path.display());
-        Ok(Self { _library: library, variant_clear, codec, _factory: factory, calls: Mutex::new(()) })
+        Ok(Self {
+            _library: library,
+            #[cfg(not(windows))]
+            variant_clear,
+            codec,
+            _factory: factory,
+            calls: Mutex::new(()),
+        })
     }
 
     /// Open a `.braw` file.
     pub fn open(&'static self, path: &Path) -> Result<(Clip, ClipInfo), String> {
-        let name = CString::new(path.as_os_str().as_bytes()).map_err(|_| "the path has a NUL byte".to_string())?;
+        let name = ApiPath::new(path)?;
         let _calls = lock(&self.calls);
         let mut raw = ptr::null_mut();
         // SAFETY: a live codec and a NUL-terminated path; on success `raw` holds an owned reference.
@@ -262,17 +366,39 @@ impl Sdk {
     /// The time code of frame `index` (the caller holds `calls`).
     fn timecode(&self, clip: &ComPtr<ClipVtbl>, index: u64) -> Option<String> {
         let mut s: BrawString = ptr::null();
-        // SAFETY: live clip; on success `s` is a malloc'd NUL-terminated string the caller frees,
-        // as the SDK's samples do.
+        // SAFETY: live clip; on success `s` is a string handed over to the caller.
         let code = unsafe { (clip.vtbl().get_timecode_for_frame)(clip.this(), index, &mut s) };
-        if code != S_OK || s.is_null() {
-            return None;
-        }
         // SAFETY: as above.
-        let text = unsafe { CStr::from_ptr(s) }.to_string_lossy().into_owned();
-        // SAFETY: allocated by the API with malloc for the caller.
-        unsafe { free(s.cast_mut().cast()) };
-        Some(text)
+        if code == S_OK { unsafe { take_string(s) } } else { None }
+    }
+
+    /// The string `v` holds, if any, clearing `v`.
+    ///
+    /// # Safety
+    /// `v` is empty or was filled by the API.
+    unsafe fn variant_string(&self, v: &mut Variant) -> Option<String> {
+        #[cfg(not(windows))]
+        {
+            let text = if v.vt == blackmagicRawVariantTypeString {
+                // SAFETY: a string variant's union holds its string pointer, NUL-terminated or null.
+                unsafe { read_kept_string(v.value.bstr_val) }
+            } else {
+                None
+            };
+            // SAFETY: frees whatever the call stored in the variant.
+            unsafe { (self.variant_clear)(v) };
+            text
+        }
+        #[cfg(windows)]
+        {
+            // Strings are the only owned values the attributes FilmCraft reads hold (no arrays).
+            if v.vt != blackmagicRawVariantTypeString {
+                return None;
+            }
+            v.vt = blackmagicRawVariantTypeEmpty;
+            // SAFETY: a VT_BSTR variant's BSTR belongs to the caller; taking it clears the variant.
+            unsafe { take_string(v.value.bstr_val) }
+        }
     }
 
     /// The clip's gamma and gamut as recorded (what frames are processed with), for display.
@@ -285,20 +411,11 @@ impl Sdk {
         // SAFETY: the call returned an IBlackmagicRawClipProcessingAttributes with a reference for us.
         let Some(attrs) = (unsafe { ComPtr::from_raw(raw) }) else { return (None, None) };
         let get = |attribute: u32| -> Option<String> {
-            let mut v = Variant { vt: blackmagicRawVariantTypeEmpty, value: VariantValue { dbl_val: 0.0 } };
+            let mut v = Variant::empty();
             // SAFETY: live attributes and a valid Variant to fill.
             let code = unsafe { (attrs.vtbl().get_clip_attribute)(attrs.this(), attribute, &mut v) };
-            let text = if code == S_OK && v.vt == blackmagicRawVariantTypeString {
-                // SAFETY: a string variant's union holds its string pointer.
-                let s = unsafe { v.value.bstr_val };
-                // SAFETY: a non-null string from the API is NUL-terminated.
-                (!s.is_null()).then(|| unsafe { CStr::from_ptr(s) }.to_string_lossy().into_owned())
-            } else {
-                None
-            };
-            // SAFETY: frees whatever the call stored in the variant.
-            unsafe { (self.variant_clear)(&mut v) };
-            text
+            // SAFETY: the variant a successful call filled (or the empty one).
+            unsafe { self.variant_string(&mut v) }.filter(|_| code == S_OK)
         };
         (get(blackmagicRawClipProcessingAttributeGamma), get(blackmagicRawClipProcessingAttributeGamut))
     }
@@ -535,13 +652,18 @@ static CALLBACK_VTBL: CallbackVtbl = CallbackVtbl {
     sidecar_metadata_parse_warning: cb_sidecar,
     sidecar_metadata_parse_error: cb_sidecar,
     prepare_pipeline_complete: cb_prepare_pipeline_complete,
+    #[cfg(not(windows))]
     destructor: cb_destructor,
+    #[cfg(not(windows))]
     deleting_destructor: cb_destructor,
 };
 
 static CALLBACK: CallbackObject = CallbackObject(Object { vtbl: &CALLBACK_VTBL });
 
-unsafe extern "system" fn cb_query_interface(this: This, iid: Iid, out: *mut *mut c_void) -> Hresult {
+unsafe extern "system" fn cb_query_interface(this: This, iid: IidArg, out: *mut *mut c_void) -> Hresult {
+    #[cfg(windows)]
+    // SAFETY: Windows passes the id by reference; null is refused.
+    let Some(&iid) = (unsafe { iid.as_ref() }) else { return E_NOINTERFACE };
     if out.is_null() {
         return E_NOINTERFACE;
     }
@@ -558,6 +680,7 @@ unsafe extern "system" fn cb_add_ref(_this: This) -> Ulong {
 unsafe extern "system" fn cb_release(_this: This) -> Ulong {
     1
 }
+#[cfg(not(windows))]
 unsafe extern "system" fn cb_destructor(_this: This) {}
 unsafe extern "system" fn cb_trim_progress(_this: This, _job: *mut Object<JobVtbl>, _progress: f32) {}
 unsafe extern "system" fn cb_job_result(_this: This, _job: *mut Object<JobVtbl>, _result: Hresult) {}

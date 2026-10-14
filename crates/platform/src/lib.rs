@@ -34,7 +34,7 @@
 mod annexb;
 #[cfg_attr(not(any(target_os = "windows", target_os = "linux")), allow(dead_code))]
 mod biplanar;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 pub mod braw;
 pub mod cursor;
 #[cfg(target_os = "macos")]
@@ -72,7 +72,7 @@ pub enum Availability {
 pub fn register() -> Availability {
     // Blackmagic RAW through Blackmagic's runtime, looked for when the first .braw file opens (so
     // nothing is loaded at startup)
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     filmcraft_codecs::register_path_opener(braw::open_path);
     #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
     filmcraft_export::register_encoder(nvenc::export::factory);
