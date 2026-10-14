@@ -4,6 +4,8 @@
 
 use super::*;
 
+mod hostile;
+
 fn ts_bytes(prefix: u8, v: i64) -> [u8; 5] {
     let v = v & ((1 << 33) - 1);
     [(prefix << 4) | (((v >> 30) & 7) as u8) << 1 | 1, (v >> 22) as u8, (((v >> 15) & 0x7F) as u8) << 1 | 1, (v >> 7) as u8, ((v & 0x7F) as u8) << 1 | 1]

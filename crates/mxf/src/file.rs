@@ -241,7 +241,7 @@ impl EssenceTrack {
     /// Nearest random-access sample at or before stored index `i`.
     pub fn sync_before(&self, i: usize) -> usize {
         let i = i.min(self.samples.len().saturating_sub(1));
-        (0..=i).rev().find(|&k| self.samples[k].key).unwrap_or(0)
+        (0..=i).rev().find(|&k| self.samples.get(k).is_some_and(|s| s.key)).unwrap_or(0)
     }
     /// The stored sample presented at display position `d`.
     pub fn sample_at(&self, d: i64) -> Option<usize> {

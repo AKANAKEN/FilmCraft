@@ -1797,6 +1797,9 @@ dependencies = [
 [[package]]
 name = "filmcraft-cfb"
 version = "0.7.2"
+dependencies = [
+ "filmcraft-testkit",
+]
 
 [[package]]
 name = "filmcraft-cli"
@@ -1978,6 +1981,7 @@ version = "0.7.2"
 dependencies = [
  "filmcraft-media",
  "filmcraft-project",
+ "filmcraft-testkit",
  "filmcraft-time",
  "log",
  "serde",

@@ -2,6 +2,8 @@
 
 use super::*;
 
+mod hostile;
+
 /// Write one page holding `segments` (lacing already computed by `lace`).
 fn page(out: &mut Vec<u8>, flags: u8, granule: i64, serial: u32, seq: u32, lacing: &[u8], body: &[u8]) {
     let start = out.len();

@@ -12,6 +12,7 @@
 
 pub mod fixtures;
 pub mod golden;
+pub mod hostile;
 pub mod oracle;
 pub mod wav;
 

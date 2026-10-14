@@ -26,7 +26,7 @@ pub fn file_stem(name: &str) -> String {
 
 /// Civil date-time (proleptic Gregorian) of a unix timestamp shifted by `offset_secs`.
 pub fn civil(unix: i64, offset_secs: i32) -> (i64, u32, u32, u32, u32, u32) {
-    let t = unix + offset_secs as i64;
+    let t = unix.saturating_add(offset_secs as i64);
     let days = t.div_euclid(86_400);
     let secs = t.rem_euclid(86_400);
     // Howard Hinnant's days_from_civil inverse.
