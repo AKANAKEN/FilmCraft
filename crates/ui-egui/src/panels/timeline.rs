@@ -1665,10 +1665,11 @@ fn zoom_scrollbar(app: &mut FilmcraftApp, ui: &mut egui::Ui, bar: Rect, seq_seco
     {
         jump(&mut app.ui.timeline, pos.x);
     }
-    // (a drag is known to be one only after the pointer has moved: what was grabbed is what was
-    // under the pointer when the button went down)
-    if resp.drag_started()
-        && let Some(pos) = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos())
+    // Start on the press frame instead of waiting for egui's drag threshold. Otherwise the first
+    // few points of a middle-thumb drag do nothing and make a busy Timeline feel stuck before it
+    // starts moving. Handles keep egui's threshold so a plain click cannot change the zoom.
+    if ui.input(|i| i.pointer.primary_pressed())
+        && let Some(pos) = ui.input(|i| i.pointer.press_origin()).filter(|pos| bar.contains(*pos))
     {
         let mode = if !thumb.expand2(vec2(0.0, 4.0)).contains(pos) {
             jump(&mut app.ui.timeline, pos.x);
@@ -1692,14 +1693,15 @@ fn zoom_scrollbar(app: &mut FilmcraftApp, ui: &mut egui::Ui, bar: Rect, seq_seco
         v.target_pps = start_pps;
         v.pps = start_pps;
     }
+    let pointer_down = ui.input(|i| i.pointer.primary_down());
     if let Some(Drag::ZoomBar { grab, start, mode, .. }) = app.tl.drag.clone()
-        && resp.dragged()
+        && ((mode == 0 && pointer_down) || (mode != 0 && resp.dragged()))
     {
         let v = &mut app.ui.timeline;
         match mode {
             // the thumb's middle: scroll, the thumb staying under the pointer
             0 => {
-                if let Some(pos) = resp.interact_pointer_pos() {
+                if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
                     v.target_scroll = (start + (pos.x - grab) as f64 * per_point).clamp(0.0, range);
                     v.scroll = v.target_scroll;
                 }
@@ -1721,7 +1723,7 @@ fn zoom_scrollbar(app: &mut FilmcraftApp, ui: &mut egui::Ui, bar: Rect, seq_seco
             }
         }
     }
-    if resp.drag_stopped() {
+    if resp.drag_stopped() || (matches!(app.tl.drag, Some(Drag::ZoomBar { .. })) && !pointer_down) {
         app.tl.drag = None;
     }
 }
