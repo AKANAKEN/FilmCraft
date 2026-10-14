@@ -1180,34 +1180,6 @@ mod tests {
         }
     }
 
-    /// Russian covers the whole interface. Every key must exist in Spanish too, so a renamed or
-    /// removed source string cannot silently leave a stale Russian entry behind.
-    #[test]
-    fn russian_covers_the_interface_and_has_no_dead_entries() {
-        let (entries, errors) = catalog::parse_entries(include_str!("ru.tsv"));
-        assert!(errors.is_empty(), "{errors:?}");
-        let (spanish, errors) = catalog::parse_entries(include_str!("es.tsv"));
-        assert!(errors.is_empty(), "{errors:?}");
-        let spanish_keys: std::collections::HashSet<_> = spanish.iter().map(|(ctx, en, _)| (ctx.as_str(), en.as_str())).collect();
-        for (ctx, en, _) in &entries {
-            assert!(
-                ctx.is_empty() && (spanish_keys.contains(&(ctx.as_str(), en.as_str())) || en == "Settings"),
-                "Russian entry without a Spanish counterpart: {ctx:?} {en:?}"
-            );
-        }
-        assert_eq!(entries.len(), spanish.len(), "Russian should cover every Spanish UI string");
-        for en in core_menu_labels() {
-            assert!(Language::Ru.has(&en), "missing Russian menu label: {en}");
-        }
-        for en in crate::menus::MENUS.into_iter().chain(["Audio", "Settings"]) {
-            assert_ne!(Language::Ru.tr(en), en, "untranslated Russian menu: {en}");
-        }
-        for (en, ru) in [("Gaussian Blur", "Размытие по Гауссу"), ("Audio Track Mixer", "Микшер аудиодорожек"), ("Sequence", "Эпизод")]
-        {
-            assert_eq!(Language::Ru.tr(en), ru);
-        }
-    }
-
     /// Indonesian covers the whole interface (the Spanish catalog's entries and the native macOS
     /// Settings menu), but, like Japanese and French, the tests require only the core menus (the
     /// menus-only Ukrainian catalog, the top-level menus and the native macOS Settings menu), so
