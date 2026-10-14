@@ -145,15 +145,15 @@ fn in_word(c: char) -> bool {
     matches!(bidi_class(c), BidiClass::R | BidiClass::AL | BidiClass::NSM | BidiClass::BN)
 }
 
-/// A bracket shown right to left takes its mirrored glyph (UAX #9 rule L4).
+/// A bracket shown right to left takes its mirrored glyph (UAX #9 rule L4). Curly brackets
+/// are left alone: in an interface label they are almost always a `{placeholder}`'s own
+/// syntax, and mirroring them would break the fill.
 fn mirror(c: char) -> char {
     match c {
         '(' => ')',
         ')' => '(',
         '[' => ']',
         ']' => '[',
-        '{' => '}',
-        '}' => '{',
         '<' => '>',
         '>' => '<',
         '«' => '»',
@@ -175,9 +175,28 @@ pub(crate) fn visual_line(text: &str) -> String {
     if !has_rtl(text) {
         return text.to_owned();
     }
+    // Each placeholder becomes one private-use character (a left-to-right one, like the name
+    // inside it) for the pass, and is restored afterwards; the mapping is per placeholder, so
+    // a reordered sentence still finds its own.
+    let mut tokens: Vec<&str> = Vec::new();
+    let mut guarded = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(open) = rest.find('{') {
+        guarded.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        if let Some(close) = after.find('}') {
+            tokens.push(&rest[open..open + close + 2]);
+            guarded.push(char::from_u32(0xE000 + tokens.len() as u32 - 1).unwrap_or('\u{E000}'));
+            rest = &after[close + 1..];
+        } else {
+            guarded.push('{');
+            rest = after;
+        }
+    }
+    guarded.push_str(rest);
     let mut out = String::with_capacity(text.len());
     let mut first = true;
-    for line in text.split('\n') {
+    for line in guarded.split('\n') {
         if !first {
             out.push('\n');
         }
@@ -225,7 +244,19 @@ pub(crate) fn visual_line(text: &str) -> String {
             }
         }
     }
-    out
+    if tokens.is_empty() {
+        return out;
+    }
+    let mut restored = String::with_capacity(out.len());
+    for c in out.chars() {
+        let k = c as u32;
+        if (0xE000..0xE000 + tokens.len() as u32).contains(&k) {
+            restored.push_str(tokens[(k - 0xE000) as usize]);
+        } else {
+            restored.push(c);
+        }
+    }
+    restored
 }
 
 /// The layout sections of one line of `bidi.text` (byte range `line`, inside one paragraph), left
@@ -491,6 +522,8 @@ mod tests {
         assert_eq!(visual_line("حفظ كـ PDF…"), "…PDF كـ حفظ");
         assert_eq!(visual_line("تصدير كـ SVG"), "SVG كـ تصدير");
         assert_eq!(visual_line("سنة ١٤٤٥"), "١٤٤٥ سنة");
+        // A `{placeholder}` rides through as one unit, never mirrored.
+        assert_eq!(visual_line("لون مميز {n}"), "{n} مميز لون");
         assert_eq!(visual_line("نعم، (نص)"), "(نص) ،نعم");
         assert_eq!(visual_line("سطر أول\nPDF"), "أول سطر\nPDF");
         assert_eq!(visual_line("Lesson 3: (draft)"), "Lesson 3: (draft)");
