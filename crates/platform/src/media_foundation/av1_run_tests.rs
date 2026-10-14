@@ -13,10 +13,22 @@ struct Sequence {
     location: u8,
     separate_uv: bool,
     reduced: bool,
+    large_superblock: bool,
 }
 impl Default for Sequence {
     fn default() -> Self {
-        Self { profile: 0, size: (64, 64), depth: 10, mono: false, color: (1, 1, 1), range: false, location: 0, separate_uv: false, reduced: false }
+        Self {
+            profile: 0,
+            size: (64, 64),
+            depth: 10,
+            mono: false,
+            color: (1, 1, 1),
+            range: false,
+            location: 0,
+            separate_uv: false,
+            reduced: false,
+            large_superblock: false,
+        }
     }
 }
 #[derive(Default)]
@@ -59,7 +71,8 @@ fn payload(s: &Sequence) -> Vec<u8> {
     if !s.reduced {
         b.f(0, 1);
     }
-    b.f(0, 3); // superblock, filter intra, intra edge
+    b.f(u32::from(s.large_superblock), 1); // use_128x128_superblock; 64x64 picture still has one tile.
+    b.f(0, 2); // filter intra, intra edge
     if !s.reduced {
         b.f(0, 7);
     } // five tools, choose screen tools, force screen tools
@@ -128,6 +141,146 @@ fn sample(s: &Sequence) -> Vec<u8> {
 
 fn pq() -> Sequence {
     Sequence { color: (9, 16, 9), ..Default::default() }
+}
+
+fn entry(s: &Sequence) -> filmcraft_isobmff::SampleEntry {
+    use filmcraft_isobmff::{Av1Config, SampleEntry};
+    SampleEntry::av1(
+        Av1Config {
+            high_bitdepth: s.depth > 8,
+            chroma_subsampling_x: true,
+            chroma_subsampling_y: true,
+            config_obus: obu(1, &payload(s)),
+            ..Default::default()
+        },
+        u16::try_from(s.size.0).unwrap(),
+        u16::try_from(s.size.1).unwrap(),
+    )
+}
+
+#[test]
+fn mf_av1_container_matching_nclx_nclc_and_absent_override_allow_effective_color() {
+    use super::super::av1_container::Av1ContainerPolicy;
+    use filmcraft_isobmff::ColorInfo as Colr;
+    let original = Sequence::default();
+    for target in [Sequence { depth: 8, color: (9, 1, 9), ..original.clone() }, pq(), Sequence { color: (9, 18, 9), ..original.clone() }] {
+        let original = Sequence { depth: target.depth, ..Default::default() };
+        let candidate = stream(&original).initial_av1_color_candidate(&sample(&target)).unwrap().unwrap();
+        for colr in [
+            None,
+            Some(Colr::Nclx { primaries: target.color.0.into(), transfer: target.color.1.into(), matrix: target.color.2.into(), full_range: false }),
+            Some(Colr::Nclc { primaries: target.color.0.into(), transfer: target.color.1.into(), matrix: target.color.2.into() }),
+        ] {
+            let mut original_entry = entry(&original);
+            original_entry.video.as_mut().unwrap().color = colr;
+            let unchanged = original_entry.clone();
+            assert!(Av1ContainerPolicy::from_entry(&original_entry, original.size).permits(&candidate));
+            assert_eq!(original_entry, unchanged);
+        }
+    }
+    let candidate = stream(&original).initial_av1_color_candidate(&sample(&pq())).unwrap().unwrap();
+    assert!(!Av1ContainerPolicy::default().permits(&candidate), "unknown original context defaults to deny");
+}
+
+#[test]
+fn mf_av1_container_conflicts_unspecified_fallback_and_unhandled_metadata_decline() {
+    use super::super::av1_container::Av1ContainerPolicy;
+    use filmcraft_isobmff::{CleanAperture, ColorInfo as Colr, FourCc, MasteringDisplay};
+    let original = Sequence::default();
+    let candidate = stream(&original).initial_av1_color_candidate(&sample(&pq())).unwrap().unwrap();
+    for colr in [
+        Colr::Nclx { primaries: 1, transfer: 16, matrix: 9, full_range: false },
+        Colr::Nclx { primaries: 9, transfer: 1, matrix: 9, full_range: false },
+        Colr::Nclx { primaries: 9, transfer: 16, matrix: 1, full_range: false },
+        Colr::Nclx { primaries: 9, transfer: 16, matrix: 9, full_range: true },
+        Colr::Nclx { primaries: 2, transfer: 2, matrix: 2, full_range: false },
+        Colr::Nclc { primaries: 2, transfer: 2, matrix: 2 },
+        Colr::Icc { kind: FourCc(*b"prof"), profile: vec![1, 2, 3] },
+    ] {
+        let mut original_entry = entry(&original);
+        original_entry.video.as_mut().unwrap().color = Some(colr);
+        let unchanged = original_entry.clone();
+        assert!(!Av1ContainerPolicy::from_entry(&original_entry, original.size).permits(&candidate));
+        assert_eq!(original_entry, unchanged);
+    }
+    for kind in 0..4 {
+        let mut original_entry = entry(&original);
+        let video = original_entry.video.as_mut().unwrap();
+        match kind {
+            0 => video.mastering_display = Some(MasteringDisplay::bt2020(1000.0, 0.01)),
+            1 => video.content_light = Some((1000, 400)),
+            2 => video.clean_aperture = Some(CleanAperture { width: (32, 1), height: (32, 1), horiz_offset: (0, 1), vert_offset: (0, 1) }),
+            _ => video.gamma = Some(0x0002_3333),
+        }
+        assert!(!Av1ContainerPolicy::from_entry(&original_entry, original.size).permits(&candidate));
+    }
+}
+
+#[test]
+fn mf_av1_native_boundary_keeps_plan_spec_and_effective_header_consistent() {
+    use super::super::av1_container::Av1ContainerPolicy;
+    use super::super::gpu::SurfaceFormat;
+    use super::super::stream::Stream;
+    use filmcraft_color::Transfer;
+    let original = Sequence::default();
+    let policy = Av1ContainerPolicy::from_entry(&entry(&original), original.size);
+    // Legacy direct Frame construction must enter the same guarded owner at decoder creation.
+    let mut native = Stream::Frame(stream(&original)).into_guarded();
+    let before_plan = native.plan().unwrap();
+    let before_spec = native.spec(SurfaceFormat::P010);
+    let accepted = sample(&pq());
+    assert!(native.prepare_av1(&accepted, 0, SurfaceFormat::P010, &policy).unwrap());
+    let after_plan = native.plan().unwrap();
+    let after_spec = native.spec(SurfaceFormat::P010);
+    assert_eq!((before_plan.size, before_plan.profile, before_plan.format), (after_plan.size, after_plan.profile, after_plan.format));
+    assert_eq!((before_spec.size, before_spec.subtype, before_spec.format), (after_spec.size, after_spec.subtype, after_spec.format));
+    assert!(before_spec.attrs.is_empty() && after_spec.attrs.is_empty());
+    assert_eq!(native.first_geometry(SurfaceFormat::P010).color.transfer, Transfer::Pq);
+    assert_eq!(native.frame_info().unwrap().color.unwrap().transfer, Transfer::Pq);
+    assert_eq!(native.input(&accepted, true).unwrap(), accepted, "actual in-band header enters unchanged");
+    native.close_av1_adoption();
+    assert!(native.prepare_av1(&accepted, 2, SurfaceFormat::P010, &Av1ContainerPolicy::default()).unwrap(), "matching active header is idempotent");
+    assert!(!native.prepare_av1(&sample(&original), 0, SurfaceFormat::P010, &policy).unwrap(), "active guard catches original-header reversion");
+    let headerless = obu(6, &[0x19, 0, 0]);
+    let mut injected = obu(1, &payload(&pq()));
+    injected.extend_from_slice(&headerless);
+    native.restart_av1_empty();
+    assert_eq!(native.input(&headerless, true).unwrap(), injected, "reset reinjects effective header");
+    let hlg = Sequence { color: (9, 18, 9), ..Default::default() };
+    assert!(native.prepare_av1(&sample(&hlg), 0, SurfaceFormat::P010, &policy).unwrap());
+    assert_eq!(native.first_geometry(SurfaceFormat::P010).color.transfer, Transfer::Hlg);
+}
+
+#[test]
+fn mf_av1_native_boundary_unknown_context_closed_run_and_mismatched_spec_decline() {
+    use super::super::av1_container::Av1ContainerPolicy;
+    use super::super::gpu::SurfaceFormat;
+    use super::super::mft::Attr;
+    use super::super::stream::{Stream, av1_native_compatible};
+    use windows::Win32::Media::MediaFoundation::{MF_MT_MPEG2_PROFILE, MFVideoFormat_VP90};
+    let original = Sequence::default();
+    let policy = Av1ContainerPolicy::from_entry(&entry(&original), original.size);
+    let mut native = Stream::from(stream(&original));
+    let changed = sample(&pq());
+    assert!(!native.prepare_av1(&changed, 0, SurfaceFormat::P010, &Av1ContainerPolicy::default()).unwrap());
+    assert!(!native.prepare_av1(&changed, 0, SurfaceFormat::Nv12, &policy).unwrap());
+    native.close_av1_adoption();
+    assert!(!native.prepare_av1(&changed, 0, SurfaceFormat::P010, &policy).unwrap());
+    native.restart_av1_empty();
+    assert!(native.prepare_av1(&changed, 0, SurfaceFormat::P010, &policy).unwrap());
+    let candidate = stream(&original).initial_av1_color_candidate(&changed).unwrap().unwrap();
+    let plan = native.plan().unwrap();
+    assert!(av1_native_compatible(&plan, &native.spec(SurfaceFormat::P010), &candidate));
+    for kind in 0..4 {
+        let mut spec = native.spec(SurfaceFormat::P010);
+        match kind {
+            0 => spec.attrs.push((MF_MT_MPEG2_PROFILE, Attr::U32(1))),
+            1 => spec.size = (65, 64),
+            2 => spec.format = SurfaceFormat::Nv12,
+            _ => spec.subtype = MFVideoFormat_VP90,
+        }
+        assert!(!av1_native_compatible(&plan, &spec, &candidate));
+    }
 }
 
 #[test]
@@ -202,6 +355,73 @@ fn av1_run_active_guard_rejects_reversion_that_original_hybrid_info_calls_unchan
     assert!(run.prepare(&sample(&pq()), 0, |_| true).unwrap());
     assert!(!run.prepare(&old_sample, 0, |_| true).unwrap());
     assert_eq!(run.active().config_obus, obu(1, &payload(&pq())));
+}
+
+#[test]
+fn av1_run_replay_initialization_tracks_accepted_header_across_empty_resets() {
+    let original = Sequence::default();
+    let mut run = Av1RunMetadata::new(stream(&original));
+    assert!(run.software_replay_initialization().is_none(), "ordinary configuration keeps default replay");
+    assert!(run.prepare(&sample(&pq()), 0, |_| true).unwrap());
+    assert_eq!(run.software_replay_initialization(), Some(obu(1, &payload(&pq())).as_slice()));
+    run.restart_empty();
+    assert_eq!(run.software_replay_initialization(), Some(obu(1, &payload(&pq())).as_slice()));
+    assert!(run.prepare(&sample(&original), 0, |_| true).unwrap());
+    assert_eq!(run.software_replay_initialization(), Some(obu(1, &payload(&original)).as_slice()), "new accepted reversion updates replay state");
+    run.close_adoption();
+    assert_eq!(run.software_replay_initialization(), Some(obu(1, &payload(&original)).as_slice()));
+}
+
+#[test]
+fn av1_run_replay_initialization_refreshes_compatible_coding_tool_restart_after_adoption() {
+    use filmcraft_codecs::hw::Av1ParameterDifference;
+    let mut run = Av1RunMetadata::new(stream(&Sequence::default()));
+    assert!(run.prepare(&sample(&pq()), 0, |_| true).unwrap());
+    let accepted_color = run.active().color;
+    let tools = Sequence { large_superblock: true, ..pq() };
+    let restart = sample(&tools);
+    assert_eq!(
+        run.active().av1_parameter_difference(&restart).unwrap(),
+        Av1ParameterDifference::Unchanged,
+        "coding-tool-only difference retains existing format acceptance"
+    );
+    assert!(run.prepare(&restart, 0, |_| panic!("same native format/color does not open new color adoption")).unwrap());
+    assert_eq!(run.active().color, accepted_color);
+    assert_eq!(
+        run.software_replay_initialization(),
+        Some(obu(1, &payload(&tools)).as_slice()),
+        "replay must retain the latest accepted sequence, including coding-tool flags"
+    );
+    let hlg = Sequence { color: (9, 18, 9), ..tools };
+    assert!(!run.prepare(&sample(&hlg), 0, |_| true).unwrap(), "metadata refresh must not reopen initial color window");
+}
+
+#[test]
+fn av1_run_changed_coding_tools_after_adoption_require_supported_restart_proof() {
+    let original = Sequence::default();
+    let mut ordinary = Av1RunMetadata::new(stream(&original));
+    let ordinary_tools = Sequence { large_superblock: true, ..original };
+    assert!(ordinary.prepare(&sample(&ordinary_tools), 0, |_| panic!("ordinary coding-tool acceptance needs no color adoption")).unwrap());
+    assert!(ordinary.software_replay_initialization().is_none());
+    let mut run = Av1RunMetadata::new(stream(&Sequence::default()));
+    assert!(run.prepare(&sample(&pq()), 0, |_| true).unwrap());
+    let accepted = run.software_replay_initialization().unwrap().to_vec();
+    let tools = Sequence { large_superblock: true, ..pq() };
+    for frame in [vec![0x30], vec![0x80], vec![0]] {
+        let mut unsupported = obu(1, &payload(&tools));
+        unsupported.extend(obu(6, &frame));
+        assert!(!run.prepare(&unsupported, 0, |_| panic!("unsupported refresh cannot reopen adoption")).unwrap());
+        assert_eq!(run.software_replay_initialization(), Some(accepted.as_slice()));
+    }
+    let mut truncated = obu(1, &payload(&tools));
+    truncated.extend(obu(6, &[0x19]));
+    assert!(run.prepare(&truncated, 0, |_| true).is_err());
+    assert_eq!(run.software_replay_initialization(), Some(accepted.as_slice()));
+    let mut metadata = sample(&tools);
+    metadata.extend(obu(5, &[1, 128]));
+    assert!(!run.prepare(&metadata, 0, |_| true).unwrap());
+    assert_eq!(run.software_replay_initialization(), Some(accepted.as_slice()));
+    assert!(run.prepare(&sample(&pq()), 4, |_| panic!("identical accepted header remains idempotent")).unwrap());
 }
 
 #[test]
