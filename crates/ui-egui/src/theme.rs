@@ -153,6 +153,11 @@ pub struct Tokens {
 }
 
 impl Tokens {
+    /// Accent for canvas and timeline editing marks, kept separate from suite UI chrome.
+    pub fn editing_accent(&self) -> Color32 {
+        if self.kind == ThemeKind::Medium && self.accent == SUITE_DARK.accent { Color32::from_rgb(0x2f, 0x6b, 0xdf) } else { self.accent }
+    }
+
     /// Foreground for a filled accent control in the standard dark palette.
     pub fn on_accent(&self) -> Color32 {
         if self.kind == ThemeKind::Medium && self.accent == SUITE_DARK.accent { SUITE_DARK.on_accent } else { Color32::WHITE }
@@ -369,12 +374,11 @@ impl Tokens {
     pub fn with_appearance(mut self, highlight: Option<[u8; 3]>, accessible_contrast: bool) -> Self {
         if let Some([r, g, b]) = highlight {
             let c = Color32::from_rgb(r, g, b);
-            // The former and current default highlight values mean "use this preset's accent".
-            // Older saved defaults must not repaint standard Dark, while a new default must not
-            // repaint Darkest or Light. Other saved colours remain overrides.
+            // The saved legacy default follows each preset. In standard Dark, it maps to the
+            // suite accent; in Darkest and Light it already matches those presets' own accent.
+            // A user-selected color, including the suite blue on an alternate preset, overrides.
             let legacy_default = Color32::from_rgb(0x2f, 0x6b, 0xdf);
-            let current_default = SUITE_DARK.accent;
-            let theme_default = c == self.accent || c == legacy_default || c == current_default;
+            let theme_default = c == self.accent || (self.kind == ThemeKind::Medium && c == legacy_default);
             if !theme_default {
                 // A highlight of the user's own also colours the theme's other blues: the same hue,
                 // as much more or less saturated and bright as each is than the theme's highlight.
@@ -670,6 +674,7 @@ mod tests {
         assert_eq!(t.accent, Color32::from_rgb(0x2d, 0x81, 0xff));
         assert_eq!(t.row_selected, Color32::from_rgb(0x20, 0x3b, 0x65));
         assert_eq!(t.on_accent(), Color32::from_rgb(0x06, 0x06, 0x07));
+        assert_eq!(t.editing_accent(), Color32::from_rgb(0x2f, 0x6b, 0xdf));
         assert_eq!(
             t.with_appearance(Some([0x2f, 0x6b, 0xdf]), false).accent,
             t.accent,
@@ -700,6 +705,18 @@ mod tests {
         let default = filmcraft_engine::settings::parse_hex(filmcraft_engine::settings::DEFAULT_HIGHLIGHT);
         for k in [ThemeKind::Dark, ThemeKind::Medium, ThemeKind::Light] {
             assert_eq!(highlight_blues(&Tokens::for_kind(k).with_appearance(default, false)), highlight_blues(&Tokens::for_kind(k)), "{k:?}");
+        }
+    }
+
+    #[test]
+    fn explicitly_selected_suite_blue_still_overrides_alternate_presets() {
+        let blue = Some([0x2d, 0x81, 0xff]);
+        for kind in [ThemeKind::Dark, ThemeKind::Light] {
+            let original = Tokens::for_kind(kind);
+            let chosen = original.clone().with_appearance(blue, false);
+            assert_ne!(chosen.accent, original.accent, "{kind:?}");
+            assert_eq!(chosen.accent, SUITE_DARK.accent, "{kind:?}");
+            assert_eq!(chosen.editing_accent(), SUITE_DARK.accent, "{kind:?}");
         }
     }
 

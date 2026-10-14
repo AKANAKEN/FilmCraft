@@ -174,7 +174,7 @@ impl AppearancePrefs {
     }
 }
 
-pub const DEFAULT_HIGHLIGHT: &str = "#2d81ff";
+pub const DEFAULT_HIGHLIGHT: &str = "#2f6bdf";
 
 /// Settings ▸ Audio Hardware (the cpal output on desktop).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
