@@ -1,14 +1,16 @@
 //! The part of the Blackmagic RAW API that FilmCraft calls, transcribed from the Blackmagic RAW SDK
-//! 6.0: the Linux `BlackmagicRawAPI.h` and `LinuxCOM.h`, and the Windows `BlackmagicRawAPI.idl`
-//! (same interfaces, ids and method order).
+//! 6.0: the Linux `BlackmagicRawAPI.h` and `LinuxCOM.h`, the Windows `BlackmagicRawAPI.idl` (same
+//! interfaces, ids and method order), and the macOS `BlackmagicRawAPI.h` with Apple's
+//! `CFPlugInCOM.h`.
 //!
 //! The interfaces are COM interfaces that each derive directly from `IUnknown`, so an object is a
 //! pointer to its vtable, and the vtable holds `QueryInterface`, `AddRef`, `Release` and then the
-//! interface's methods in declaration order. On Linux they are C++ classes (Itanium ABI) that each
-//! end with a protected virtual destructor, whose two vtable entries come after every method; the
-//! Windows IDL declares no destructors. The platforms also differ in strings (UTF-8 `const char*`
-//! on Linux, `BSTR` on Windows), `VARIANT`, how `QueryInterface` takes an id (by value on Linux,
-//! by reference on Windows) and `ULONG`'s width. Slots FilmCraft never calls
+//! interface's methods in declaration order. On Linux and macOS they are C++ classes (Itanium ABI)
+//! that each end with a protected virtual destructor, whose two vtable entries come after every
+//! method; the Windows IDL declares no destructors. The platforms also differ in strings (UTF-8
+//! `const char*` on Linux, `BSTR` on Windows, `CFStringRef` on macOS), `VARIANT`, how
+//! `QueryInterface` takes an id (by value on Linux and macOS, by reference on Windows) and
+//! `ULONG`'s width. Slots FilmCraft never calls
 //! are [`Slot`]s, kept so that the slots after them are at their right offsets (checked by the
 //! `abi_tests` module against the header's declaration order).
 //!
@@ -41,29 +43,38 @@
 //! ```
 #![allow(non_upper_case_globals)]
 
-use std::ffi::{c_ulong, c_void};
+use std::ffi::c_void;
+#[cfg(target_os = "linux")]
+use std::ffi::c_ulong;
 
 pub type Hresult = i32;
-/// `ULONG`: `unsigned long`, 64 bits on Linux and 32 on Windows.
+/// `ULONG`: `unsigned long`, 64 bits on Linux and 32 on Windows and macOS (`UInt32`).
+#[cfg(target_os = "linux")]
 pub type Ulong = c_ulong;
+#[cfg(not(target_os = "linux"))]
+pub type Ulong = u32;
 /// Strings: UTF-8 `const char*` on Linux, owned by the API unless a call says otherwise.
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
 pub type BrawString = *const std::ffi::c_char;
 /// Strings: `BSTR` on Windows; one a call returns belongs to the caller (`SysFreeString`).
 #[cfg(windows)]
 pub type BrawString = *const u16;
+/// Strings: `CFStringRef` (a CoreFoundation string) on macOS; one a call returns belongs to the
+/// caller (`CFRelease`).
+#[cfg(target_os = "macos")]
+pub type BrawString = *const c_void;
 /// A vtable entry FilmCraft never calls.
 pub type Slot = *const c_void;
 
 pub const S_OK: Hresult = 0;
-/// `E_NOINTERFACE`: LinuxCOM.h has its own value.
+/// `E_NOINTERFACE`: LinuxCOM.h and Apple's CFPlugInCOM.h define this HRESULT themselves.
 #[cfg(not(windows))]
 pub const E_NOINTERFACE: Hresult = 0x8000_0004_u32 as i32;
 #[cfg(windows)]
 pub const E_NOINTERFACE: Hresult = 0x8000_4002_u32 as i32;
 
-/// An interface id: LinuxCOM.h's `REFIID` is its 16 bytes in written order; on Windows it is a
-/// `GUID`, whose first three fields are little-endian integers.
+/// An interface id: LinuxCOM.h's `REFIID` and Apple's (a `CFUUIDBytes`) are its 16 bytes in written
+/// order; on Windows it is a `GUID`, whose first three fields are little-endian integers.
 #[cfg(not(windows))]
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -91,8 +102,8 @@ impl Iid {
     }
 }
 
-/// How `QueryInterface` takes an id: by value on Linux (`REFIID` is the struct), by reference on
-/// Windows (`REFIID` is `const IID&`).
+/// How `QueryInterface` takes an id: by value on Linux and macOS (`REFIID` is the struct), by
+/// reference on Windows (`REFIID` is `const IID&`).
 #[cfg(not(windows))]
 pub type IidArg = Iid;
 #[cfg(windows)]
@@ -109,7 +120,7 @@ pub const IID_IBlackmagicRawConfiguration: Iid = Iid::new(0x267E9866_FB40_4BFB_8
 pub const IID_IBlackmagicRawCallback: Iid = Iid::new(0xE9F98FAC_33DB_4A65_BB94_8A82B027AED0);
 pub const IID_IBlackmagicRawClipAudio: Iid = Iid::new(0x76D4ACED_E0D6_45BB_B547_56B7435B2A1D);
 
-/// `BlackmagicRawVariantType`: the SDK's own codes on Linux, `VARTYPE`s on Windows.
+/// `BlackmagicRawVariantType`: the SDK's own codes on Linux and macOS, `VARTYPE`s on Windows.
 #[cfg(not(windows))]
 pub type VariantType = u32;
 #[cfg(windows)]
@@ -143,7 +154,8 @@ pub struct SafeArray {
     _private: [u8; 0],
 }
 
-/// `struct Variant` on Linux: a type tag and an 8-byte union.
+/// `struct Variant` on Linux and macOS: a type tag and an 8-byte union (the union's string member
+/// is a `CFStringRef` on macOS).
 #[cfg(not(windows))]
 #[repr(C)]
 pub struct Variant {
@@ -299,8 +311,8 @@ pub struct CallbackVtbl {
     pub sidecar_metadata_parse_warning: unsafe extern "system" fn(This, *mut c_void, BrawString, u32, BrawString),
     pub sidecar_metadata_parse_error: unsafe extern "system" fn(This, *mut c_void, BrawString, u32, BrawString),
     pub prepare_pipeline_complete: unsafe extern "system" fn(This, *mut c_void, Hresult),
-    /// The protected virtual destructor's complete-object and deleting entries (Linux only; never
-    /// called: the API drops its references with `Release`).
+    /// The protected virtual destructor's complete-object and deleting entries (Linux and macOS;
+    /// never called: the API drops its references with `Release`).
     #[cfg(not(windows))]
     pub destructor: unsafe extern "system" fn(This),
     #[cfg(not(windows))]
@@ -365,9 +377,11 @@ pub struct ClipVtbl {
     pub clone_with_geometry: Slot,
 }
 
-/// `CreateBlackmagicRawFactoryInstance`, exported by `libBlackmagicRawAPI.so` / `BlackmagicRawAPI.dll`.
+/// `CreateBlackmagicRawFactoryInstance`, exported by `libBlackmagicRawAPI.so` and
+/// `BlackmagicRawAPI.framework`.
 pub type CreateFactoryFn = unsafe extern "C" fn() -> *mut Object<FactoryVtbl>;
-/// `VariantClear`, exported by `libBlackmagicRawAPI.so`: frees a string or array a call returned in
-/// a [`Variant`] (Windows uses the system's).
+/// `VariantClear`, exported by the runtime on Linux and macOS (`libBlackmagicRawAPI.so` and
+/// `BlackmagicRawAPI.framework`): frees a string or array a call returned in a [`Variant`]
+/// (Windows uses the system's).
 #[cfg(not(windows))]
 pub type VariantClearFn = unsafe extern "C" fn(*mut Variant) -> Hresult;

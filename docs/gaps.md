@@ -192,7 +192,8 @@ platforms** G4, G9, G17; **performance** G16; **ecosystem** G11; **measurement**
   5.1 core), AVI (#598; listed as an extension but no
   demuxer), WMV / ASF, DV / DVCPRO / DV100, MPEG-4 Part 2, FLAC in MP4 (#603), camera RAW (R3D
   incl. R3D NE, ARRIRAW, Sony RAW / X-OCN, Canon RAW, ProRes RAW; #345, #383; BRAW decodes through
-  Blackmagic's runtime when it is installed, without Raw settings or high bit depth), JPEG 2000 /
+  Blackmagic's runtime when it is installed (Linux, Windows and macOS), without Raw settings or
+  high bit depth), JPEG 2000 /
   JPEG XS MXF, the rest of CinemaDNG (lossy / JPEG XL DNG, MXF-wrapped, opcode lists, Raw
   settings; DNG frames and folders import since #1065); stills: PSD, EXR beyond scan-line RLE / ZIP / PXR24 (PIZ, B44, DWA,
   tiled, multi-part, deep), HEIF / HEIC,

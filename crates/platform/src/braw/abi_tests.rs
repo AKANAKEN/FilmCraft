@@ -1,5 +1,6 @@
 //! Vtable slots and struct layouts of `ffi` against the SDK 6.0 Linux `BlackmagicRawAPI.h` and
-//! Windows `BlackmagicRawAPI.idl` (same interfaces in the same order). Slot numbers are each
+//! `LinuxCOM.h`, the Windows `BlackmagicRawAPI.idl` and the macOS `BlackmagicRawAPI.h` (same
+//! interfaces in the same order). Slot numbers are each
 //! method's position in its interface, after the three `IUnknown` entries (one pointer per virtual
 //! function, in declaration order). Re-check them against the headers when moving to a newer SDK.
 use super::ffi::*;
@@ -64,7 +65,7 @@ fn vtable_slots_match_the_header() {
         clone_with_geometry: 22,
     });
     // the callback vtable FilmCraft builds has every entry the API may call, and no more (Linux's
-    // classes end with a virtual destructor's two entries; Windows' IDL declares none)
+    // and macOS's classes end with a virtual destructor's two entries; Windows' IDL declares none)
     let callback_slots = if cfg!(windows) { 12 } else { 14 };
     assert_eq!(size_of::<CallbackVtbl>(), callback_slots * size_of::<usize>());
 }
@@ -75,7 +76,10 @@ fn layouts_match_the_header() {
     assert_eq!((size_of::<Variant>(), align_of::<Variant>()), (16, 8), "struct Variant");
     assert_eq!(offset_of!(Variant, value), 8, "Variant's union");
     assert_eq!((size_of::<Iid>(), align_of::<Iid>()), (16, 1), "REFIID");
+    #[cfg(target_os = "linux")]
     assert_eq!(size_of::<Ulong>(), 8, "ULONG is unsigned long (LP64)");
+    #[cfg(target_os = "macos")]
+    assert_eq!(size_of::<Ulong>(), 4, "ULONG is UInt32");
     // BlackmagicRawAPI.h: IID_IBlackmagicRaw = { 0xC2,0x5C,0x15,0xE2,0xD1,0xD0,0x47,0x43,... }
     assert_eq!(IID_IBlackmagicRaw.0, [0xC2, 0x5C, 0x15, 0xE2, 0xD1, 0xD0, 0x47, 0x43, 0x9E, 0xA8, 0xF2, 0x1F, 0x69, 0x75, 0x1A, 0xF3]);
     assert_eq!(IID_IUnknown.0, [0, 0, 0, 0, 0, 0, 0, 0, 0xC0, 0, 0, 0, 0, 0, 0, 0x46]);

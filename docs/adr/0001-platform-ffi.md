@@ -162,7 +162,8 @@ error and return 0, and the decoder then fails over to software like any other b
 
 Blackmagic RAW has no public specification, so FilmCraft cannot decode it itself; Blackmagic's
 free SDK is the only decoder. `braw/` opens `.braw` files through that SDK's runtime
-(`libBlackmagicRawAPI.so` on Linux, `BlackmagicRawAPI.dll` on Windows, from Blackmagic RAW 6.0, or
+(`libBlackmagicRawAPI.so` on Linux, `BlackmagicRawAPI.dll` on Windows and
+`BlackmagicRawAPI.framework` on macOS, from Blackmagic RAW 6.0, or
 DaVinci Resolve 21's identical Linux copy) when the user has installed it. This widens the decision
 above from OS media APIs to a vendor's library, as NVENC already did for NVIDIA's driver, and is
 the owner's call (#383). The rules above hold:
@@ -170,7 +171,8 @@ the owner's call (#383). The rules above hold:
 - The runtime is loaded at run time, only when the first `.braw` file opens, and is never bundled.
   Without it a `.braw` file fails to open with a message saying what to install.
 - `braw/ffi.rs` is transcribed from the SDK's headers (Linux `BlackmagicRawAPI.h` and `LinuxCOM.h`,
-  Windows `BlackmagicRawAPI.idl`), which carry the Boost Software License 1.0 (its notice is
+  Windows `BlackmagicRawAPI.idl`, macOS `BlackmagicRawAPI.h` and Apple's `CFPlugInCOM.h`), which
+  carry the Boost Software License 1.0 (its notice is
   kept). `braw/abi_tests.rs` checks every vtable slot FilmCraft uses against the headers'
   declaration order. Only `braw::sdk` carries `#[allow(unsafe_code)]`.
 - The API is COM-style, with vtables that change between SDK versions. 6.0 inserted codec slots
@@ -180,7 +182,9 @@ the owner's call (#383). The rules above hold:
 - The decoder completes jobs on its own threads through a callback object FilmCraft implements.
   The callbacks run under `catch_unwind` and never take FilmCraft's lock. Frame waits time out. A
   clip whose job is still in flight is leaked rather than released under the API.
-- Verified on Linux with the SDK's sample clips and with 6K camera clips. The Windows build was
-  checked with clippy for `x86_64-pc-windows-msvc`. It ran under Wine with Blackmagic's Windows
-  runtime and gave the same results as Linux. It still needs a run on Windows itself.
+- Verified on Linux with the SDK's sample clips and with 6K camera clips. It also ran on Windows 11
+  (in a virtual machine) and on macOS 15.8 (in a virtual machine) with the same clips: all three
+  decode to the same numbers. Each platform's build was checked with clippy for its target
+  (`x86_64-pc-windows-msvc`, `x86_64-apple-darwin`); the Windows runtime also ran under Wine before
+  that.
 

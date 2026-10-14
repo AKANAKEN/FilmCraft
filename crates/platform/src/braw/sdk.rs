@@ -1,5 +1,6 @@
-//! Calls into Blackmagic's `libBlackmagicRawAPI.so`. Every API object stays in this module; the
-//! rest of [`super`] sees safe types.
+//! Calls into Blackmagic's `libBlackmagicRawAPI.so` (Linux), `BlackmagicRawAPI.dll` (Windows) or
+//! `BlackmagicRawAPI.framework` (macOS). Every API object stays in this module; the rest of
+//! [`super`] sees safe types.
 //!
 //! One codec serves every clip in the process (the API decodes the jobs of all its clips first in,
 //! first out). It is made when the first `.braw` file opens and kept, with the library, for the
@@ -8,8 +9,10 @@
 //! take the lock (the API may hold its own while calling back) and never unwind into the API.
 
 use std::ffi::c_void;
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
 use std::ffi::{CStr, CString};
+#[cfg(target_os = "macos")]
+use objc2_core_foundation::{CFBundle, CFRetained, CFString, CFURL, CFURLPathStyle};
 use std::mem::ManuallyDrop;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
@@ -20,12 +23,15 @@ use std::time::{Duration, Instant};
 
 use super::ffi::*;
 
-/// The runtime library's file name.
-#[cfg(not(windows))]
+/// The runtime library's file name: the shared library, or Blackmagic's framework bundle.
+#[cfg(target_os = "linux")]
 pub const LIBRARY: &str = "libBlackmagicRawAPI.so";
 /// The runtime library's file name.
 #[cfg(windows)]
 pub const LIBRARY: &str = "BlackmagicRawAPI.dll";
+/// The runtime library's bundle name.
+#[cfg(target_os = "macos")]
+pub const LIBRARY: &str = "BlackmagicRawAPI.framework";
 /// The Blackmagic RAW SDK whose headers `ffi` transcribes: its runtime (or a later one keeping
 /// these interfaces) is needed.
 pub const SDK_VERSION: &str = "6.0";
@@ -41,17 +47,18 @@ const MAX_AUDIO_FRAMES: u32 = 1 << 20;
 /// Longest a closing clip waits for its jobs before leaking its API objects instead.
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(10);
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
 unsafe extern "C" {
     /// The C library's `free`: on Linux the API returns some strings (time codes) allocated with
     /// `malloc`.
     fn free(p: *mut c_void);
 }
 
-/// A path as the API takes it: UTF-8 on Linux, a `BSTR` on Windows (alive while the call runs).
-#[cfg(not(windows))]
+/// A path as the API takes it: UTF-8 on Linux, a `BSTR` on Windows, a `CFStringRef` on macOS (alive
+/// while the call runs).
+#[cfg(target_os = "linux")]
 struct ApiPath(CString);
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
 impl ApiPath {
     fn new(path: &Path) -> Result<Self, String> {
         use std::os::unix::ffi::OsStrExt;
@@ -59,6 +66,18 @@ impl ApiPath {
     }
     fn as_ptr(&self) -> BrawString {
         self.0.as_ptr()
+    }
+}
+#[cfg(target_os = "macos")]
+struct ApiPath(CFRetained<CFString>);
+#[cfg(target_os = "macos")]
+impl ApiPath {
+    fn new(path: &Path) -> Result<Self, String> {
+        let text = path.to_str().ok_or("the path is not valid UTF-8")?;
+        Ok(Self(CFString::from_str(text)))
+    }
+    fn as_ptr(&self) -> BrawString {
+        CFRetained::as_ptr(&self.0).as_ptr().cast()
     }
 }
 #[cfg(windows)]
@@ -78,8 +97,9 @@ impl ApiPath {
     }
 }
 
-/// Read, then free, a string the API handed over to the caller: a time code (allocated with
-/// `malloc` on Linux, as the SDK's samples free it), or on Windows any `[out] BSTR`.
+/// Read, then free, a string the API handed over to the caller: a time code on Linux (allocated
+/// with `malloc`, as the SDK's samples free it) or on macOS (a `CFStringRef` the caller releases,
+/// as the SDK's samples do), or on Windows any `[out] BSTR`.
 ///
 /// # Safety
 /// `s` is null or such a string.
@@ -87,7 +107,7 @@ unsafe fn take_string(s: BrawString) -> Option<String> {
     if s.is_null() {
         return None;
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
     {
         // SAFETY: a NUL-terminated string the caller owns (the function's contract).
         let text = unsafe { CStr::from_ptr(s) }.to_string_lossy().into_owned();
@@ -100,15 +120,25 @@ unsafe fn take_string(s: BrawString) -> Option<String> {
         // SAFETY: a BSTR the caller owns (the function's contract); dropping it frees it.
         Some(unsafe { windows::core::BSTR::from_raw(s) }.to_string())
     }
+    #[cfg(target_os = "macos")]
+    {
+        // `s` was non-null (checked above) and is a CFString the caller owns (the function's
+        // contract).
+        let s = NonNull::new(s.cast_mut().cast::<CFString>())?;
+        // SAFETY: as above; dropping the retained reference releases it.
+        let s = unsafe { CFRetained::from_raw(s) };
+        Some(s.to_string())
+    }
 }
 
-/// Read a string the API keeps on Linux (the version: it is copied, never freed); on Windows every
+/// Read a string the API keeps on Linux, and the version on macOS (it is read without releasing it:
+/// a kept string must not be freed, and a returned one leaks one string instead); on Windows every
 /// `[out] BSTR` is the caller's to free.
 ///
 /// # Safety
 /// `s` is null or a string a call just returned.
 unsafe fn read_kept_string(s: BrawString) -> Option<String> {
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
     {
         // SAFETY: a non-null string from the API is NUL-terminated.
         (!s.is_null()).then(|| unsafe { CStr::from_ptr(s) }.to_string_lossy().into_owned())
@@ -118,9 +148,14 @@ unsafe fn read_kept_string(s: BrawString) -> Option<String> {
         // SAFETY: the function's contract.
         unsafe { take_string(s) }
     }
+    #[cfg(target_os = "macos")]
+    {
+        // SAFETY: `s` is null or a live CFString the API keeps; reading it takes no reference.
+        NonNull::new(s.cast_mut().cast::<CFString>()).map(|s| unsafe { &*s.as_ptr() }.to_string())
+    }
 }
 
-/// How an id is passed to `QueryInterface` (by value on Linux, by reference on Windows).
+/// How an id is passed to `QueryInterface` (by value on Linux and macOS, by reference on Windows).
 #[cfg(not(windows))]
 fn iid_arg(iid: &Iid) -> IidArg {
     *iid
@@ -215,7 +250,7 @@ impl<V: Vtable> Drop for ComPtr<V> {
 
 /// The loaded runtime and its process-wide codec.
 pub struct Sdk {
-    _library: libloading::Library,
+    _runtime: Runtime,
     #[cfg(not(windows))]
     variant_clear: VariantClearFn,
     codec: ComPtr<CodecVtbl>,
@@ -238,7 +273,91 @@ pub fn sdk(dirs: impl FnOnce() -> Vec<PathBuf>) -> Result<&'static Sdk, String> 
     SDK.get_or_init(|| Sdk::load(&dirs())).as_ref().map_err(Clone::clone)
 }
 
-#[cfg(not(windows))]
+/// The loaded runtime: the shared library on Linux and Windows, Blackmagic's framework on macOS.
+/// It stays loaded for the life of the process (the [`Sdk`] holds it).
+#[cfg(not(target_os = "macos"))]
+struct Runtime(libloading::Library);
+/// The loaded runtime: the shared library on Linux and Windows, Blackmagic's framework on macOS.
+/// It stays loaded for the life of the process (the [`Sdk`] holds it).
+#[cfg(target_os = "macos")]
+struct Runtime(CFRetained<CFBundle>);
+
+#[cfg(not(target_os = "macos"))]
+impl Runtime {
+    /// Where the runtime sits inside a folder that has it.
+    fn path_in(dir: &Path) -> PathBuf {
+        dir.join(LIBRARY)
+    }
+    /// Whether `path` is the runtime's file.
+    fn present(path: &Path) -> bool {
+        path.is_file()
+    }
+    fn open(path: &Path) -> Result<Self, String> {
+        open_library(path).map(Self)
+    }
+    /// The runtime's `CreateBlackmagicRawFactoryInstance`.
+    fn create_factory(&self) -> Result<CreateFactoryFn, String> {
+        // SAFETY: the symbol has this C signature in `BlackmagicRawAPI.h`; the copy stays valid
+        // while the runtime is loaded, which is for the life of the process.
+        unsafe { self.0.get(b"CreateBlackmagicRawFactoryInstance\0").map(|f| *f).map_err(|e| e.to_string()) }
+    }
+    /// The runtime's `VariantClear` (Windows uses the system's).
+    #[cfg(not(windows))]
+    fn variant_clear(&self) -> Result<VariantClearFn, String> {
+        // SAFETY: as above.
+        unsafe { self.0.get(b"VariantClear\0").map(|f| *f).map_err(|e| e.to_string()) }
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Runtime {
+    /// Where the runtime sits inside a folder that has it: the folder may be the framework itself or
+    /// hold it (the SDK's own loader takes the folder holding it).
+    fn path_in(dir: &Path) -> PathBuf {
+        if dir.extension().is_some_and(|e| e == "framework") { dir.to_path_buf() } else { dir.join(LIBRARY) }
+    }
+    /// Whether `path` is the framework bundle.
+    fn present(path: &Path) -> bool {
+        path.is_dir()
+    }
+    fn open(path: &Path) -> Result<Self, String> {
+        let text = path.to_str().ok_or("the path is not valid UTF-8")?;
+        let url = CFURL::with_file_system_path(None, Some(&CFString::from_str(text)), CFURLPathStyle::CFURLPOSIXPathStyle, true)
+            .ok_or("the path is not a folder")?;
+        CFBundle::new(None, Some(&url)).map(Self).ok_or_else(|| "not a loadable framework".into())
+    }
+    /// A function the framework exports.
+    fn symbol(&self, name: &str) -> Option<*mut c_void> {
+        let name = CFString::from_str(name);
+        NonNull::new(self.0.function_pointer_for_name(Some(&name))).map(NonNull::as_ptr)
+    }
+    /// The framework's `CreateBlackmagicRawFactoryInstance`.
+    fn create_factory(&self) -> Result<CreateFactoryFn, String> {
+        // SAFETY: the function has this C signature in `BlackmagicRawAPI.h`; the bundle stays loaded
+        // (and held) for the life of the process.
+        self.symbol("CreateBlackmagicRawFactoryInstance").map(|f| unsafe { std::mem::transmute(f) }).ok_or_else(|| "it exports no factory".into())
+    }
+    /// The framework's `VariantClear`.
+    fn variant_clear(&self) -> Result<VariantClearFn, String> {
+        // SAFETY: as above.
+        self.symbol("VariantClear").map(|f| unsafe { std::mem::transmute(f) }).ok_or_else(|| "it exports no VariantClear".into())
+    }
+}
+
+/// Where the runtime is called from by name when no folder holds it: the system's own search (its
+/// installer puts it on the library path). macOS only ever finds it by path.
+fn system_runtime() -> Option<PathBuf> {
+    #[cfg(not(target_os = "macos"))]
+    {
+        Some(PathBuf::from(LIBRARY))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        None
+    }
+}
+
+#[cfg(target_os = "linux")]
 fn open_library(path: &Path) -> Result<libloading::Library, String> {
     use libloading::os::unix::{Library, RTLD_GLOBAL, RTLD_NOW};
     // SAFETY: loading Blackmagic's runtime runs its initialisers, which only set up the library.
@@ -259,11 +378,11 @@ impl Sdk {
         let mut tried = Vec::new();
         let mut found = None;
         for dir in dirs {
-            let path = dir.join(LIBRARY);
-            if !path.is_file() {
+            let path = Runtime::path_in(dir);
+            if !Runtime::present(&path) {
                 continue;
             }
-            match open_library(&path) {
+            match Runtime::open(&path) {
                 Ok(l) => {
                     found = Some((l, path));
                     break;
@@ -271,20 +390,21 @@ impl Sdk {
                 Err(e) => tried.push(format!("{}: {e}", path.display())),
             }
         }
-        let (library, path) = match found {
+        let (runtime, path) = match found {
             Some(f) => f,
-            None => match open_library(Path::new(LIBRARY)) {
-                Ok(l) => (l, PathBuf::from(LIBRARY)),
-                Err(e) if tried.is_empty() => return Err(format!("the Blackmagic RAW runtime ({LIBRARY}) is not installed ({e})")),
-                Err(_) => return Err(format!("the Blackmagic RAW runtime could not be loaded: {}", tried.join("; "))),
+            None => match system_runtime() {
+                Some(name) => match Runtime::open(&name) {
+                    Ok(runtime) => (runtime, name),
+                    Err(e) if tried.is_empty() => return Err(format!("the Blackmagic RAW runtime ({LIBRARY}) is not installed ({e})")),
+                    Err(_) => return Err(format!("the Blackmagic RAW runtime could not be loaded: {}", tried.join("; "))),
+                },
+                None if tried.is_empty() => return Err(format!("the Blackmagic RAW runtime ({LIBRARY}) is not installed")),
+                None => return Err(format!("the Blackmagic RAW runtime could not be loaded: {}", tried.join("; "))),
             },
         };
-        // SAFETY: the symbols have these C signatures in BlackmagicRawAPI.h; the copies stay valid
-        // while `library` is loaded, which is for the life of the process (SDK is static).
-        let create_factory: CreateFactoryFn = unsafe { *library.get(b"CreateBlackmagicRawFactoryInstance\0").map_err(|e| e.to_string())? };
+        let create_factory = runtime.create_factory()?;
         #[cfg(not(windows))]
-        // SAFETY: as above.
-        let variant_clear: VariantClearFn = unsafe { *library.get(b"VariantClear\0").map_err(|e| e.to_string())? };
+        let variant_clear = runtime.variant_clear()?;
         // SAFETY: returns a new factory with one reference for us, or null.
         let factory = unsafe { ComPtr::from_raw(create_factory()) }.ok_or("the Blackmagic RAW runtime made no factory")?;
         // Interfaces are only used once the runtime confirms their ids: a runtime built from other
@@ -322,7 +442,7 @@ impl Sdk {
         check(unsafe { (codec.vtbl().set_callback)(codec.this(), ptr::addr_of!(CALLBACK.0).cast_mut()) }, "SetCallback")?;
         log::info!("Blackmagic RAW runtime {} loaded from {}", version.as_deref().unwrap_or("(unknown version)"), path.display());
         Ok(Self {
-            _library: library,
+            _runtime: runtime,
             #[cfg(not(windows))]
             variant_clear,
             codec,

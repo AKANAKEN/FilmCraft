@@ -1,9 +1,10 @@
-//! Blackmagic RAW (`.braw`) through Blackmagic's own decoder (Linux and Windows).
+//! Blackmagic RAW (`.braw`) through Blackmagic's own decoder (Linux, Windows and macOS).
 //!
 //! Blackmagic RAW has no public specification: the only decoder is Blackmagic's, in its free
 //! Blackmagic RAW SDK. FilmCraft does not include it. When its runtime library
-//! (`libBlackmagicRawAPI.so` / `BlackmagicRawAPI.dll`, from Blackmagic RAW 6.0, or DaVinci Resolve
-//! 21's copy on Linux) is installed where FilmCraft looks for it ([`RUNTIME_ENV`], next to FilmCraft,
+//! (`libBlackmagicRawAPI.so`, `BlackmagicRawAPI.dll` or Blackmagic's `BlackmagicRawAPI.framework`,
+//! from Blackmagic RAW 6.0, or DaVinci Resolve 21's copy on Linux) is installed where FilmCraft
+//! looks for it ([`RUNTIME_ENV`], next to FilmCraft,
 //! where Blackmagic's installers put it, or the system's library search), [`open_path`]
 //! opens `.braw` files through it as movies: frames decoded and
 //! processed by Blackmagic's decoder with the clip's own settings (as recorded, or as its sidecar
@@ -68,6 +69,24 @@ fn install_dirs() -> Vec<PathBuf> {
     dirs
 }
 
+/// Where Blackmagic RAW's macOS installer puts the runtime: the framework inside its applications
+/// (the Player and Speed Test), Adobe's plug-ins, the SDK's own folder, and DaVinci Resolve's app.
+#[cfg(target_os = "macos")]
+fn install_dirs() -> Vec<PathBuf> {
+    [
+        "/Library/Frameworks",
+        "/Applications/Blackmagic RAW/Blackmagic RAW SDK/Mac/Libraries",
+        "/Applications/Blackmagic RAW/Blackmagic RAW Player.app/Contents/Frameworks",
+        "/Applications/Blackmagic RAW/Blackmagic RAW Speed Test.app/Contents/Frameworks",
+        "/Library/Application Support/Adobe/Common/Plug-ins/7.0/MediaCore/BlackmagicRawPremiereImporter.bundle/Contents/Frameworks",
+        "/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/Frameworks",
+        "/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/Libraries",
+    ]
+    .into_iter()
+    .map(PathBuf::from)
+    .collect()
+}
+
 /// Largest picture side a clip may report.
 const MAX_SIDE: u32 = 32_768;
 /// Most audio samples (all channels) read for one request.
@@ -80,9 +99,10 @@ const AUDIO_CHUNK: u64 = 1 << 18;
 const OUTPUT_COLOR: ColorInfo = ColorInfo { matrix: Matrix::Bt709, transfer: Transfer::Bt709, primaries: Primaries::Bt709, range: Range::Full };
 
 /// Where the runtime is looked for, in order: [`RUNTIME_ENV`], a `BlackmagicRawAPI` folder next to
-/// FilmCraft's executable and the executable's own folder (the SDK's convention for applications
-/// that ship it), then where Blackmagic's installers (and on Linux DaVinci Resolve) put it; after
-/// them the system's library search.
+/// FilmCraft's executable (on macOS then the `Frameworks` folder beside it) and the executable's own
+/// folder (the SDK's convention for applications that ship it), then where Blackmagic's
+/// installers (and on Linux DaVinci Resolve; on macOS also DaVinci Resolve's app) put it; after
+/// them the system's library search (not on macOS, where the framework is only found by path).
 fn runtime_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Some(dir) = std::env::var_os(RUNTIME_ENV).filter(|d| !d.is_empty()) {
@@ -90,6 +110,10 @@ fn runtime_dirs() -> Vec<PathBuf> {
     }
     if let Some(exe_dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf)) {
         dirs.push(exe_dir.join("BlackmagicRawAPI"));
+        // A macOS .app keeps private frameworks in Contents/Frameworks, as the SDK's own loader
+        // looks for them.
+        #[cfg(target_os = "macos")]
+        dirs.push(exe_dir.join("..").join("Frameworks"));
         dirs.push(exe_dir);
     }
     dirs.extend(install_dirs());
