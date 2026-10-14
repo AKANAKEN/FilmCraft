@@ -1488,6 +1488,82 @@ fn build() -> Vec<CommandSpec> {
             has_seq,
             |s, p| crate::aaf_omf::export_omf(s, p)
         ),
+        cmd!(
+            "media.relinkComponents",
+            "Relink Media Components",
+            [],
+            None,
+            r#"{"bindings":[{"item":id,"component":{"kind":"audio","channel":uint}|{"kind":"picture"},"path":str}]}"#,
+            always,
+            crate::component_relink::relink
+        ),
+        query!(
+            "media.searchComponents",
+            "Find MXF Components",
+            r#"{"folder":str,"targets":[{item,component}]?,"wait":bool?}"#,
+            crate::component_relink::search
+        ),
+        query!("media.componentSearchResult", "MXF Search Result", r#"{"job":id}"#, crate::component_relink::search_result),
+        cmd!(
+            "media.applyComponentSearch",
+            "Relink Found Components",
+            [],
+            None,
+            r#"{"job":id,"choice":{item,component,path}?,"relinkOthers":bool?}"#,
+            always,
+            crate::component_relink::apply_search
+        ),
+        cmd!("media.relinkPictureComponent", "Relink Picture Component", [], None, r#"{"item":id,"path":str}"#, always, crate::avid_audio::relink_picture),
+        cmd!("media.bindAvidMedia", "Bind Avid Media", [], None, r#"{"items":[id]}"#, always, crate::avid_audio::bind_media),
+        cmd!("media.bindAvidAudio", "Bind Avid Audio", [], None, r#"{"items":[id]}"#, always, crate::avid_audio::bind),
+        cmd!(
+            "media.relinkAudioComponent",
+            "Relink Audio Component",
+            [],
+            None,
+            r#"{"item":id,"channel":uint,"path":str}"#,
+            always,
+            crate::avid_audio::relink_component
+        ),
+        cmd!(
+            "file.prepareAvidBin",
+            "Prepare Avid Bin",
+            [],
+            None,
+            r#"{"path":str,"parent":binId?,"mediaFolders":[str]?,"mediaFolder":str?,"wait":bool?} (imports all; per-item conversion problems are reported)"#,
+            always,
+            crate::avid_bin_import::prepare
+        ),
+        query!("file.avidBinPreparation", "Review Avid Bin", r#"{"job":id}"#, |s, p| crate::avid_bin_import::preview(s, p)),
+        cmd!(
+            "file.importAvidBin",
+            "Import Avid Bin…",
+            ["File"],
+            None,
+            r#"{"job":id} (commit reviewed native bin snapshot)"#,
+            always,
+            crate::avid_bin_import::import
+        ),
+        query!("file.inspectAvidBin", "Inspect Avid Bin", r#"{"path":str}  (native container/membership inspection; does not import)"#, |s, p| {
+            crate::avid_bin::inspect(s, p)
+        }),
+        query!(
+            "file.previewAvidCatalog",
+            "Preview Avid Catalog",
+            r#"{"path":str,"parent":binId?,"mode":"metadata"|"media"|"sequences"?,"missingMedia":"offline"|"error"?}"#,
+            |s, p| { crate::avid_catalog::preview(s, p) }
+        ),
+        cmd!(
+            "file.importAvidCatalog",
+            "Import Avid Catalog",
+            [],
+            None,
+            r#"{"path":str,"parent":binId?,"mode":"metadata"|"media"|"sequences"?,"missingMedia":"offline"|"error"?}"#,
+            always,
+            crate::avid_catalog::import
+        ),
+        query!("file.previewAvidSequences", "Preview Avid Sequences", r#"{"path":str,"bin":binId}"#, |s, p| crate::avid_sequence::preview(s, p)),
+        cmd!("file.importAvidSequences", "Import Avid Sequences", [], None, r#"{"path":str,"bin":binId}"#, always, crate::avid_sequence::import),
         cmd!("file.importAaf", "Import AAF…", [], None, r#"{"path":str}"#, always, |s, p| crate::aaf_omf::import_document(s, p, "file.importAaf")),
         cmd!("file.save", "Save", ["File"], Some("Cmd+S"), r#"{"path":str?}"#, always, |s, p| {
             let path = str_p(p, "path").map(str::to_string).or_else(|| s.path.clone()).ok_or_else(|| bad("file.save", "no path (use Save As)"))?;
@@ -1646,7 +1722,9 @@ fn build() -> Vec<CommandSpec> {
                 let caps = s.state.caption_selection.clone();
                 return crate::captions::delete(s, &caps, false);
             }
-            let sel = with_links(s, &clips_p(s, p));
+            // Selection commands already expand linked partners. Preserve an individual
+            // Alt-selection; explicit command targets retain their linked expansion.
+            let sel = if p.get("clips").is_some() || p.get("clip").is_some() { with_links(s, &clips_p(s, p)) } else { s.state.selection.clone() };
             s.edit_sequence("Clear", |q, _, st| {
                 edit::delete_items(q, &sel);
                 st.selection.clear();
@@ -2586,39 +2664,47 @@ fn build() -> Vec<CommandSpec> {
                 None => place_one(s, p),
             }
         ),
-        cmd!("timeline.select", "Select Clips", [], None, r#"{"clips":[id],"transitions":[id]?,"add":bool,"toggle":bool}"#, has_seq, |s, p| {
-            if let Some(ids) = p.get("transitions") {
-                return select_transitions(s, ids, bool_p(p, "add").unwrap_or(false), bool_p(p, "toggle").unwrap_or(false));
-            }
-            let clips: Vec<ClipId> =
-                p.get("clips").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_u64().map(ClipId)).collect()).unwrap_or_default();
-            let clips = with_links(s, &clips);
-            // selecting clips leaves trim mode (Premiere: clip and edit point selections are exclusive)
-            s.state.edit_points.clear();
-            s.state.trim_shift = Default::default();
-            // and a clip selection replaces a transition or gap one
-            s.state.transition_selection.clear();
-            s.state.gap_selection = None;
-            if bool_p(p, "toggle").unwrap_or(false) {
-                for c in clips {
-                    if let Some(i) = s.state.selection.iter().position(|x| *x == c) {
-                        s.state.selection.remove(i);
-                    } else {
-                        s.state.selection.push(c);
-                    }
+        cmd!(
+            "timeline.select",
+            "Select Clips",
+            [],
+            None,
+            r#"{"clips":[id],"transitions":[id]?,"add":bool,"toggle":bool,"linked":bool=true (false skips linked partners)}"#,
+            has_seq,
+            |s, p| {
+                if let Some(ids) = p.get("transitions") {
+                    return select_transitions(s, ids, bool_p(p, "add").unwrap_or(false), bool_p(p, "toggle").unwrap_or(false));
                 }
-            } else if bool_p(p, "add").unwrap_or(false) {
-                for c in clips {
-                    if !s.state.selection.contains(&c) {
-                        s.state.selection.push(c);
+                let clips: Vec<ClipId> =
+                    p.get("clips").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_u64().map(ClipId)).collect()).unwrap_or_default();
+                let clips = if bool_p(p, "linked") == Some(false) { clips } else { with_links(s, &clips) };
+                // selecting clips leaves trim mode (Premiere: clip and edit point selections are exclusive)
+                s.state.edit_points.clear();
+                s.state.trim_shift = Default::default();
+                // and a clip selection replaces a transition or gap one
+                s.state.transition_selection.clear();
+                s.state.gap_selection = None;
+                if bool_p(p, "toggle").unwrap_or(false) {
+                    for c in clips {
+                        if let Some(i) = s.state.selection.iter().position(|x| *x == c) {
+                            s.state.selection.remove(i);
+                        } else {
+                            s.state.selection.push(c);
+                        }
                     }
+                } else if bool_p(p, "add").unwrap_or(false) {
+                    for c in clips {
+                        if !s.state.selection.contains(&c) {
+                            s.state.selection.push(c);
+                        }
+                    }
+                } else {
+                    s.state.selection = clips;
+                    s.state.caption_selection.clear();
                 }
-            } else {
-                s.state.selection = clips;
-                s.state.caption_selection.clear();
+                Ok(json!({"selection": s.state.selection.iter().map(|c| c.0).collect::<Vec<_>>()}))
             }
-            Ok(json!({"selection": s.state.selection.iter().map(|c| c.0).collect::<Vec<_>>()}))
-        }),
+        ),
         cmd!("timeline.selectGap", "Select Gap", [], None, r#"{"track":"V1"|id,"time":ticks|"frame":n|"seconds":f}"#, has_seq, select_gap),
         cmd!(
             "timeline.move",
