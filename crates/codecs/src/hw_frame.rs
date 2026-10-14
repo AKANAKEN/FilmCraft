@@ -289,10 +289,8 @@ impl FrameStreamInfo {
                         }
                         // if we don't have a stored config but the sample has a header, treat as change
                         (None, Some(_)) => true,
-                        (Some(_), None) => {
-                            // av1C present but sample lacks a header: no change
-                            false
-                        }
+                        // malformed in-band sequence header: treat as a change
+                        (Some(_), None) => true,
                         _ => false,
                     }
                 })
