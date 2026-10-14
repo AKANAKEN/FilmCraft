@@ -77,7 +77,11 @@ impl UpdateState {
             let spawned = std::thread::Builder::new().name("self-update".into()).spawn(move || {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-                    match updater.check(Some((&check_state, now, std::time::Duration::from_secs(24 * 60 * 60)))) {
+                    // This is an explicit request from Help ▸ Check for Updates.  It must always
+                    // make a fresh request; the daily cadence applies only to a future automatic
+                    // background check.  Keep recording the result so that background check can
+                    // still use the same state file.
+                    match updater.check(Some((&check_state, now, std::time::Duration::ZERO))) {
                         Ok(filmcraft_updater::Availability::Available(release)) => {
                             let _ = tx.send(Event::Staging);
                             updater
@@ -126,7 +130,14 @@ impl UpdateState {
                             changed = true;
                             self.phase = match event {
                                 Event::Staging => Phase::Staging,
-                                Event::Ready { version, staged } => Phase::Ready { version, staged },
+                                Event::Ready { version, staged } => {
+                                    // `Ready` is terminal.  Without clearing `keep`, a worker that
+                                    // finishes staging between UI frames closes the channel here
+                                    // and incorrectly replaces this result with a worker-stopped
+                                    // error below.
+                                    keep = false;
+                                    Phase::Ready { version, staged }
+                                }
                                 Event::UpToDate => {
                                     keep = false;
                                     Phase::UpToDate
@@ -191,5 +202,23 @@ impl UpdateState {
             .spawn()
             .map(|_| ())
             .map_err(|e| format!("could not start the update helper: {e}"))
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ready_result_survives_worker_disconnect() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let staged = PathBuf::from("/tmp/filmcraft-update-test");
+        tx.send(Event::Ready { version: "1.2.3".into(), staged: staged.clone() }).unwrap();
+        drop(tx);
+
+        let mut updates = UpdateState { phase: Phase::Checking, updater: None, check_state: None, receiver: Some(rx) };
+        assert!(updates.poll());
+        assert_eq!(updates.phase, Phase::Ready { version: "1.2.3".into(), staged });
+        assert!(updates.receiver.is_none());
     }
 }
