@@ -46,7 +46,8 @@ impl Numbered {
         }
         let stem = &name[..ext_at];
         let end = stem.rfind(|c: char| c.is_ascii_digit())? + 1;
-        let start = stem[..end].rfind(|c: char| !c.is_ascii_digit()).map_or(0, |i| i + 1);
+        // the digits start after the previous character, whatever its width (`é0001.png`, #1565)
+        let start = stem[..end].rfind(|c: char| !c.is_ascii_digit()).map_or(0, |i| i + stem[i..].chars().next().map_or(1, char::len_utf8));
         let digits = &stem[start..end];
         if digits.len() > 18 {
             return None;
@@ -269,6 +270,29 @@ mod tests {
         assert_eq!(Numbered::parse("nodigits.png"), None);
         let w = Numbered::parse("C:\\renders\\out.0010.exr.png").unwrap();
         assert_eq!((w.dir.as_str(), w.prefix.as_str(), w.number), ("C:\\renders\\", "out.", 10));
+    }
+
+    /// #1565: a multi-byte character right before the frame number panicked the parser ("byte
+    /// index 1 is not a char boundary"), so `é0001.png` could not be imported as a sequence.
+    #[test]
+    fn unicode_prefix_before_the_number() {
+        for (name, prefix, number, digits) in [
+            ("é0001.png", "é", 1, 4),
+            ("/d/日本語0012.png", "日本語", 12, 4),
+            ("🎬7.tif", "🎬", 7, 1),
+            ("e\u{301}0003.png", "e\u{301}", 3, 4), // decomposed é
+            ("ü_01_é02.png", "ü_01_é", 2, 2),
+        ] {
+            let n = Numbered::parse(name).unwrap_or_else(|| panic!("{name}"));
+            assert_eq!((n.prefix.as_str(), n.number, n.digits, n.suffix.as_str()), (prefix, number, digits, &name[name.rfind('.').unwrap()..]), "{name}");
+            let file = name.rsplit('/').next().unwrap();
+            assert_eq!(n.number_of(file), Some(number), "{name} names itself");
+            assert_eq!(n.number_of(&n.file_name(number + 1)), Some(number + 1), "{name} sibling");
+        }
+        assert_eq!(Numbered::parse("日本語.png"), None, "no digits");
+        let n = Numbered::parse("é0001.png").unwrap();
+        assert_eq!(n.number_of("é0002.png"), Some(2));
+        assert_eq!(n.number_of("e0002.png"), None, "different prefix");
     }
 
     #[test]
