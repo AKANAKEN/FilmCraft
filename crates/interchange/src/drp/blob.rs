@@ -593,6 +593,9 @@ mod tests {
         assert_eq!(clip_path(&build::clip("/Volumes/Data/USA Files/", "P1.MP4")).as_deref(), Some("/Volumes/Data/USA Files/P1.MP4"));
         assert_eq!(clip_path(&build::clip("C:\\Media", "a.mov")).as_deref(), Some("C:\\Media\\a.mov"));
         assert_eq!(clip_path(&build::clip("relative", "a.mov")), None);
+        // Unicode paths (the crate README's invariant): split only at char boundaries
+        assert_eq!(clip_path(&build::clip("/Médias/Nürburgring 24h", "Ätna 🏁.mov")).as_deref(), Some("/Médias/Nürburgring 24h/Ätna 🏁.mov"));
+        assert_eq!(clip_path(&build::clip("Ü:/x", "a.mov")), None);
         let t = title_text(&build::title(&["USA ", "2025"], "Bebas Neue", "Regular", "#00ffff")).unwrap();
         assert_eq!(t.text, "USA 2025");
         assert_eq!(t.font.as_deref(), Some("Bebas Neue"));
