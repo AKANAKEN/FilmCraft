@@ -2074,6 +2074,7 @@ name = "filmcraft-hevcenc"
 version = "0.7.2"
 dependencies = [
  "filmcraft-bitstream",
+ "filmcraft-hevc",
  "filmcraft-testkit",
  "rayon",
  "thiserror 2.0.21",
