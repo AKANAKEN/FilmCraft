@@ -503,7 +503,12 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 app.auto.add("timeline.gap", gap.intersect(content), "Selected gap");
             }
         }
-        for it in &tr.items {
+        // Scrolling the zoom bar repaints for every pointer update. Tracks can contain thousands
+        // of clips, but their items are sorted and non-overlapping, so do not walk the whole track
+        // on every scroll frame merely to reject the off-screen items below. A live edit preview
+        // can move clips out of that order and therefore keeps the existing full scan.
+        let items = if previews.is_empty() { visible_track_items(&tr.items, visible) } else { &tr.items };
+        for it in items {
             let it = edited.get(&it.id).unwrap_or(it);
             let (start, dur, moved_track) = previews.get(&it.id).copied().unwrap_or((it.start, it.duration, None));
             if moved_track.is_some_and(|m| m != r.track) {
@@ -719,6 +724,13 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         super::timeline_captions::interact(app, ui, seq, caption_area, &layout);
     }
     let _ = (visible, TICKS_PER_SECOND);
+}
+
+/// The sorted, non-overlapping track items which touch the visible time range.
+fn visible_track_items(items: &[TrackItem], visible: (Tick, Tick)) -> &[TrackItem] {
+    let first = items.partition_point(|item| item.end() < visible.0);
+    let count = items[first..].partition_point(|item| item.start <= visible.1);
+    &items[first..first + count]
 }
 
 fn empty_state(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
