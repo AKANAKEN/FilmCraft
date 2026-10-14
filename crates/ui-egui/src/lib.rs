@@ -1292,6 +1292,16 @@ impl FilmcraftApp {
                     r
                 })
             }
+            "file.importFolder" => {
+                let bin = params.get("bin").cloned();
+                self.pick(FileDialog::Folder { at: None }, move |app, paths| {
+                    if paths.is_empty() {
+                        return Ok(Value::Null);
+                    }
+                    let bin = bin.unwrap_or_else(|| json!(app.import_bin().0));
+                    app.session.execute("file.importFolder", json!({"paths": paths, "bin": bin})).map_err(|e| e.to_string())
+                })
+            }
             // File ▸ Import with Image Sequence: choose the first numbered still
             "file.importImageSequence" => self.pick(FileDialog::open_files(filmcraft_media::STILL_EXTENSIONS), |app, paths| {
                 let Some(path) = paths.into_iter().next() else { return Ok(Value::Null) };
@@ -1398,7 +1408,7 @@ impl FilmcraftApp {
         }
         if !paths.is_empty() {
             let pointer = self.drop_pointer(ctx);
-            let imported = self.session.execute("file.import", json!({"paths": paths, "bin": self.import_bin().0}));
+            let imported = self.session.execute("file.importFolder", json!({"paths": paths, "bin": self.import_bin().0}));
             if let Ok(v) = imported
                 && let Some(pos) = pointer
                 && self.session.prefs.timeline.drop_import_to_timeline

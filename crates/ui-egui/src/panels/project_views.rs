@@ -662,6 +662,7 @@ fn background_menu(app: &mut FilmcraftApp, ui: &mut egui::Ui, v: &View, bin: Opt
         (tl!("Find…"), "edit.find"),
         (tl!("Automate to Sequence…"), "clip.automateToSequence"),
         (tl!("Import…"), "file.import"),
+        (tl!("Import Folder…"), "file.importFolder"),
     ] {
         if ui.button(label).clicked() {
             let p = if cmd == "file.newBin" { json!({"parent": bin, "panel": v.prefix}) } else { json!({}) };
