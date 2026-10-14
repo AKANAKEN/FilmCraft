@@ -5,11 +5,11 @@
 
 use std::sync::Arc;
 
-use craft_ui::theme::SuiteDarkPalette;
+use craft_ui::theme::SuitePalette;
 use egui::{Color32, FontData, FontDefinitions, FontFamily, FontId, Stroke, TextStyle, Visuals};
 use serde::{Deserialize, Serialize};
 
-const SUITE_DARK: SuiteDarkPalette = SuiteDarkPalette::ARTCRAFT;
+const SUITE_DARK: SuitePalette = SuitePalette::ARTCRAFT_DARK;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ThemeKind {
@@ -568,7 +568,7 @@ mod tests {
 
     #[test]
     fn standard_dark_adapts_shared_suite_roles() {
-        let suite = SuiteDarkPalette::ARTCRAFT;
+        let suite = SuitePalette::ARTCRAFT_DARK;
         let t = Tokens::for_kind(ThemeKind::Medium);
         for (role, actual, expected) in [
             ("window", t.app_bg, suite.window),
