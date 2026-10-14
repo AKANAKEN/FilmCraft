@@ -2348,8 +2348,19 @@ fn interact(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence, layout: &
         }
     }
 
+    // Middle-button panning starts on the press frame. Waiting for egui's drag threshold left the
+    // view still for the first few pointer updates, then applied their accumulated delta at once:
+    // the hitch visible at the start of a pan.
+    if !app.tl.cancelled
+        && app.tl.drag.is_none()
+        && ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Middle))
+        && let Some(p) = ctx.input(|i| i.pointer.press_origin()).filter(|p| area.contains(*p))
+    {
+        app.tl.drag = Some(Drag::Pan { last: p, start_scroll: app.ui.timeline.target_scroll, start_v: app.ui.timeline.v_scroll });
+    }
+
     // ---- press: act on what was under the pointer when the button went down (#259)
-    if !app.tl.cancelled && (resp.drag_started() || (resp.clicked() && app.tl.drag.is_none())) {
+    if !app.tl.cancelled && ((resp.drag_started() && app.tl.drag.is_none()) || (resp.clicked() && app.tl.drag.is_none())) {
         let pressed = match app.tl.pressed.take() {
             Some(pr) => pr,
             // a press and release in the same frame is never stored: it happened where egui says
@@ -2564,9 +2575,10 @@ fn interact(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence, layout: &
     }
 
     // ---- drag
+    let immediate_middle_pan = matches!(app.tl.drag, Some(Drag::Pan { .. })) && ctx.input(|i| i.pointer.button_down(egui::PointerButton::Middle));
     if !app.tl.cancelled
-        && resp.dragged()
-        && let Some(p) = resp.interact_pointer_pos()
+        && (resp.dragged() || immediate_middle_pan)
+        && let Some(p) = ctx.input(|i| i.pointer.interact_pos())
         && let Some(d) = app.tl.drag.clone()
     {
         let t_here = layout.tick_at(p.x);
@@ -2694,7 +2706,7 @@ fn interact(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence, layout: &
     }
 
     // ---- release: commit exactly one command
-    if resp.drag_stopped() {
+    if resp.drag_stopped() || (matches!(app.tl.drag, Some(Drag::Pan { .. })) && ctx.input(|i| i.pointer.button_released(egui::PointerButton::Middle))) {
         // a drag Escape cancelled (#580) commits nothing
         let cancelled = std::mem::take(&mut app.tl.cancelled);
         if !cancelled && let Some(d) = app.tl.drag.take() {
