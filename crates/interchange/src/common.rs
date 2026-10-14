@@ -65,7 +65,11 @@ pub fn file_url_to_path(url: &str) -> String {
         return url.to_string();
     }
     let rest = &url[7..];
-    let rest = if rest.len() >= 9 && rest[..9].eq_ignore_ascii_case("localhost") { &rest[9..] } else { rest };
+    // `get`, not a byte slice: byte 9 of `file://日本語.mov` falls inside a character (#1591)
+    let rest = match rest.get(..9) {
+        Some(host) if host.eq_ignore_ascii_case("localhost") => &rest[9..],
+        _ => rest,
+    };
     let decoded = percent_decode(rest);
     // file:///C:/x -> C:/x
     if decoded.len() >= 3 && decoded.starts_with('/') && is_windows_abs(&decoded[1..]) {
@@ -690,6 +694,20 @@ mod tests {
             assert_eq!(file_url_to_path(&path_to_file_url(p, true)), p);
             assert_eq!(file_url_to_path(&path_to_file_url(p, false)), p);
         }
+    }
+
+    /// #1591: a multi-byte character within the first nine bytes after `file://` panicked the
+    /// `localhost` probe ("byte index 9 is not a char boundary"); an EDL naming `file:///日本語.mov`
+    /// could not be imported at all.
+    #[test]
+    fn unicode_urls_do_not_panic() {
+        assert_eq!(file_url_to_path("file:///日本語.mov"), "/日本語.mov");
+        assert_eq!(file_url_to_path("file://srv/日本語.mov"), "//srv/日本語.mov");
+        assert_eq!(file_url_to_path("file://éé/x.mov"), "//éé/x.mov");
+        assert_eq!(file_url_to_path("file://localhost/日本語.mov"), "/日本語.mov");
+        assert_eq!(file_url_to_path("file://LOCALHOST/é.mov"), "/é.mov");
+        assert_eq!(file_url_to_path("file://ü"), "//ü", "shorter than the host probe");
+        assert_eq!(file_url_to_path("file://"), "//", "nothing after the scheme");
     }
 
     #[test]
