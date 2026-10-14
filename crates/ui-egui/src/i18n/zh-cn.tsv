@@ -2900,6 +2900,8 @@
 	Quality	质量
 	Render at Maximum Depth	以最大深度渲染
 	Use Maximum Render Quality	使用最大渲染质量
+	CPU Threads	CPU 线程
+	All cores	所有核心
 	Export Audio	导出音频
 	Audio Format	音频格式
 	Uncompressed (PCM)	未压缩（PCM）
