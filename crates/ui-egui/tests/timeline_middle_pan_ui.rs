@@ -132,6 +132,20 @@ fn a_middle_button_drag_on_a_clip_pans_and_leaves_the_clip_alone() {
 }
 
 #[test]
+fn a_middle_pan_moves_before_eguis_drag_threshold() {
+    let mut d = Driver::demo();
+    let (_, _, r) = d.setup();
+    let from = r.center();
+    d.send(egui::Event::PointerMoved(from));
+    d.middle(from, true);
+    d.send(egui::Event::PointerMoved(from - egui::vec2(3.0, 0.0))); // below egui's usual 6-point threshold
+    let scroll = d.app().ui.timeline.target_scroll;
+    assert!((scroll - 4.06).abs() < 1e-6, "the first 3 points should pan immediately: {scroll}");
+    d.middle(from - egui::vec2(3.0, 0.0), false);
+    assert!(d.app().tl.drag.is_none(), "releasing a sub-threshold pan ends the gesture");
+}
+
+#[test]
 fn a_middle_button_drag_pans_whatever_the_tool() {
     let mut d = Driver::demo();
     d.ok("ui.set", json!({"tool": "Razor"}));
