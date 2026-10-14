@@ -551,3 +551,21 @@ fn cpu_threads_can_be_capped_from_the_dialog() {
     assert_eq!(elem(&mut d, "export.video.maxThreads")["label"], json!(cores.to_string()), "a cap above the core count shows the core count");
     d.snapshot("export-cpu-threads");
 }
+
+/// #1216: Settings ▸ Playback ▸ Export CPU Threads is the app-wide default for Export mode.
+#[test]
+fn the_export_thread_default_seeds_export_mode() {
+    let mut d = Driver::new("export-threads-default");
+    d.ok("ui.set", json!({"mode": "export"}));
+    d.frames(4);
+    assert_eq!(d.app().ui.export.settings.max_threads, 0, "all cores by default");
+    // the app-wide default seeds Export mode while it has not set its own cap
+    d.app().session.prefs.playback.export_threads = 2;
+    d.frames(4);
+    assert_eq!(d.app().ui.export.settings.max_threads, 2);
+    // a value picked in Export mode is left alone when the default changes
+    d.app().ui.export.settings.max_threads = 5;
+    d.app().session.prefs.playback.export_threads = 3;
+    d.frames(4);
+    assert_eq!(d.app().ui.export.settings.max_threads, 5, "an export's own cap wins");
+}

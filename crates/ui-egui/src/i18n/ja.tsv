@@ -2161,6 +2161,7 @@
 	Path	パス
 	Path Points	パスのポイント
 	Pause Media Encoder queue during playback	再生中は Media Encoder のキューを一時停止する
+	Export CPU Threads	書き出しの CPU スレッド数
 	Peak Frequency	ピーク周波数
 	Peak Gain	ピークゲイン
 	Pedestal	ペデスタル

@@ -2174,6 +2174,7 @@
 	Path	Trazado
 	Path Points	Puntos del trazado
 	Pause Media Encoder queue during playback	Pausar la cola de codificación durante la reproducción
+	Export CPU Threads	Subprocesos de CPU para la exportación
 	Peak Frequency	Frecuencia de pico
 	Peak Gain	Ganancia de pico
 	Pedestal	Pedestal

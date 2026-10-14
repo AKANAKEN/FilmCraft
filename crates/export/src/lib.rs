@@ -326,10 +326,10 @@ pub struct ExportSettings {
     #[serde(default)]
     pub part_of_batch: bool,
     /// Most CPU threads the export may use (0 = all of them, as before). Rendering, the software
-    /// encoders and the rest of the export's parallel work run on a pool of this size; a number
-    /// above what the machine has (or above the pool the export already runs in) changes nothing.
-    /// The output does not depend on it. Hardware encoders and the decoders' own threads are not
-    /// counted.
+    /// encoders and the rest of the export's parallel work run on a pool of this size, and the
+    /// decoders and the H.264 encoder size their own pools to it (#1216); a number above what the
+    /// machine has (or above the pool the export already runs in) changes nothing. The output does
+    /// not depend on it. Hardware encoders are unaffected (they run on the GPU).
     #[serde(default)]
     pub max_threads: u32,
     /// ProRes flavour: `proxy`, `lt`, `standard`, `hq`, `4444` or `4444xq` (empty = HQ).
@@ -1690,6 +1690,11 @@ fn h264_factory(format: Format, w: u32, h: u32, rate: FrameRate, s: &ExportSetti
     cfg.aud = s.format.is_mxf();
     cfg.keyint = s.keyframe_distance.filter(|k| *k > 0).unwrap_or_else(|| (rate.num as f64 / rate.den as f64 * 2.0).round().max(1.0) as u32);
     cfg.slices = h264_slices(h);
+    // #1216: cap the encoder's slice pool to the export's thread limit (0 = all cores). `slices`
+    // stays fixed, so the stream does not depend on it.
+    if s.max_threads > 0 {
+        cfg.threads = (s.max_threads as usize).max(1);
+    }
     let kbps = s.bitrate_kbps.max(100);
     let max = s.max_bitrate_kbps.filter(|m| *m >= kbps).unwrap_or_else(|| (u64::from(kbps) * 3 / 2).min(u64::from(u32::MAX)) as u32);
     cfg.rate = match s.bitrate_mode {
@@ -1853,7 +1858,14 @@ fn capped_pool(max_threads: u32) -> Option<rayon::ThreadPool> {
     if cap == 0 || cap >= rayon::current_num_threads() || cfg!(target_arch = "wasm32") {
         return None;
     }
-    rayon::ThreadPoolBuilder::new().num_threads(cap).thread_name(|i| format!("filmcraft-export-{i}")).build().ok()
+    // #1216: the cap also reaches the decoders, which size their own pools: every worker carries it
+    // so a decoder made inside the export uses at most `cap` threads.
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(cap)
+        .thread_name(|i| format!("filmcraft-export-{i}"))
+        .start_handler(move |_| filmcraft_media::cancel::set_max_threads(Some(cap)))
+        .build()
+        .ok()
 }
 
 /// Run an export (blocking; call from a worker thread). With `settings.max_threads` set it runs on

@@ -382,3 +382,16 @@ fn max_threads_is_a_setting_of_the_json_interface() {
     assert_eq!(ExportSettings::default().max_threads, 0, "all cores unless asked");
     assert_eq!(serde_json::to_value(&s).unwrap()["maxThreads"], serde_json::json!(2));
 }
+
+/// #1216: a capped export sets the thread cap on its pool's workers, so a decoder made inside it
+/// sizes its own pool to the cap (the decoders' own pools are the rest of the change).
+#[test]
+fn a_capped_export_sets_the_thread_cap_on_its_workers() {
+    if rayon::current_num_threads() <= 2 {
+        return; // no room for a cap below the pool this test runs in
+    }
+    let pool = capped_pool(2).expect("a pool for a cap below the machine's cores");
+    assert_eq!(pool.install(filmcraft_media::cancel::max_threads), Some(2), "the workers carry the cap");
+    assert!(capped_pool(0).is_none(), "no cap: no pool");
+    assert!(capped_pool(u32::MAX).is_none(), "a cap above the pool: no pool");
+}

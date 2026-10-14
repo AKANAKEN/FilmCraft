@@ -2155,6 +2155,7 @@
 	Path	路径
 	Path Points	路径点
 	Pause Media Encoder queue during playback	播放时暂停 Media Encoder 队列
+	Export CPU Threads	导出 CPU 线程
 	Peak Frequency	峰值频率
 	Peak Gain	峰值增益
 	Pedestal	基准电平
