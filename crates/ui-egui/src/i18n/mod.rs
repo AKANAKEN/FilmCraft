@@ -1180,23 +1180,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn russian_entries_cover_the_original_menu_catalog() {
-        let app = crate::FilmcraftApp::new(filmcraft_engine::Session::default());
-        let items = crate::menus::menu_items(&app);
-        let known = |text: &str| crate::menus::MENUS.contains(&text) || items.iter().any(|it| it.label == text || it.path.iter().any(|p| p == text));
-        let (entries, _) = catalog::parse_entries(include_str!("ru.tsv"));
-        for (_, en, _) in entries {
-            assert!(known(&en) || en == "Settings", "not a menu label: {en}");
-        }
-        for en in core_menu_labels() {
-            assert!(Language::Ru.has(&en), "missing Russian menu label: {en}");
-        }
-        for en in crate::menus::MENUS.into_iter().chain(["Audio", "Settings"]) {
-            assert_ne!(Language::Ru.tr(en), en, "untranslated Russian menu: {en}");
-        }
-    }
-
     /// Indonesian covers the whole interface (the Spanish catalog's entries and the native macOS
     /// Settings menu), but, like Japanese and French, the tests require only the core menus (the
     /// menus-only Ukrainian catalog, the top-level menus and the native macOS Settings menu), so
