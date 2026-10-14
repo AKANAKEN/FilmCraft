@@ -29,6 +29,10 @@ read off files it exports, never from the application itself.
 
 The other formats' editions are listed in the module docs (`edl`, `fcp7`, `fcpxml`, `otio`, `ale`).
 
+**Invariant — Unicode media URLs:** file URL prefix probes must not panic when their byte boundary
+falls inside a UTF-8 character. Timeline importers use the shared converter; `tests/file_urls.rs`
+checks expected Unicode paths through the public converter, resolver and EDL importer.
+
 ## DaVinci Resolve (`.drp`)
 
 Blackmagic Design publishes no specification for `.drp`. The layout was read off project
