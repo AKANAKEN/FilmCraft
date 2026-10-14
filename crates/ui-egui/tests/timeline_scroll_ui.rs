@@ -264,6 +264,39 @@ fn the_scroll_bar_thumb_follows_the_pointer_and_reaches_both_ends() {
     assert!(pps < 50.0 && (scroll - at).abs() < 1e-6, "{pps} {scroll}");
 }
 
+#[test]
+fn the_scroll_bar_moves_before_eguis_drag_threshold() {
+    let mut d = Driver::tall();
+    d.ok("ui.set", json!({"timeline": {"scroll": 0.0}}));
+    d.frames(3);
+    let thumb = d.rect("timeline.zoomBar");
+    let from = egui::pos2(thumb[0] + thumb[2] / 2.0, thumb[1] + thumb[3] / 2.0);
+    let to = from + egui::vec2(3.0, 0.0); // below egui's usual 6-point drag threshold
+    d.harness.input_mut().events.push(egui::Event::PointerMoved(from));
+    d.frames(1);
+    d.harness.input_mut().events.push(egui::Event::PointerButton {
+        pos: from,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: egui::Modifiers::NONE,
+    });
+    d.frames(1);
+    assert!(
+        matches!(d.app().tl.drag, Some(filmcraft_ui_egui::panels::timeline::Drag::ZoomBar { mode: 0, .. })),
+        "the press did not start the scrollbar gesture"
+    );
+    d.harness.input_mut().events.push(egui::Event::PointerMoved(to));
+    d.frames(1);
+    assert!(d.app().ui.timeline.target_scroll > 0.0, "the initial 3-point movement did not update the view");
+    d.harness.input_mut().events.push(egui::Event::PointerButton {
+        pos: to,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    d.frames(2);
+}
+
 /// Show Video Thumbnails ▸ Continuous asks for frames across each video clip, not only its head;
 /// `ui.set` switches the mode (and Off) and refuses an unknown one.
 #[test]
