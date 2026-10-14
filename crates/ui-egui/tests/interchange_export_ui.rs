@@ -34,9 +34,19 @@ impl Driver {
             let ctx = self.harness.ctx.clone();
             let mut raw = std::mem::take(self.harness.input_mut());
             eframe::App::raw_input_hook(self.harness.state_mut(), &ctx, &mut raw);
+            let requested_time = raw.time;
             *self.harness.input_mut() = raw;
             self.harness.step();
+            if let Some(time) = requested_time {
+                assert_eq!(ctx.input(|i| i.time), time, "the rendered frame uses the requested test clock");
+            }
         }
+    }
+
+    fn at(&mut self, time: f64) {
+        assert!(time >= self.harness.ctx.input(|i| i.time), "the test clock never moves backwards");
+        self.harness.input_mut().time = Some(time);
+        self.frames(1);
     }
 
     fn call(&mut self, method: &str, params: Value) -> Value {
@@ -475,4 +485,112 @@ fn interchange_failed_final_document_write_publishes_no_successful_conversion_no
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "no auxiliary export or leaked sibling temporary file");
         let _ = std::fs::remove_dir_all(dir);
     }
+}
+
+// Completion delivery, rather than a changed string, restarts the existing eight-second lifetime.
+#[derive(Clone, Copy)]
+enum RepeatCompletionRoute {
+    Direct,
+    Save,
+    OmfSettings,
+}
+
+fn feedback_repeat_completion(route: RepeatCompletionRoute, notes: bool, different_path: bool) {
+    let (name, ext, format, source) = match route {
+        RepeatCompletionRoute::Direct => ("direct", "xml", filmcraft_interchange::Format::Fcp7Xml, "file.exportInterchange"),
+        RepeatCompletionRoute::Save => ("save", "xml", filmcraft_interchange::Format::Fcp7Xml, "file.exportInterchange"),
+        RepeatCompletionRoute::OmfSettings => ("settings", "omf", filmcraft_interchange::Format::Omf, "file.exportOmf"),
+    };
+    let dir = tmp(&format!("repeat-status-{name}-{notes}-{different_path}"));
+    let s = if notes { feedback_session() } else { session() };
+    let (expected_bytes, report) = feedback_report(&s, format);
+    assert_eq!(!report.entries.is_empty(), notes, "the fixture really supplies the intended report control");
+    let mut d = feedback_driver(s, &dir);
+    d.harness.state_mut().ui.show_status_bar = true;
+    d.at(100.0);
+    let before = feedback_snapshot(&d.harness.state().session);
+    let mut events = feedback_events(&mut d);
+    let mut first_bytes = None;
+    let mut last_status = String::new();
+    for delivery in 0..2 {
+        if delivery == 1 {
+            d.at(106.0);
+            assert_eq!(d.harness.state().ui.status, last_status, "the original completion is still visible before repeating");
+        }
+        let path = dir.join(if delivery == 1 && different_path { format!("other.{ext}") } else { format!("Mix.{ext}") });
+        let result = match route {
+            RepeatCompletionRoute::Direct => Some(d.ok("ui.menu.invoke", json!({"id": "file.exportFcp7Xml", "params": {"path": path.to_string_lossy()}}))),
+            RepeatCompletionRoute::Save => Some(d.ok("ui.menu.invoke", json!({"id": "file.exportFcp7Xml"}))),
+            RepeatCompletionRoute::OmfSettings => {
+                d.ok("ui.menu.invoke", json!({"id": "file.exportOmf"}));
+                d.frames(3);
+                d.ok("ui.click", json!({"id": "omfExport.audio.embedded"}));
+                d.ok("ui.click", json!({"id": "omfExport.ok"}));
+                d.frames(4);
+                assert!(d.ids("omfExport.").is_empty());
+                None
+            }
+        };
+        let bytes = std::fs::read(&path).expect("successful final export before observing its completion lifetime");
+        assert!(!bytes.is_empty());
+        if ext == "xml" {
+            assert_eq!(bytes, expected_bytes, "ordinary successful FCP7 bytes are unchanged");
+        } else {
+            assert!(filmcraft_interchange::omf::sniff(&bytes));
+            let (imported, extracted, _) = filmcraft_interchange::omf::import(&bytes, &Default::default()).unwrap();
+            assert_eq!(imported.sequences.len(), 1);
+            assert!(!extracted.is_empty(), "the settings export contains supported embedded audio");
+        }
+        if let Some(result) = result {
+            assert_eq!(result["path"], json!(path.to_string_lossy()));
+            assert_eq!(result["bytes"], json!(bytes.len()));
+            assert_eq!(result["report"], json!(feedback_messages(&report)));
+        }
+        if let Some(first) = &first_bytes {
+            assert_eq!(&bytes, first, "a second completion does not change the exported document");
+        } else {
+            first_bytes = Some(bytes);
+        }
+        feedback_assert(&mut d, &before, &events, &report, source, &path);
+        events = feedback_events(&mut d);
+        let status = feedback_status(&path, notes);
+        if delivery == 1 {
+            assert_eq!(status == last_status, !different_path, "same-text regression versus changed-text control");
+        }
+        last_status = status;
+    }
+    d.at(109.0);
+    assert_eq!(d.harness.state().ui.status, last_status, "the second completion survives the first completion's expiry");
+    d.at(114.0);
+    assert_eq!(d.harness.state().ui.status, last_status, "the existing timer retains text at exactly eight seconds");
+    d.at(115.0);
+    assert!(d.harness.state().ui.status.is_empty(), "the refreshed completion still expires after eight seconds");
+    assert_eq!(feedback_events(&mut d), events, "timer frames never publish extra Events");
+    assert_eq!(feedback_snapshot(&d.harness.state().session), before);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn interchange_completion_status_refreshes_same_path_direct_notes() {
+    feedback_repeat_completion(RepeatCompletionRoute::Direct, true, false);
+}
+
+#[test]
+fn interchange_completion_status_refreshes_same_path_save_notes() {
+    feedback_repeat_completion(RepeatCompletionRoute::Save, true, false);
+}
+
+#[test]
+fn interchange_completion_status_refreshes_same_path_settings_notes() {
+    feedback_repeat_completion(RepeatCompletionRoute::OmfSettings, true, false);
+}
+
+#[test]
+fn interchange_completion_status_refreshes_same_path_clean_export() {
+    feedback_repeat_completion(RepeatCompletionRoute::Direct, false, false);
+}
+
+#[test]
+fn interchange_completion_status_changed_path_keeps_existing_lifetime() {
+    feedback_repeat_completion(RepeatCompletionRoute::Direct, true, true);
 }

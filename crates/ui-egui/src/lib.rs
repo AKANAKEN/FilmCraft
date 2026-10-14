@@ -941,6 +941,12 @@ impl FilmcraftApp {
         self.ui.status = s.into();
     }
 
+    fn interchange_export_completed(&mut self, result: &Value) {
+        self.ui.status = interchange_export_status(result);
+        // A repeated completion starts a fresh lifetime when the status bar next renders.
+        self.status_seen.0.clear();
+    }
+
     // ---------------------------------------------------------------- playback
 
     pub fn toggle_play(&mut self, speed: f64) {
@@ -1387,11 +1393,11 @@ impl FilmcraftApp {
             let Some(path) = paths.into_iter().next() else { return Ok(Value::Null) };
             p.insert("path".into(), json!(path));
             let r = app.session.execute(&id, Value::Object(p)).map_err(|e| e.to_string());
-            app.ui.status = match &r {
-                Ok(result) if is_interchange_export(&id) => interchange_export_status(result),
-                Ok(_) => tlf!("Exported {path}", path),
-                Err(e) => e.clone(),
-            };
+            match &r {
+                Ok(result) if is_interchange_export(&id) => app.interchange_export_completed(result),
+                Ok(_) => app.ui.status = tlf!("Exported {path}", path),
+                Err(e) => app.ui.status = e.clone(),
+            }
             r
         })
     }

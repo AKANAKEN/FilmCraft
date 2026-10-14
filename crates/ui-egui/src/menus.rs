@@ -589,7 +589,7 @@ pub fn invoke(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, mut params:
     if let Err(e) = &r {
         app.ui.status = e.clone();
     } else if interchange_export && let Ok(result) = &r {
-        app.ui.status = crate::interchange_export_status(result);
+        app.interchange_export_completed(result);
     }
     if r.is_ok() && matches!(id, "playhead.start" | "playhead.end") {
         crate::panels::timeline::reveal_playhead(app, ctx);

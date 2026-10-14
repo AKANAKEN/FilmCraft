@@ -203,7 +203,7 @@ pub fn show(app: &mut FilmcraftApp, ctx: &egui::Context) {
                 }
                 let cmd = if d.omf { "file.exportOmf" } else { "file.exportAaf" };
                 match app.session.execute(cmd, params) {
-                    Ok(v) => app.ui.status = crate::interchange_export_status(&v),
+                    Ok(v) => app.interchange_export_completed(&v),
                     Err(e) => app.ui.status = e.to_string(),
                 }
             });
