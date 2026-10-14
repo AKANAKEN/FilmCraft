@@ -5,8 +5,11 @@
 
 use std::sync::Arc;
 
+use craft_ui::theme::SuiteDarkPalette;
 use egui::{Color32, FontData, FontDefinitions, FontFamily, FontId, Stroke, TextStyle, Visuals};
 use serde::{Deserialize, Serialize};
+
+const SUITE_DARK: SuiteDarkPalette = SuiteDarkPalette::ARTCRAFT;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ThemeKind {
@@ -152,7 +155,7 @@ pub struct Tokens {
 impl Tokens {
     /// Foreground for a filled accent control in the standard dark palette.
     pub fn on_accent(&self) -> Color32 {
-        if self.kind == ThemeKind::Medium && self.accent == Color32::from_rgb(0x2d, 0x81, 0xff) { Color32::from_rgb(0x06, 0x06, 0x07) } else { Color32::WHITE }
+        if self.kind == ThemeKind::Medium && self.accent == SUITE_DARK.accent { SUITE_DARK.on_accent } else { Color32::WHITE }
     }
 
     pub fn for_kind(kind: ThemeKind) -> Self {
@@ -251,39 +254,39 @@ impl Tokens {
             ThemeKind::Medium => Tokens {
                 // The visible "Dark" choice uses ArtCraft chrome; Darkest keeps its own palette.
                 // Media, meters and plot roles remain local.
-                app_bg: Color32::from_rgb(0x12, 0x13, 0x16),
-                header_bg: Color32::from_rgb(0x0a, 0x0a, 0x0c),
-                panel_bg: Color32::from_rgb(0x10, 0x10, 0x14),
-                tab_bg: Color32::from_rgb(0x10, 0x10, 0x14),
-                tab_text: Color32::from_rgb(0xa6, 0xa6, 0xa8),
-                tab_text_active: Color32::WHITE,
-                focus: Color32::from_rgb(0x74, 0xaa, 0xff),
-                accent: Color32::from_rgb(0x2d, 0x81, 0xff),
-                accent_hover: Color32::from_rgb(0x59, 0xa7, 0xff),
-                text: Color32::from_rgb(0xf2, 0xf1, 0xee),
-                text_dim: Color32::from_rgb(0xa6, 0xa6, 0xa8),
-                text_faint: Color32::from_rgb(0x71, 0x71, 0x76),
-                icon: Color32::from_rgb(0xa6, 0xa6, 0xa8),
-                icon_active: Color32::WHITE,
-                hover: Color32::from_rgb(0x32, 0x33, 0x37),
-                pressed: Color32::from_rgb(0x41, 0x42, 0x46),
-                field_bg: Color32::from_rgb(0x06, 0x06, 0x07),
-                field_border: Color32::from_rgb(0x36, 0x37, 0x3a),
-                separator: Color32::from_rgb(0x36, 0x37, 0x3a),
-                row_alt: Color32::from_rgb(0x1e, 0x1f, 0x22),
-                row_selected: Color32::from_rgb(0x20, 0x3b, 0x65),
-                hot_text: Color32::from_rgb(0x59, 0xa7, 0xff),
-                pill_active_bg: Color32::from_rgb(0x20, 0x3b, 0x65),
-                control_surface: Color32::from_rgb(0x1e, 0x1f, 0x22),
-                control_well: Color32::from_rgb(0x06, 0x06, 0x07),
-                control_border: Color32::from_rgb(0x36, 0x37, 0x3a),
-                button_hover: Color32::from_rgb(0x32, 0x33, 0x37),
-                button_border: Color32::from_rgb(0x36, 0x37, 0x3a),
-                tl_bg: Color32::from_rgb(0x10, 0x10, 0x14),
-                tl_track_bg: Color32::from_rgb(0x1e, 0x1f, 0x22),
-                tl_track_bg_alt: Color32::from_rgb(0x10, 0x10, 0x14),
-                tl_header_bg: Color32::from_rgb(0x10, 0x10, 0x14),
-                tl_ruler_bg: Color32::from_rgb(0x10, 0x10, 0x14),
+                app_bg: SUITE_DARK.window,
+                header_bg: SUITE_DARK.chrome,
+                panel_bg: SUITE_DARK.panel,
+                tab_bg: SUITE_DARK.panel,
+                tab_text: SUITE_DARK.text_secondary,
+                tab_text_active: SUITE_DARK.text_strong,
+                focus: SUITE_DARK.focus,
+                accent: SUITE_DARK.accent,
+                accent_hover: SUITE_DARK.accent_hover,
+                text: SUITE_DARK.text,
+                text_dim: SUITE_DARK.text_secondary,
+                text_faint: SUITE_DARK.text_disabled,
+                icon: SUITE_DARK.text_secondary,
+                icon_active: SUITE_DARK.text_strong,
+                hover: SUITE_DARK.hover,
+                pressed: SUITE_DARK.pressed,
+                field_bg: SUITE_DARK.input,
+                field_border: SUITE_DARK.border,
+                separator: SUITE_DARK.border,
+                row_alt: SUITE_DARK.raised,
+                row_selected: SUITE_DARK.selection,
+                hot_text: SUITE_DARK.accent_hover,
+                pill_active_bg: SUITE_DARK.selection,
+                control_surface: SUITE_DARK.raised,
+                control_well: SUITE_DARK.input,
+                control_border: SUITE_DARK.border,
+                button_hover: SUITE_DARK.hover,
+                button_border: SUITE_DARK.border,
+                tl_bg: SUITE_DARK.panel,
+                tl_track_bg: SUITE_DARK.raised,
+                tl_track_bg_alt: SUITE_DARK.panel,
+                tl_header_bg: SUITE_DARK.panel,
+                tl_ruler_bg: SUITE_DARK.panel,
                 ..dark
             },
             ThemeKind::Light => Tokens {
@@ -370,7 +373,7 @@ impl Tokens {
             // Older saved defaults must not repaint standard Dark, while a new default must not
             // repaint Darkest or Light. Other saved colours remain overrides.
             let legacy_default = Color32::from_rgb(0x2f, 0x6b, 0xdf);
-            let current_default = Color32::from_rgb(0x2d, 0x81, 0xff);
+            let current_default = SUITE_DARK.accent;
             let theme_default = c == self.accent || c == legacy_default || c == current_default;
             if !theme_default {
                 // A highlight of the user's own also colours the theme's other blues: the same hue,
@@ -502,7 +505,7 @@ pub fn apply_visuals(ctx: &egui::Context, t: &Tokens) {
     v.override_text_color = Some(t.text);
     // The standard Dark preset uses a subdued selection row; an explicitly chosen highlight
     // keeps its established selection behavior.
-    let standard_dark_accent = t.kind == ThemeKind::Medium && t.accent == Color32::from_rgb(0x2d, 0x81, 0xff);
+    let standard_dark_accent = t.kind == ThemeKind::Medium && t.accent == SUITE_DARK.accent;
     v.selection.bg_fill = if standard_dark_accent { t.row_selected } else { t.accent };
     v.selection.stroke = Stroke::new(1.0, if standard_dark_accent { t.text } else { Color32::WHITE });
     v.hyperlink_color = t.accent;
@@ -549,6 +552,74 @@ pub fn apply_visuals(ctx: &egui::Context, t: &Tokens) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn standard_dark_adapts_shared_suite_roles() {
+        let suite = SuiteDarkPalette::ARTCRAFT;
+        let t = Tokens::for_kind(ThemeKind::Medium);
+        for (role, actual, expected) in [
+            ("window", t.app_bg, suite.window),
+            ("chrome", t.header_bg, suite.chrome),
+            ("panel", t.panel_bg, suite.panel),
+            ("tabs", t.tab_bg, suite.panel),
+            ("secondary tab text", t.tab_text, suite.text_secondary),
+            ("active tab text", t.tab_text_active, suite.text_strong),
+            ("focus", t.focus, suite.focus),
+            ("accent", t.accent, suite.accent),
+            ("accent hover", t.accent_hover, suite.accent_hover),
+            ("accent foreground", t.on_accent(), suite.on_accent),
+            ("text", t.text, suite.text),
+            ("secondary text", t.text_dim, suite.text_secondary),
+            ("disabled text", t.text_faint, suite.text_disabled),
+            ("hover", t.hover, suite.hover),
+            ("pressed", t.pressed, suite.pressed),
+            ("input", t.field_bg, suite.input),
+            ("border", t.field_border, suite.border),
+            ("separator", t.separator, suite.border),
+            ("raised", t.row_alt, suite.raised),
+            ("selection", t.row_selected, suite.selection),
+            ("selected toggle", t.pill_active_bg, suite.selection),
+            ("raised audio control", t.control_surface, suite.raised),
+            ("recessed audio control", t.control_well, suite.input),
+            ("timeline panel", t.tl_bg, suite.panel),
+            ("timeline track", t.tl_track_bg, suite.raised),
+        ] {
+            assert_eq!(actual, expected, "{role}");
+        }
+        let ctx = egui::Context::default();
+        apply_visuals(&ctx, &t);
+        assert_eq!(ctx.global_style().visuals.selection.bg_fill, suite.selection);
+        assert_eq!(ctx.global_style().visuals.selection.stroke.color, suite.selection_text);
+    }
+
+    #[test]
+    fn shared_palette_keeps_alternatives_and_accessibility_overrides_local() {
+        let darkest = Tokens::for_kind(ThemeKind::Dark);
+        let light = Tokens::for_kind(ThemeKind::Light);
+        assert_eq!(darkest.app_bg, Color32::BLACK);
+        assert_eq!(darkest.accent, Color32::from_rgb(0x2f, 0x6b, 0xdf));
+        assert_eq!(light.panel_bg, Color32::from_rgb(232, 232, 232));
+        assert_eq!(light.field_border, Color32::from_rgb(170, 170, 170));
+        assert_eq!(light.on_accent(), Color32::WHITE);
+        let standard = Tokens::for_kind(ThemeKind::Medium);
+        let accessible = standard.with_appearance(None, true);
+        assert_eq!(accessible.text_dim, standard.text);
+        assert_eq!(accessible.field_border, Color32::from_rgb(0x6a, 0x6a, 0x6a));
+        assert_eq!(accessible.separator, Color32::from_rgb(0x50, 0x50, 0x50));
+        assert_eq!(accessible.focus, standard.focus);
+        let light_accessible = light.with_appearance(None, true);
+        assert_eq!(light_accessible.field_border, Color32::from_rgb(110, 110, 110));
+        assert_eq!(light_accessible.text_dim, Color32::from_rgb(40, 40, 40));
+        let custom = standard.with_appearance(Some([0xe0, 0x45, 0x7b]), true);
+        assert_eq!(custom.accent, Color32::from_rgb(0xe0, 0x45, 0x7b));
+        assert_eq!(custom.on_accent(), Color32::WHITE);
+        assert_ne!(custom.focus, standard.focus);
+        assert_eq!(custom.field_border, accessible.field_border);
+        assert_eq!(custom.monitor_bg, standard.monitor_bg);
+        assert_eq!(custom.render_red, standard.render_red);
+        assert_eq!(custom.render_yellow, standard.render_yellow);
+        assert_eq!(custom.render_green, standard.render_green);
+    }
 
     const JAPANESE: &str = "日本語の文字";
 
