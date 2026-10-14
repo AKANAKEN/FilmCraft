@@ -26,6 +26,15 @@ pub trait VideoDecoder: Send {
     fn try_adopt_parameter_change(&mut self, _sample: &[u8]) -> Result<bool> {
         Ok(false)
     }
+    /// Sequence-only initialization required to reconstruct accepted native metadata in software
+    /// after the replay log compacted past its in-band header. Backends that adopt configuration
+    /// discrepancies retain this across reset and report their current accepted configuration.
+    /// Hybrid copies at most 64 KiB before releasing the native owner, then primes software before
+    /// replay and after software reset. Initialization must produce no pictures. Ordinary backends
+    /// return `None` and retain existing replay behavior.
+    fn software_replay_initialization(&self) -> Option<&[u8]> {
+        None
+    }
     /// Drain pictures held for reordering (end of stream / before a seek).
     fn flush(&mut self) -> Vec<DecodedFrame>;
     /// Forget all state (called after seeking to a sync sample).

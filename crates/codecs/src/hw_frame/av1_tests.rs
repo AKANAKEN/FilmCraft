@@ -265,3 +265,24 @@ fn av1_checked_color_candidate_checks_sequence_trailing_and_frame_alignment_bits
     layered.extend([0x36, 0x20, 3, 0x19, 0, 0]);
     assert!(info.initial_av1_color_candidate(&layered).unwrap().is_none());
 }
+
+#[test]
+fn av1_checked_color_candidate_declines_zero_layer_obu_extensions() {
+    let info = stream(&Sequence::default());
+    let changed = Sequence { color: (9, 16, 9), ..Default::default() };
+    assert!(info.initial_av1_color_candidate(&sample(&changed)).unwrap().is_some());
+    for kind in [1, 2, 6] {
+        let extended = |kind, bytes: &[u8]| {
+            let mut unit = obu(kind, bytes);
+            unit[0] |= 4;
+            unit.insert(1, 0); // Present extension, zero temporal/spatial IDs and reserved bits.
+            unit
+        };
+        let mut bytes = if kind == 2 { extended(2, &[]) } else { Vec::new() };
+        bytes.extend(if kind == 1 { extended(1, &payload(&changed)) } else { obu(1, &payload(&changed)) });
+        bytes.extend(if kind == 6 { extended(6, &[0x19, 0, 0]) } else { obu(6, &[0x19, 0, 0]) });
+        assert!(!matches!(info.initial_av1_color_candidate(&bytes), Ok(Some(_))), "zero-valued extension on OBU {kind} must not authorize op_idc=0 adoption");
+        let active = stream(&changed);
+        assert!(active.av1_parameter_difference(&bytes).is_err(), "op_idc=0 active guard must reject zero-valued extension on OBU {kind}");
+    }
+}

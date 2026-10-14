@@ -11,7 +11,7 @@ use crate::video::primaries_from_code;
 use crate::{CodecError, Result};
 
 mod av1;
-pub use av1::Av1ParameterDifference;
+pub use av1::{Av1ParameterDifference, Av1ReplayConfigurationRefresh};
 
 /// The two frame-coded codecs hardware decoders take besides H.264 / HEVC.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

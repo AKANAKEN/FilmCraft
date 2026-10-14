@@ -20,6 +20,23 @@ pub enum Av1ParameterDifference {
     InvalidHeader,
 }
 
+/// Whether an accepted AV1 sequence needs a new bounded configuration for future replay.
+/// This tracks coding tools without granting a new colour/structural-format accommodation.
+#[derive(Debug)]
+pub enum Av1ReplayConfigurationRefresh {
+    NotNeeded,
+    Compatible(FrameStreamInfo),
+    /// A changed sequence lacks the supported independent-frame proof. Native replay must
+    /// decline this input rather than retain configuration which would no longer describe it.
+    Unsupported,
+}
+
+#[derive(Clone, Copy)]
+enum RestartCandidate {
+    InitialColor,
+    ReplayRefresh,
+}
+
 fn invalid(message: &'static str) -> CodecError {
     CodecError::Decode(message.into())
 }
@@ -31,6 +48,7 @@ struct Obu<'a> {
     temporal_id: u8,
     spatial_id: u8,
     has_size: bool,
+    has_extension: bool,
 }
 
 /// Zero-allocation low-overhead OBU walker. Every advertised payload and the complete tail
@@ -55,8 +73,13 @@ impl<'a> Obus<'a> {
         if header & 0x81 != 0 {
             return Err(invalid("invalid AV1 OBU forbidden/reserved bit"));
         }
+        let kind = (header >> 3) & 15;
+        let has_extension = header & 4 != 0;
+        if has_extension && matches!(kind, 1 | 2) {
+            return Err(invalid("AV1 sequence/temporal delimiter OBU cannot have an extension"));
+        }
         let mut offset = self.offset.checked_add(1).ok_or_else(|| invalid("AV1 OBU offset overflow"))?;
-        let (temporal_id, spatial_id) = if header & 4 != 0 {
+        let (temporal_id, spatial_id) = if has_extension {
             let extension = *self.data.get(offset).ok_or_else(|| invalid("truncated AV1 OBU extension"))?;
             if extension & 7 != 0 {
                 return Err(invalid("invalid AV1 OBU extension reserved bits"));
@@ -90,7 +113,7 @@ impl<'a> Obus<'a> {
         let end = offset.checked_add(size).ok_or_else(|| invalid("AV1 OBU payload length overflow"))?;
         let payload = self.data.get(offset..end).ok_or_else(|| invalid("truncated AV1 OBU payload"))?;
         self.offset = end;
-        Ok(Some(Obu { kind: (header >> 3) & 15, payload, temporal_id, spatial_id, has_size }))
+        Ok(Some(Obu { kind, payload, temporal_id, spatial_id, has_size, has_extension }))
     }
 }
 
@@ -200,9 +223,13 @@ impl FrameStreamInfo {
             return Err(CodecError::Unsupported("AV1 parameter comparison for another codec".into()));
         }
         let before = self.sequence_header.as_deref().map(checked_sequence).transpose();
+        let mut op_idc = before.as_ref().ok().and_then(|header| header.as_ref()).map(|header| header.op_idc);
         let mut result = Av1ParameterDifference::Unchanged;
         let mut walker = Obus::new(sample);
         while let Some(obu) = walker.next()? {
+            if obu.has_extension && op_idc == Some(0) {
+                return Err(invalid("AV1 OBU extension is forbidden when operating point idc is zero"));
+            }
             if obu.kind != 1 {
                 continue;
             }
@@ -210,6 +237,9 @@ impl FrameStreamInfo {
                 return Err(invalid("AV1 sequence header exceeds 64 KiB inspection limit"));
             }
             let after = checked_sequence(obu.payload);
+            if let Ok(header) = &after {
+                op_idc = Some(header.op_idc);
+            }
             let next = match (&before, after) {
                 (Ok(Some(before)), Ok(after)) => difference(before, &after),
                 _ => Av1ParameterDifference::InvalidHeader,
@@ -230,6 +260,49 @@ impl FrameStreamInfo {
     /// frame. The original info is immutable. This prepares evidence; it never adopts a native
     /// change itself. Metadata OBUs and special restart forms conservatively decline.
     pub fn initial_av1_color_candidate(&self, sample: &[u8]) -> Result<Option<Self>> {
+        self.checked_av1_restart_candidate(sample, RestartCandidate::InitialColor)
+    }
+
+    /// Refresh the current accepted replay configuration for a coding-tool-only restart.
+    /// This is used only after native metadata adoption made original av1C insufficient for
+    /// replay. Equal raw sequence headers and headerless continuation require no refresh.
+    /// A different sequence must preserve every existing coded-format/colour field and pass
+    /// the same complete supported shown-key-frame proof as initial colour accommodation.
+    /// Malformed framing returns an error; unsupported changed forms must fall back.
+    /// Sequence/configuration copies remain fallible and capped at 64 KiB; no container/native
+    /// policy is changed, and this method does not authorize another colour adoption window.
+    pub fn av1_replay_configuration_refresh(&self, sample: &[u8]) -> Result<Av1ReplayConfigurationRefresh> {
+        if self.codec != FrameCodec::Av1 {
+            return Ok(Av1ReplayConfigurationRefresh::Unsupported);
+        }
+        if self.config_obus.len() > MAX_CONFIGURATION {
+            return Err(invalid("AV1 configuration exceeds 64 KiB inspection limit"));
+        }
+        let Some(current) = self.sequence_header.as_deref() else {
+            return Ok(Av1ReplayConfigurationRefresh::Unsupported);
+        };
+        let mut op_idc = checked_sequence(current)?.op_idc;
+        let mut changed = false;
+        let mut walker = Obus::new(sample);
+        while let Some(obu) = walker.next()? {
+            if obu.has_extension && op_idc == 0 {
+                return Err(invalid("AV1 OBU extension is forbidden when operating point idc is zero"));
+            }
+            if obu.kind == 1 {
+                op_idc = checked_sequence(obu.payload)?.op_idc;
+                changed |= obu.payload != current;
+            }
+        }
+        if !changed {
+            return Ok(Av1ReplayConfigurationRefresh::NotNeeded);
+        }
+        Ok(match self.checked_av1_restart_candidate(sample, RestartCandidate::ReplayRefresh)? {
+            Some(candidate) => Av1ReplayConfigurationRefresh::Compatible(candidate),
+            None => Av1ReplayConfigurationRefresh::Unsupported,
+        })
+    }
+
+    fn checked_av1_restart_candidate(&self, sample: &[u8], kind: RestartCandidate) -> Result<Option<Self>> {
         if self.codec != FrameCodec::Av1 {
             return Ok(None);
         }
@@ -242,7 +315,7 @@ impl FrameStreamInfo {
         let mut decline = false;
         let mut sample_obus = Obus::new(sample);
         while let Some(obu) = sample_obus.next()? {
-            if obu.temporal_id != 0 || obu.spatial_id != 0 {
+            if obu.has_extension || obu.temporal_id != 0 || obu.spatial_id != 0 {
                 decline = true;
             }
             match obu.kind {
@@ -288,7 +361,7 @@ impl FrameStreamInfo {
                     decline = true;
                 }
                 config_sequence = Some(h);
-                if !obu.has_size || obu.temporal_id != 0 || obu.spatial_id != 0 {
+                if !obu.has_size || obu.has_extension || obu.temporal_id != 0 || obu.spatial_id != 0 {
                     decline = true;
                 }
             } else {
@@ -301,7 +374,12 @@ impl FrameStreamInfo {
         if decline || config_sequence != before {
             return Ok(None);
         }
-        if !matches!(difference(&before, &after), Av1ParameterDifference::ColorDescription { .. }) || !supported_color(&after) {
+        let compatible = matches!(
+            (kind, difference(&before, &after)),
+            (RestartCandidate::InitialColor, Av1ParameterDifference::ColorDescription { .. })
+                | (RestartCandidate::ReplayRefresh, Av1ParameterDifference::Unchanged)
+        );
+        if !compatible || !supported_color(&after) {
             return Ok(None);
         }
         // Public fields must still agree with the stored session configuration.
