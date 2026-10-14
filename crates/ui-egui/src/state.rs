@@ -504,6 +504,10 @@ pub struct UiState {
     /// Text panel Search: project-wide source transcript query.
     #[serde(default)]
     pub project_transcript_query: String,
+    #[serde(default)]
+    pub visual_search_mode: bool,
+    #[serde(default)]
+    pub visual_search_query: String,
     /// Preferences ▸ Playback: play the rendered range when a preview render finishes.
     #[serde(default = "yes")]
     pub play_after_render: bool,
@@ -992,6 +996,8 @@ impl Default for UiState {
             transcript_sel: None,
             transcript_search: String::new(),
             project_transcript_query: String::new(),
+            visual_search_mode: false,
+            visual_search_query: String::new(),
             play_after_render: true,
             mixer_fx_open: false,
             mixer_hidden: Vec::new(),

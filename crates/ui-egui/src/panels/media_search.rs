@@ -93,6 +93,25 @@ impl Search {
 }
 
 pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
+    let mut header =
+        ui.new_child(egui::UiBuilder::new().max_rect(Rect::from_min_size(rect.min + egui::vec2(10.0, 4.0), egui::vec2((rect.width() - 20.0).max(0.0), 28.0))));
+    header.horizontal(|ui| {
+        let r = ui.selectable_label(!app.ui.visual_search_mode, tl!("Transcripts"));
+        app.auto.add("text.search.transcripts", r.rect, "Transcripts");
+        if r.clicked() {
+            app.ui.visual_search_mode = false;
+        }
+        let r = ui.selectable_label(app.ui.visual_search_mode, tl!("Visuals"));
+        app.auto.add("text.search.visuals", r.rect, "Visuals");
+        if r.clicked() {
+            app.ui.visual_search_mode = true;
+        }
+    });
+    let body = Rect::from_min_max(rect.min + egui::vec2(0.0, 32.0), rect.max);
+    if app.ui.visual_search_mode { crate::panels::visual_search::show(app, ui, body) } else { transcripts(app, ui, body) }
+}
+
+fn transcripts(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink(10.0)).id_salt("project-transcript-search"));
     let response = child.add(
         egui::TextEdit::singleline(&mut app.ui.project_transcript_query)
