@@ -18,6 +18,14 @@ pub struct DecodedFrame {
 /// presentation order (a decoder with reordering may return zero or several per call).
 pub trait VideoDecoder: Send {
     fn decode(&mut self, sample: &[u8], pts: i64) -> Result<Vec<DecodedFrame>>;
+    /// Prepare a parameter change that the caller's original stream description rejects.
+    /// `true` means this decoder has verified compatibility and prepared matching input and
+    /// output interpretation before ordinary [`Self::decode`]. It does not decode the sample,
+    /// return pictures, or discard pending output. `false` retains software replay; an error
+    /// also activates replay with the error's context. Backends decline unless they opt in.
+    fn try_adopt_parameter_change(&mut self, _sample: &[u8]) -> Result<bool> {
+        Ok(false)
+    }
     /// Drain pictures held for reordering (end of stream / before a seek).
     fn flush(&mut self) -> Vec<DecodedFrame>;
     /// Forget all state (called after seeking to a sync sample).
