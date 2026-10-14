@@ -1,25 +1,23 @@
-# Catálogo em português brasileiro (pt-br). Mesmo formato de `es.tsv`: contexto <TAB> original <TAB> tradução.		
-#		
-# Desenvolvimento independente: cada entrada foi escrita a partir do sentido do texto em inglês, usando		
-# vocabulário comum de edição de vídeo em português brasileiro. Nenhum recurso de localização,		
-# tabela de strings ou interface proprietária foi consultado ou copiado; adicione entradas da mesma		
-"# forma. Comandos usam o infinitivo (""Salvar como…""), instruções usam o imperativo de cortesia"		
-"# (""Selecione um clipe…"") e rótulos usam capitalização de frase. Nomes de"		
-# produtos, formatos e tecnologias (FilmCraft, ArtCraft, Lumetri, ProRes, LUFS, EDL, AAF…) mantêm		
-"# a grafia original; números decimais em textos usam vírgula (""29,97 fps""). Este catálogo contém"		
-# as mesmas entradas de `es.tsv`, além do menu nativo Ajustes do macOS; strings adicionadas depois		
-# aparecem em inglês até serem traduzidas. Uma revisão de falante nativo é bem-vinda.		
-#		
-# Termos: clip = clipe, track = faixa, sequence = sequência, timeline = linha do tempo, bin = pasta,		
-# playhead = cursor de reprodução, In/Out = entrada / saída, marker = marcador, keyframe =		
-# quadro-chave, frame = quadro, frame hold = quadro congelado, edit point = ponto de edição,		
-# panel = painel, workspace = área de trabalho, render = renderizar, preset = predefinição,		
-# captions = legendas, voice-over = narração, trim = aparar (aparagem), ripple = em cascata,		
-# roll = rolante, slip / slide = deslizar conteúdo / deslizar clipe, overwrite = sobrescrever,		
-# wipe = cortina, dissolve = dissolução, scopes = escopos, highlights = realces, offline = offline,		
-# legacy = legado, preferences (também o menu Ajustes nativo do macOS) = Preferências,		
-# settings = configurações.		
-		
+# Brazilian Portuguese (pt-br) catalog. Same format as `es.tsv`: context <TAB> source <TAB> translation.
+#
+# Clean-room: every entry was written from the plain meaning of the English text using ordinary
+# Brazilian Portuguese video-editing vocabulary. No proprietary localisation resource, string table
+# or product UI was consulted or copied; add entries the same way. Commands use the infinitive
+# ("Salvar como…"), instructions use the polite imperative ("Selecione um clipe…"), and labels use
+# sentence case. Product, format and technology names (FilmCraft, ArtCraft, Lumetri, ProRes, LUFS,
+# EDL, AAF…) keep their spelling; decimals in prose use a comma ("29,97 fps"). This catalog has the
+# same entries as `es.tsv` plus the native macOS Settings menu; strings added later show in English
+# until they are translated. A native-speaker review is welcome.
+#
+# Terms: clip = clipe, track = faixa, sequence = sequência, timeline = linha do tempo, bin = pasta,
+# playhead = cursor de reprodução, In/Out = entrada / saída, marker = marcador, keyframe =
+# quadro-chave, frame = quadro, frame hold = quadro congelado, edit point = ponto de edição, panel =
+# painel, workspace = área de trabalho, render = renderizar, preset = predefinição, captions =
+# legendas, voice-over = narração, trim = aparar (aparagem), ripple = em cascata, roll = rolante,
+# slip / slide = deslizar conteúdo / deslizar clipe, overwrite = sobrescrever, wipe = cortina,
+# dissolve = dissolução, scopes = escopos, highlights = realces, offline = offline, legacy = legado,
+# preferences (also the native macOS Settings menu) = Preferências, settings = configurações.
+
 	About FilmCraft	Sobre o FilmCraft
 	Add Audio Submix Track	Adicionar faixa de submixagem de áudio
 	Add Caption at Playhead	Adicionar legenda no cursor de reprodução
@@ -2379,7 +2377,7 @@
 	Shift Center To	Deslocar o centro para
 	Shift clips that overlap trim point during ripple trimming	Deslocar os clipes que se sobrepõem ao ponto de aparagem durante a aparagem em cascata
 	Shot	Plano
-	"Show ""Project:"" and ""Bin:"" in Project panel tab"	"Mostrar ""Projeto:"" e ""Pasta:"" na guia do painel Projeto"
+	Show "Project:" and "Bin:" in Project panel tab	Mostrar "Projeto:" e "Pasta:" na guia do painel Projeto
 	Show Clip Mismatch Warning dialog	Mostrar o aviso de incompatibilidade de clipe
 	Show Event Indicator	Mostrar o indicador de eventos
 	Show Focus Area	Mostrar área de foco
@@ -3357,7 +3355,7 @@
 	WAV, stereo 48 kHz 24-bit PCM	WAV, estéreo, PCM de 48 kHz e 24 bits
 	Warm Tint	Tonalidade quente
 	Warm highlights, brown shadows	Realces quentes, sombras marrons
-	Waveform Audio	Áudio em forma de onda
+	Waveform Audio	Waveform Audio
 	Waveform Audio 48 kHz 16-bit	Waveform Audio 48 kHz 16 bits
 	Waveform Audio 48 kHz 24-bit	Waveform Audio 48 kHz 24 bits
 	Web & Social	Web e redes sociais
@@ -3545,8 +3543,8 @@
 	tracks	faixas
 	Clear Transition	Limpar transição
 	Set Transition Duration	Definir duração da transição
-		
-# System appearance modes and theme cards.		
+
+# System appearance modes and theme cards.
 	Active	Ativo
 	Appearance Mode	Modo de aparência
 	Dark Theme	Tema escuro
@@ -3567,16 +3565,16 @@
 	Text to Speech	Texto para fala
 	Edit Narration	Editar narração
 	Project Notes	Notas do projeto
-		
+
 	Appearance Settings…	Configurações de aparência…
-		
+
 	Add to favorites	Adicionar aos favoritos
-		
+
 	Remove from favorites	Remover dos favoritos
 	Get Project Notes	Obter notas do projeto
 	Edit Project Notes	Editar notas do projeto
 	Notes for this project: to-dos, instructions, frame numbers… Saved with the project.	Notas deste projeto: tarefas, instruções, números de quadro… Salvas com o projeto.
 	Use Effect Shutter Angle	Usar o ângulo do obturador do efeito
-		
-# The native macOS application menu (Settings…).		
+
+# The native macOS application menu (Settings…).
 	Settings	Preferências
