@@ -370,6 +370,7 @@ fn bit_fields_match_the_header() {
 #[test]
 fn encode_layouts_match_the_header() {
     assert_eq!(VAEntrypointEncSlice as i64, 6, "VAEntrypointEncSlice");
+    assert_eq!(VAEntrypointEncSliceLP as i64, 8, "VAEntrypointEncSliceLP");
     assert_eq!(VAConfigAttribRateControl as i64, 5, "VAConfigAttribRateControl");
     assert_eq!(VAConfigAttribMaxPictureWidth as i64, 18, "VAConfigAttribMaxPictureWidth");
     assert_eq!(VAConfigAttribMaxPictureHeight as i64, 19, "VAConfigAttribMaxPictureHeight");

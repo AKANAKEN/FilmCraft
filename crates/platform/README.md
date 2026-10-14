@@ -79,7 +79,8 @@ let availability = filmcraft_platform::register(); // Available("VideoToolbox") 
   ring and input path encode H.265, see [Hardware H.265 (HEVC) encoding (Windows,
   NVENC)](#hardware-h265-hevc-encoding-windows-nvenc).
 - **Linux: VA-API H.264 encoding** (`vaapi/h264enc.rs`), 8-bit SDR 4:2:0 for Export, on AMD, Intel
-  and other drivers with an H.264 `EncSlice` entrypoint. It runs on the decoders' shared display
+  and other drivers with an H.264 `EncSlice` entrypoint (or `EncSliceLP`, the low-power encoder
+  Intel's iHD driver offers on many GPUs). It runs on the decoders' shared display
   (`vaapi/va.rs`: `encode_caps`, `EncodeSession`) and is registered behind NVENC, so NVIDIA machines
   keep NVENC. The stream is IDR + P pictures (no B-frames), one slice per picture, POC type 0, CABAC
   for Main / High and no 8×8 transform (AMD's encoders never use it); the SPS and PPS come from

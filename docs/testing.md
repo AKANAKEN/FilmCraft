@@ -94,7 +94,7 @@ The VA-API encoder tests (`crates/platform/tests/vaapi_encode_session.rs` for th
 capabilities and an encode session, `vaapi_export.rs` for Export with Hardware encoding through the
 export pipeline: against the software encoder, every profile and rate control with keyframes where
 asked, 1080p cropping, a long GOP, a short picture as an error, and what VA-API declines; Linux) skip,
-printing `SKIPPED`, without a VA-API driver with an H.264 `EncSlice` entrypoint. Where VA-API encodes,
+printing `SKIPPED`, without a VA-API driver with an H.264 `EncSlice` or `EncSliceLP` entrypoint. Where VA-API encodes,
 `nvenc_export.rs`'s decline-count test skips too (VA-API declines and counts the same requests), and
 its export test skips unless NVENC is there. `encode_layouts_match_the_header` in
 `crates/platform/src/vaapi/abi_tests.rs` was generated like the decode layouts: a C program printing
