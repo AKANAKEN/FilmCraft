@@ -21,12 +21,18 @@ struct Driver {
 
 impl Driver {
     fn demo() -> Self {
+        Self::demo_with_step_dt(None)
+    }
+    fn demo_with_step_dt(dt: Option<f32>) -> Self {
         let mut session = Session::default();
         session.execute("file.openDemoProject", json!({})).expect("demo project");
         let (tx, rx) = channel();
         let app = FilmcraftApp::new(session).with_control(rx);
         let shots = std::env::var_os("FILMCRAFT_UI_SHOTS").map(std::path::PathBuf::from);
         let mut b = Harness::builder().with_size(egui::vec2(1600.0, 980.0)).with_max_steps(10_000);
+        if let Some(dt) = dt {
+            b = b.with_step_dt(dt);
+        }
         if shots.is_some() {
             b = b.wgpu().with_pixels_per_point(1.0);
         }
@@ -76,6 +82,48 @@ impl Driver {
         std::fs::create_dir_all(&dir).unwrap();
         img.save(dir.join(format!("{name}.png"))).unwrap();
     }
+}
+
+#[test]
+fn visual_text_click_places_unicode_caret_and_retains_timeline_selection() {
+    let mut d = Driver::demo_with_step_dt(Some(1.0 / 60.0));
+    d.ok("ui.set", json!({"workspace":"Captions and Graphics","tool":"Selection"}));
+    d.exec("playhead.set", json!({"seconds":2}));
+    let a = d.exec("graphics.newText", json!({"text":"AăB\nDeF","position":[500,300],"box":[700,300],"size":80}))["clip"].as_u64().unwrap();
+    let b = d.exec("graphics.newText", json!({"text":"Alt text","time":filmcraft_time::Tick::from_seconds_f64(20.0).0}))["clip"].as_u64().unwrap();
+    d.exec("timeline.select", json!({"clips":[a,b]}));
+    d.frames(3);
+    d.ok("ui.click", json!({"id":format!("program.layer.{a}.0")}));
+    d.frames(40);
+    let caret_point = |d: &mut Driver, offset: usize| {
+        let r = d.rect("program.picture");
+        let rect = egui::Rect::from_min_size(egui::pos2(r[0] as f32, r[1] as f32), egui::vec2(r[2] as f32, r[3] as f32));
+        let views = filmcraft_ui_egui::panels::graphics::visible_layers(d.harness.state(), rect, (1920, 1080));
+        let v = views.iter().find(|v| v.clip.0 == a && v.layer == 0).unwrap();
+        let filmcraft_project::graphic::LayerContent::Text(t) = &v.spec.content else { panic!("text expected") };
+        let layout = filmcraft_render::graphic_clip::text_layout(t);
+        let (x, baseline, line) = layout.caret(offset);
+        let p = v.to_screen.apply(filmcraft_geom::Vec2::new(f64::from(x), f64::from(baseline - layout.lines[line].ascent * 0.4)));
+        json!({"x":p.x,"y":p.y})
+    };
+    let p = caret_point(&mut d, 1);
+    d.ok("ui.move", p.clone());
+    d.frames(2);
+    d.ok("ui.click", p.clone());
+    d.ok("ui.click", p.clone());
+    assert!(d.harness.state().ui.gfx_edit.is_some());
+    assert_eq!(d.harness.state().session.state.selection.iter().map(|c| c.0).collect::<Vec<_>>(), vec![a, b]);
+    for offset in [0, 1, 3, 6, 8] {
+        let p = caret_point(&mut d, offset);
+        d.ok("ui.click", p);
+        let ed = d.harness.state().ui.gfx_edit.as_ref().unwrap();
+        assert_eq!((ed.caret, ed.anchor), (offset, offset));
+    }
+    let p = caret_point(&mut d, 3);
+    d.ok("ui.click", p);
+    d.ok("ui.type", json!({"text":"!"}));
+    assert_eq!(d.exec("graphics.list", json!({"clip":a}))["layers"][0]["text"], "Aă!B\nDeF");
+    assert_eq!(d.exec("graphics.list", json!({"clip":b}))["layers"][0]["text"], "Alt text");
 }
 
 #[test]

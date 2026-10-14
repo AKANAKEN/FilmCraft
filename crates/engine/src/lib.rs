@@ -30,12 +30,14 @@ pub mod media_browser;
 pub mod media_pool;
 pub mod media_watch;
 pub mod mixer;
+pub mod motion;
 pub mod multicam;
 pub mod narration;
 pub mod panels;
 pub mod paste_media;
 pub mod perf;
 pub mod presets;
+pub mod preview;
 pub mod previews;
 pub mod project_manager;
 pub mod project_panel;
@@ -316,6 +318,10 @@ pub struct EditorState {
     /// Selected layers (indices among the graphic layers, 0 = back) of the selected graphic clip.
     #[serde(default)]
     pub graphic_layers: Vec<usize>,
+    /// Explicit Program selection, including individual layers of different graphic clips.
+    /// Transient editor state; timeline selection continues to support title synchronization.
+    #[serde(default)]
+    pub preview_elements: Vec<preview::Element>,
     /// The mask being edited on the Program monitor (Effect Controls selection).
     #[serde(default)]
     pub selected_mask: Option<masks::MaskSel>,

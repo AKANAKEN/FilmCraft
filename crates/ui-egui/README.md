@@ -15,6 +15,23 @@ outline. `timeline.transitionDropPreview` exposes the span and edge to automatio
 `transition_drop_ui` covers both edges of short video/audio clips, hover without project edits,
 the committed span and undo. Set `FILMCRAFT_UI_SNAPSHOT_DIR` to render screenshots with wgpu.
 
+## Direct Program editing
+
+Click a visible title, image or video in the Program monitor to select it, then drag it to move it.
+Media corner handles resize the clip; text corners change font size and middle handles resize
+its paragraph box. Option/Alt-drag makes a copy on a new video track above the original, with
+the same start time and duration. Shift-click adds visible elements to a preview
+selection; dragging the group preserves the spacing between them. Locked tracks are excluded.
+
+Selecting several titles in the timeline synchronizes their style and geometry from the visible
+title, including titles at other times, while preserving each title's wording. This timeline
+selection aligns titles to the same position; an explicit Shift-selected preview group instead
+moves by the same offset. Double-click a title to edit its wording and click beside a letter
+to place the caret. Each completed gesture is one undo step.
+
+`media_transform_ui`, `graphics_handles_ui` and `graphics_ui` exercise these gestures with
+synthetic projects. The engine's preview commands also validate clip, layer and numeric inputs.
+
 ## Localisation
 
 Edit > Language offers English, Japanese, Spanish, Brazilian Portuguese, Ukrainian, Simplified
