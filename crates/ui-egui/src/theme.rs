@@ -713,7 +713,7 @@ mod tests {
         let blue = Some([0x2d, 0x81, 0xff]);
         for kind in [ThemeKind::Dark, ThemeKind::Light] {
             let original = Tokens::for_kind(kind);
-            let chosen = original.clone().with_appearance(blue, false);
+            let chosen = original.with_appearance(blue, false);
             assert_ne!(chosen.accent, original.accent, "{kind:?}");
             assert_eq!(chosen.accent, SUITE_DARK.accent, "{kind:?}");
             assert_eq!(chosen.editing_accent(), SUITE_DARK.accent, "{kind:?}");
