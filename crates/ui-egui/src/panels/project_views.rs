@@ -927,7 +927,15 @@ fn bin_card(app: &mut FilmcraftApp, ui: &mut egui::Ui, r: Rect, b: &Bin, v: &Vie
     let nr = Rect::from_min_max(pos2(th.min.x, th.max.y + 2.0), pos2(th.max.x, th.max.y + 20.0));
     if !rename_field(app, ui, nr, None, Some(b.id.0), &v.prefix) {
         ui.painter().with_clip_rect(nr).text(pos2(th.min.x, th.max.y + 11.0), Align2::LEFT_CENTER, &b.name, Tokens::ui(f - 0.5), t.text);
-        ui.painter().text(pos2(th.max.x, th.max.y + 11.0), Align2::RIGHT_CENTER, tlf!("{n} items", n = n.len()), Tokens::ui(f - 1.5), t.text_dim);
+        let count_y = th.max.y + 29.0;
+        let count_r = Rect::from_min_max(pos2(th.min.x, count_y - 9.0), pos2(th.max.x, count_y + 9.0));
+        ui.painter().with_clip_rect(count_r).text(
+            pos2(th.max.x, count_y),
+            Align2::RIGHT_CENTER,
+            tlf!("{n} items", n = n.len()),
+            Tokens::ui(f - 1.5),
+            t.text_dim,
+        );
     }
     app.auto.add(&format!("{}.bin.{}", v.prefix, b.id.0), th, &b.name);
     accept_bin_drop(app, ui, th, b.id.0, actions);
@@ -951,13 +959,13 @@ pub fn icon_view(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, v: &View
     let Some(bin) = app.session.project.root.find_bin(v.bin).cloned() else { return };
     let size = v.icon_size;
     let th_h = size * 9.0 / 16.0;
-    let cell = vec2(size + 20.0, th_h + 34.0);
     let ids = icon_order(app, &bin, filter);
     let bins: Vec<Bin> = if filter.is_empty() {
         bin.children.iter().filter_map(|e| if let BinEntry::Bin(b) = e { Some(b.clone()) } else { None }).collect()
     } else {
         Vec::new()
     };
+    let cell = vec2(size + 20.0, th_h + 34.0 + if bins.is_empty() { 0.0 } else { 18.0 });
     let n = bins.len() + ids.len();
     egui::ScrollArea::vertical().id_salt((&v.prefix, "icon-scroll")).auto_shrink([false, false]).show(ui, |ui| {
         let bg = background(ui, v);
@@ -975,7 +983,8 @@ pub fn icon_view(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, v: &View
                 }
                 let r = Rect::from_min_size(pos2(row.min.x + 12.0 + k as f32 * cell.x, row.min.y + 8.0), vec2(size, th_h + 20.0));
                 if i < bins.len() {
-                    bin_card(app, ui, r, &bins[i], v, actions);
+                    let bin_r = Rect::from_min_size(r.min, vec2(size, th_h + 40.0));
+                    bin_card(app, ui, bin_r, &bins[i], v, actions);
                     continue;
                 }
                 let id = ids[i - bins.len()];
