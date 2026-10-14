@@ -352,7 +352,20 @@ fn web(args: &[String]) -> Result<(), String> {
         // Through rustup: `env!("CARGO")` names the current toolchain's own cargo
         // binary, which does not understand a `+nightly` argument.
         let mut b = Command::new("rustup");
-        b.args(["run", "nightly", "cargo", "build", "-Z", "build-std=std,panic_abort", "--target", "wasm32-unknown-unknown", "-p", "filmcraft-web", "--profile", profile]);
+        b.args([
+            "run",
+            "nightly",
+            "cargo",
+            "build",
+            "-Z",
+            "build-std=std,panic_abort",
+            "--target",
+            "wasm32-unknown-unknown",
+            "-p",
+            "filmcraft-web",
+            "--profile",
+            profile,
+        ]);
         b.env("CARGO_TARGET_DIR", &mt_target);
         let mut flags = std::env::var("CARGO_ENCODED_RUSTFLAGS").unwrap_or_default();
         if !flags.is_empty() {
@@ -375,7 +388,15 @@ fn web(args: &[String]) -> Result<(), String> {
         if !dev && Command::new("wasm-opt").arg("--version").output().is_ok() {
             let opt = mt_dir.join("filmcraft_web_opt.wasm");
             run(Command::new("wasm-opt")
-                .args(["-O2", "--enable-bulk-memory", "--enable-nontrapping-float-to-int", "--enable-sign-ext", "--enable-mutable-globals", "--enable-simd", "--enable-threads"])
+                .args([
+                    "-O2",
+                    "--enable-bulk-memory",
+                    "--enable-nontrapping-float-to-int",
+                    "--enable-sign-ext",
+                    "--enable-mutable-globals",
+                    "--enable-simd",
+                    "--enable-threads",
+                ])
                 .arg(&mt_bg)
                 .arg("-o")
                 .arg(&opt))?;
