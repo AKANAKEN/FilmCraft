@@ -65,7 +65,8 @@ pub fn file_url_to_path(url: &str) -> String {
         return url.to_string();
     }
     let rest = &url[7..];
-    let rest = if rest.len() >= 9 && rest[..9].eq_ignore_ascii_case("localhost") { &rest[9..] } else { rest };
+    // Through `get`: `rest[..9]` would panic when byte 9 is inside a multi-byte character.
+    let rest = if rest.get(..9).is_some_and(|p| p.eq_ignore_ascii_case("localhost")) { &rest[9..] } else { rest };
     let decoded = percent_decode(rest);
     // file:///C:/x -> C:/x
     if decoded.len() >= 3 && decoded.starts_with('/') && is_windows_abs(&decoded[1..]) {
@@ -690,6 +691,14 @@ mod tests {
             assert_eq!(file_url_to_path(&path_to_file_url(p, true)), p);
             assert_eq!(file_url_to_path(&path_to_file_url(p, false)), p);
         }
+    }
+
+    /// A `file://` URL whose ninth byte is inside a multi-byte character (a hostile import): the
+    /// `localhost` prefix check must not slice the character in half.
+    #[test]
+    fn file_url_with_a_multibyte_character_at_the_localhost_offset_does_not_panic() {
+        assert_eq!(file_url_to_path("file://12345678é"), "//12345678é");
+        assert_eq!(file_url_to_path("file://LOCALHOST/Users/me/a.mov"), "/Users/me/a.mov");
     }
 
     #[test]
