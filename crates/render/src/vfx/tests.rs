@@ -1245,3 +1245,22 @@ fn transform_shutter_uses_the_sequence_frame_rate_without_env() {
         assert!(delta(frame) > 1e-3, "frame {frame} moves but is sharp");
     }
 }
+
+/// Thin smoke over a green screen is mostly screen: measured against Premiere Pro on fire footage, a
+/// pixel with about half the screen's green lead stays about a third opaque, and turns a soft grey with
+/// the spill taken out instead of the olive the leftover green and red make.
+#[test]
+fn ultra_key_leaves_thin_smoke_soft_and_grey() {
+    let key = [0.0, 0.8, 0.012];
+    let smoke = [0.34, 0.7, 0.09];
+    let mut img = solid(2, 1, key);
+    let l = dec(smoke);
+    img.px[4..8].copy_from_slice(&[l[0], l[1], l[2], 1.0]);
+    let mut e = inst("ultra_key");
+    set(&mut e, "key_color", ParamValue::Color([key[0], key[1], key[2], 1.0]));
+    let o = run("ultra_key", &e, &img, &cx());
+    let s = enc_px(&o, 1, 0);
+    assert!(s[3] > 0.25 && s[3] < 0.5, "smoke alpha {s:?}");
+    assert!(s[1] <= s[0] + 0.02, "smoke keeps a green lead {s:?}");
+    assert!(s[0] - s[2] < 0.25, "smoke stays olive instead of grey {s:?}");
+}

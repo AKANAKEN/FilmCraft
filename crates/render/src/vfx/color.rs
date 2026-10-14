@@ -198,11 +198,11 @@ pub fn ultra_key(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
     let other = |v: [f32; 3]| (v[lead1] * weight[lead1]).max(v[lead2] * weight[lead2]);
     let key_lead = kc[dom] - other([kc[0], kc[1], kc[2]]);
     let by_difference = key_lead >= 0.12;
-    // a lead under a tenth of the key's own is noise (a warm grey leans a little green): not screen
-    let margin = 0.1 * key_lead;
-    let lead_share = |v: [f32; 3]| ((v[dom] - other(v) - margin) / (key_lead - margin).max(1e-6)).clamp(0.0, 1.0);
-    // the share of the key colour at which a pixel is all background; Tolerance lowers it
-    let full_share = 1.0 - 0.9 * tolerance;
+    let lead_share = |v: [f32; 3]| ((v[dom] - other(v)) / key_lead).clamp(0.0, 1.0);
+    // The share of the key colour at which a pixel is all background; Tolerance lowers it, 95 % at the
+    // default. Measured against Premiere Pro on fire and smoke shot on green, this keeps the long tail of
+    // thin smoke (a third of the screen's lead still leaves it about half opaque) instead of cutting it.
+    let full_share = (1.15 - 0.4 * tolerance).min(1.0);
     // matte
     let n = img.w * img.h;
     let mut alpha = vec![1.0f32; n];
@@ -258,19 +258,19 @@ pub fn ultra_key(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
     img.px.par_chunks_mut(4).zip(alpha.par_iter()).zip(edge_fg.par_iter()).for_each(|((p, &a), edge)| {
         let src_a = p[3];
         let mut v = enc(Image::unpremul([p[0], p[1], p[2], p[3]]));
+        // A partly transparent pixel keeps its own colour with the green spill taken out below, as in
+        // Premiere Pro: thin smoke turns a soft grey and the dense parts stay golden. Taking the whole
+        // key colour back out of the mix instead left an olive cast on everything thin.
         if let Some(f) = edge {
             v = *f;
-        } else if by_difference {
-            // take the key colour back out of the mix: p = a·foreground + (1 − a)·key
-            let share = (1.0 - lead_share(v)).clamp(0.05, 1.0);
-            v = [0, 1, 2].map(|c| ((v[c] - (1.0 - share) * kc[c]) / share).clamp(0.0, 1.0));
         }
         let (o1, o2) = (v[(dom + 1) % 3], v[(dom + 2) % 3]);
         let limit = o1.max(o2) * (1.0 - range) + (o1 + o2) * 0.5 * range;
         let excess = (v[dom] - limit).max(0.0);
         if excess > 0.0 && spill > 0.0 {
             let l0 = luma(v);
-            v[dom] -= excess * spill;
+            // Spill Suppression at its default of 50 already takes all of the excess out
+            v[dom] -= excess * (spill * 2.0).min(1.0);
             let l1 = luma(v);
             let lm = luma(v);
             v = v.map(|q| lm + (q - lm) * (1.0 - desat * (excess * 4.0).min(1.0)));
