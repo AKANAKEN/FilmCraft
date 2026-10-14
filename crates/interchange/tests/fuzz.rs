@@ -4,10 +4,8 @@
 //! `FILMCRAFT_FUZZ_ITERS=<n>` runs `n` mutations per seed instead of the default, for a deeper
 //! local run. Run it in a debug build too: only there does integer overflow panic.
 //!
-//! One known panic is left out by default: a `file://` URL whose byte 9 after the scheme falls
-//! inside a multi-byte character (`file:///Users/Jöran/…`) panics in `file_url_to_path`
-//! (`src/common.rs`), which an open pull request fixes separately (storytold/filmcraft#1609).
-//! `FILMCRAFT_FUZZ_URL_PANICS=1` counts it too; once that fix is in, drop [`known_url_panic`].
+//! Unicode file URLs are included: their former char-boundary panic is fixed alongside the
+//! time-arithmetic fixes, so no known panic is excluded.
 
 mod support;
 
@@ -139,19 +137,11 @@ fn install_hook() {
     });
 }
 
-/// The `file_url_to_path` char-boundary panic (storytold/filmcraft#1609), left out by default.
-fn known_url_panic(at: &str, msg: &str) -> bool {
-    std::env::var_os("FILMCRAFT_FUZZ_URL_PANICS").is_none()
-        && at.replace('\\', "/").ends_with("interchange/src/common.rs:68")
-        && msg.contains("is not a char boundary")
-}
-
 /// Run `f` on `iters` mutations of each seed under `catch_unwind`; fail with every distinct panic.
 fn never_panics(seeds: &[(String, Vec<u8>)], iters: usize, f: &dyn Fn(&str, &[u8])) {
     install_hook();
     let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
     let mut panics: Vec<(String, String)> = Vec::new();
-    let mut known = 0usize;
     for (name, seed) in seeds {
         for _ in 0..iters {
             let d = mutate(seed, &mut rng);
@@ -160,19 +150,12 @@ fn never_panics(seeds: &[(String, Vec<u8>)], iters: usize, f: &dyn Fn(&str, &[u8
             let at = PANIC_AT.with(|p| p.borrow_mut().take()).flatten().unwrap_or_default();
             if let Err(e) = r {
                 let msg = e.downcast_ref::<String>().cloned().or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default();
-                if known_url_panic(&at, &msg) {
-                    known += 1;
-                    continue;
-                }
                 let key = format!("{name}: {at}: {msg}");
                 if !panics.iter().any(|(k, _)| *k == key) {
                     panics.push((key, format!("{:?}", String::from_utf8_lossy(&d[..d.len().min(200)]))));
                 }
             }
         }
-    }
-    if known > 0 {
-        eprintln!("left out {known} known file-URL panics (storytold/filmcraft#1609)");
     }
     let report: Vec<String> = panics.iter().map(|(k, input)| format!("{k}\n    input: {input}")).collect();
     assert!(panics.is_empty(), "{} distinct panics:\n{}", panics.len(), report.join("\n"));

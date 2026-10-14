@@ -37,7 +37,7 @@ fn nominal_rate(timescale: u32, samples: &[Sample]) -> Option<FrameRate> {
     let mut durs: Vec<u32> = samples.iter().map(|s| s.duration).filter(|&d| d > 0).collect();
     durs.sort_unstable();
     let &median = durs.get(durs.len() / 2)?;
-    let near: Vec<f64> = durs.iter().filter(|&&d| d.abs_diff(median) * 4 <= median).map(|&d| f64::from(d)).collect();
+    let near: Vec<f64> = durs.iter().filter(|&&d| d.abs_diff(median) <= median / 4).map(|&d| f64::from(d)).collect();
     let mean = near.iter().sum::<f64>() / near.len().max(1) as f64;
     if mean <= 0.0 {
         return None;
@@ -798,6 +798,13 @@ mod tests {
     use super::*;
     use filmcraft_isobmff::{Brand, FourCc, Mp4Writer, SampleEntry, TrackConfig, WriteSample, WriterOptions};
     use filmcraft_media::FrameRequest;
+
+    #[test]
+    fn nominal_rate_ignores_extreme_duration_outliers_without_overflow() {
+        let sample = |duration| Sample { offset: 0, size: 0, dts: 0, pts: 0, duration, is_sync: true, description_index: 1 };
+        let samples = [sample(3000), sample(3000), sample(3000), sample(u32::MAX)];
+        assert_eq!(nominal_rate(90_000, &samples), Some(FrameRate::FPS_30));
+    }
 
     /// A one-frame 64×32 ProRes MOV (bright left half, dark right half) whose `tkhd` matrix is
     /// replaced by `matrix` — built here, no media files.

@@ -1549,10 +1549,28 @@ impl VideoEncoder for H264Encoder {
     }
 }
 
-/// Walk 4:2:0 chroma rows. A nested `par_iter` on the global pool deadlocks export: the
-/// overlap scope is already a worker, and its join never runs the render job (#1329, #1283).
+thread_local! {
+    static SERIAL_YUV_ROWS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Keep conversion on the encoding thread while the render pool may be occupied.
+pub(crate) struct SerialYuvRows(bool);
+
+impl SerialYuvRows {
+    pub(crate) fn enter() -> Self {
+        Self(SERIAL_YUV_ROWS.replace(true))
+    }
+}
+
+impl Drop for SerialYuvRows {
+    fn drop(&mut self) {
+        SERIAL_YUV_ROWS.set(self.0);
+    }
+}
+
+/// Walk 4:2:0 chroma rows without joining the render pool from an encoder or worker (#1329).
 fn for_yuv_rows(y: &mut [u8], u: &mut [u8], v: &mut [u8], w: usize, cw: usize, f: &(impl Fn(usize, &mut [u8], &mut [u8], &mut [u8]) + Sync)) {
-    if rayon::current_thread_index().is_some() {
+    if SERIAL_YUV_ROWS.get() || rayon::current_thread_index().is_some() {
         let (mut y, mut u, mut v) = (y, u, v);
         let mut cy = 0usize;
         while !u.is_empty() && !y.is_empty() {
@@ -2041,7 +2059,7 @@ mod hdr_tests;
 
 #[cfg(test)]
 mod yuv_pool_tests {
-    use super::rgba_to_yuv420_8;
+    use super::{rgba_to_yuv420_8, rgbf_to_yuv420_8};
     use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
     /// The overlap scope is already a Rayon worker. Conversion must finish there instead of
@@ -2060,5 +2078,28 @@ mod yuv_pool_tests {
         assert_eq!(y.len(), w * h);
         assert_eq!(u.len(), 24 * 10);
         assert!(y.iter().any(|&p| p > 16));
+    }
+
+    #[test]
+    fn worker_conversions_match_parallel_rows_for_odd_and_even_dimensions() {
+        let pool = rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
+        for (w, h) in [(3, 5), (48, 20)] {
+            let rgba: Vec<u8> = (0..w * h * 4).map(|i| (i * 37 % 256) as u8).collect();
+            let rgb: Vec<f32> = (0..w * h * 3).map(|i| (i * 17 % 256) as f32 / 255.0).collect();
+            for floating in [false, true] {
+                let convert = || {
+                    let (mut y, mut u, mut v) = (Vec::new(), Vec::new(), Vec::new());
+                    if floating {
+                        rgbf_to_yuv420_8(&rgb, w, h, 0.2126, 0.0722, &mut y, &mut u, &mut v);
+                    } else {
+                        rgba_to_yuv420_8(&rgba, w, h, &mut y, &mut u, &mut v);
+                    }
+                    (y, u, v)
+                };
+                let parallel = convert();
+                let worker = pool.install(convert);
+                assert_eq!(worker, parallel, "{w}x{h}, floating={floating}");
+            }
+        }
     }
 }
