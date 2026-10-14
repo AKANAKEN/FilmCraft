@@ -19,6 +19,17 @@ use crate::playback::{self, Bench, Display, load_avg, ms, pct};
 fn gpu_export_frame_renderer_factory() -> Option<Box<dyn filmcraft_export::FrameRenderer>> {
     struct R(filmcraft_gpu::ExportRenderer);
     impl filmcraft_export::FrameRenderer for R {
+        fn render_rgba8(
+            &mut self,
+            project: &filmcraft_project::Project,
+            seq: ItemId,
+            t: Tick,
+            opts: filmcraft_render::RenderOptions,
+            sources: &dyn filmcraft_render::SourceProvider,
+        ) -> Option<(u32, u32, Vec<u8>)> {
+            self.0.render_rgba8(project, seq, t, opts, sources)
+        }
+
         fn render(
             &mut self,
             project: &filmcraft_project::Project,

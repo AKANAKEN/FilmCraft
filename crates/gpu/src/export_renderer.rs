@@ -153,6 +153,25 @@ impl ExportRenderer {
             FramePlan::Composite { .. } => None,
         }
     }
+
+    /// Composite a frame and return opaque SDR RGBA8 directly from the GPU. CPU-only plans and
+    /// working-output (HDR) renders decline so the caller can use the reference float path.
+    pub fn render_rgba8(&mut self, project: &Project, seq: ItemId, t: Tick, opts: RenderOptions, sources: &dyn SourceProvider) -> Option<(u32, u32, Vec<u8>)> {
+        if opts.working_output || device_failed() {
+            return None;
+        }
+        let plan = plan_frame(project, seq, t, opts, sources);
+        if !matches!(&plan, FramePlan::Layers { .. }) {
+            return None;
+        }
+        let prep = prepare(&plan);
+        let (w, h, rgba) = self.compositor.render_export_rgba8_prepared(&plan, Some(&prep))?;
+        if device_failed() {
+            return None;
+        }
+        timing::add_frame();
+        Some((w, h, rgba))
+    }
 }
 
 #[cfg(test)]
@@ -205,7 +224,8 @@ mod tests {
         let seq =
             p.new_sequence("s", SequenceSettings { width: 320, height: 180, frame_rate: filmcraft_time::FrameRate::FPS_24, ..Default::default() }, 1, 1, None);
         let r = filmcraft_time::FrameRate::FPS_24;
-        let _v = p.make_track_item(red, TrackKind::Video, Tick::ZERO, TimeRange::new(Tick::ZERO, r.tick_of(24)), r).unwrap();
+        let v = p.make_track_item(red, TrackKind::Video, Tick::ZERO, TimeRange::new(Tick::ZERO, r.tick_of(24)), r).unwrap();
+        p.sequence_mut(seq).unwrap().video_tracks[0].items.push(v);
         let a = p.make_track_item(t, TrackKind::Audio, Tick::ZERO, TimeRange::new(Tick::ZERO, r.tick_of(24)), r).unwrap();
         if transform {
             // Motion + opacity as fixed effects (the way the golden transform scene does it).
@@ -302,6 +322,21 @@ mod tests {
         let gpu = R(r).render(&p, seq, Tick::ZERO, RenderOptions::default(), &m).expect("rendered");
         let cpu = filmcraft_render::render_sequence(&p, seq, Tick::ZERO, RenderOptions::default(), &m);
         assert_parity(&cpu, &gpu, "frame renderer");
+    }
+
+    #[test]
+    fn packed_export_matches_the_float_export_conversion_exactly() {
+        let Some(mut r) = ExportRenderer::new() else {
+            eprintln!("SKIPPED (packed gpu export parity): no adapter");
+            return;
+        };
+        let (p, seq, m) = project(true);
+        let t = filmcraft_time::FrameRate::FPS_24.tick_of(10);
+        let opts = RenderOptions::default();
+        let packed = r.render_rgba8(&p, seq, t, opts, &m).expect("packed GPU frame");
+        let float = r.render(&p, seq, t, opts, &m).expect("float GPU frame");
+        assert_eq!((packed.0 as usize, packed.1 as usize), (float.w, float.h));
+        assert_eq!(packed.2, float.over_black_rgba8());
     }
 
     #[test]

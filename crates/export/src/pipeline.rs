@@ -14,6 +14,15 @@ use rayon::prelude::*;
 use crate::settings::{ExportEffects, Placement, Scaling, TextOverlay};
 use crate::{ExportError, ExportSettings, FrameRenderer, GpuRendering, Result, build_frame_renderer, note_gpu_fallback, note_gpu_frame};
 
+/// Packed output can bypass only an identity placement and absent video export effects.
+fn packed_eligible(hdr: bool, alpha: bool, effects: &ExportEffects, geom: Geometry, rendered: (u32, u32)) -> bool {
+    !hdr && !alpha
+        && !effects.any_video()
+        && rendered == (geom.w, geom.h)
+        && geom.offset == (0, 0)
+        && geom.content.is_none_or(|size| size == (rendered.0 as usize, rendered.1 as usize))
+}
+
 /// Where the rendered picture lands in the output frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Geometry {
@@ -122,6 +131,7 @@ pub(crate) struct Pipeline {
     pub hdr_out: bool,
     /// Keep straight alpha in the RGBA8 output instead of flattening over black.
     alpha: bool,
+    packed_sdr: bool,
     out_tf: Option<filmcraft_color::OutputTransform>,
     effects: ExportEffects,
     overlay: Option<Image>,
@@ -187,7 +197,9 @@ impl Pipeline {
             }
             RendererPool::new(list)
         };
+        let packed_sdr = packed_eligible(hdr_out, settings.keeps_alpha(), &effects, geom, (w, h));
         Ok(Pipeline {
+            packed_sdr,
             renderer,
             seq_rate: q.settings.frame_rate,
             start_tc: q.start_timecode,
@@ -223,14 +235,26 @@ impl Pipeline {
                 let asked = web_time::Instant::now();
                 pool.with(|r| {
                     crate::note_lock_wait(asked.elapsed());
-                    r.render(&self.project, self.seq, t, self.opts, sources)
+                    if self.packed_sdr
+                        && let Some((w, h, rgba)) = r.render_rgba8(&self.project, self.seq, t, self.opts, sources)
+                    {
+                        let expected = (self.w as usize).checked_mul(self.h as usize).and_then(|n| n.checked_mul(4));
+                        if (w, h) == (self.w, self.h) && expected == Some(rgba.len()) {
+                            return Some(Ok(rgba));
+                        }
+                    }
+                    r.render(&self.project, self.seq, t, self.opts, sources).map(Err)
                 })
                 .flatten()
             }
             None => None,
         };
         let img = match gpu {
-            Some(img) => {
+            Some(Ok(rgba)) => {
+                note_gpu_frame();
+                return (rgba, Vec::new());
+            }
+            Some(Err(img)) => {
                 note_gpu_frame();
                 img
             }
@@ -481,4 +505,66 @@ fn limit_px(c: &mut [f32; 3], lo: f32, hi: f32) {
         c.iter_mut().for_each(|v| *v += d);
     }
     c.iter_mut().for_each(|v| *v = v.clamp(0.0, hi.max(lo)));
+}
+
+#[cfg(test)]
+mod packed_tests {
+    use super::*;
+
+    #[test]
+    fn malformed_packed_output_falls_back_to_the_linear_renderer() {
+        struct InvalidPacked;
+        impl FrameRenderer for InvalidPacked {
+            fn render_rgba8(
+                &mut self,
+                _: &Project,
+                _: ItemId,
+                _: filmcraft_time::Tick,
+                _: RenderOptions,
+                _: &dyn SourceProvider,
+            ) -> Option<(u32, u32, Vec<u8>)> {
+                Some((16, 8, vec![0; 3]))
+            }
+            fn render(&mut self, _: &Project, _: ItemId, _: filmcraft_time::Tick, _: RenderOptions, _: &dyn SourceProvider) -> Option<Image> {
+                Some(Image::new(16, 8))
+            }
+        }
+        let mut project = Project::new("packed-fallback");
+        let seq = project.new_sequence("s", filmcraft_project::SequenceSettings { width: 16, height: 8, ..Default::default() }, 1, 1, None);
+        let mut pipe = Pipeline::new(Arc::new(project), seq, &ExportSettings::default(), false).expect("pipeline");
+        pipe.renderer = RendererPool::new(vec![Box::new(InvalidPacked)]);
+        assert!(pipe.packed_sdr);
+        let (rgba, hdr) = pipe.frame(0, &filmcraft_render::SourceMap::default());
+        assert!(hdr.is_empty());
+        assert_eq!(rgba, [0, 0, 0, 255].repeat(16 * 8));
+    }
+
+    #[test]
+    fn packed_path_preserves_quality_and_geometry_requirements() {
+        let geom = Geometry { w: 1920, h: 1080, render_scale: 1.0, content: None, offset: (0, 0) };
+        let fx = ExportEffects::default();
+        let eligible = |hdr, alpha, fx: &ExportEffects, geom| packed_eligible(hdr, alpha, fx, geom, (1920, 1080));
+        assert!(eligible(false, false, &fx, geom));
+        assert!(eligible(false, false, &fx, Geometry { content: Some((1920, 1080)), ..geom }));
+        assert!(!eligible(true, false, &fx, geom));
+        assert!(!eligible(false, true, &fx, geom));
+        assert!(!eligible(false, false, &fx, Geometry { offset: (1, 0), ..geom }));
+        assert!(!eligible(false, false, &fx, Geometry { content: Some((1919, 1080)), ..geom }));
+        assert!(!eligible(false, false, &fx, Geometry { w: 1919, ..geom }));
+        let mut fx = fx;
+        fx.image_overlay.enabled = true;
+        assert!(!eligible(false, false, &fx, geom));
+        fx.image_overlay.enabled = false;
+        fx.name_overlay.enabled = true;
+        assert!(!eligible(false, false, &fx, geom));
+        fx.name_overlay.enabled = false;
+        fx.timecode_overlay.enabled = true;
+        assert!(!eligible(false, false, &fx, geom));
+        fx.timecode_overlay.enabled = false;
+        fx.video_limiter.enabled = true;
+        assert!(!eligible(false, false, &fx, geom));
+        fx.video_limiter.enabled = false;
+        fx.loudness.enabled = true;
+        assert!(eligible(false, false, &fx, geom));
+    }
 }
