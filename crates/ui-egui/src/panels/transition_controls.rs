@@ -279,7 +279,7 @@ fn timeline(app: &mut FilmcraftApp, ui: &mut egui::Ui, lane: Rect, id: Transitio
     let (x0, x1) = (x_of(lane, v, x.start), x_of(lane, v, x.end()));
     let span = Rect::from_min_max(pos2(x0, row_x.min.y), pos2(x1.max(x0 + 1.0), row_x.max.y));
     painter.rect_filled(span, 0.0, egui::Color32::from_black_alpha(90));
-    painter.rect_stroke(span, 0.0, Stroke::new(2.0, t.accent), egui::StrokeKind::Inside);
+    painter.rect_stroke(span, 0.0, Stroke::new(2.0, t.editing_accent()), egui::StrokeKind::Inside);
     let name = x.effect.def().map_or(x.effect.effect.as_str(), |d| d.name);
     if span.width() > 30.0 {
         painter.with_clip_rect(span.shrink(2.0).intersect(lane)).text(

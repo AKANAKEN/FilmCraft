@@ -158,6 +158,15 @@ impl Tokens {
         if self.kind == ThemeKind::Medium && self.accent == SUITE_DARK.accent { Color32::from_rgb(0x2f, 0x6b, 0xdf) } else { self.accent }
     }
 
+    /// Existing keyframe and curve highlight, separate from shared UI hot text.
+    pub fn editing_hot_text(&self) -> Color32 {
+        if self.kind == ThemeKind::Medium && self.accent == SUITE_DARK.accent && self.hot_text == SUITE_DARK.accent_hover {
+            Color32::from_rgb(0x40, 0x96, 0xf3)
+        } else {
+            self.hot_text
+        }
+    }
+
     /// Foreground for a filled accent control in the standard dark palette.
     pub fn on_accent(&self) -> Color32 {
         if self.kind == ThemeKind::Medium && self.accent == SUITE_DARK.accent { SUITE_DARK.on_accent } else { Color32::WHITE }
@@ -675,6 +684,7 @@ mod tests {
         assert_eq!(t.row_selected, Color32::from_rgb(0x20, 0x3b, 0x65));
         assert_eq!(t.on_accent(), Color32::from_rgb(0x06, 0x06, 0x07));
         assert_eq!(t.editing_accent(), Color32::from_rgb(0x2f, 0x6b, 0xdf));
+        assert_eq!(t.editing_hot_text(), Color32::from_rgb(0x40, 0x96, 0xf3));
         assert_eq!(
             t.with_appearance(Some([0x2f, 0x6b, 0xdf]), false).accent,
             t.accent,
@@ -725,6 +735,8 @@ mod tests {
         let pink = Color32::from_rgb(0xe0, 0x45, 0x7b);
         let t = Tokens::for_kind(ThemeKind::Medium).with_appearance(Some([0xe0, 0x45, 0x7b]), false);
         assert_eq!(t.on_accent(), Color32::WHITE, "a custom highlight retains its existing button foreground");
+        assert_eq!(t.editing_accent(), Color32::from_rgb(0xe0, 0x45, 0x7b));
+        assert_eq!(t.editing_hot_text(), t.hot_text);
         let hue = |c: Color32| egui::ecolor::HsvaGamma::from(c).h;
         for (c, was) in highlight_blues(&t).into_iter().zip(highlight_blues(&Tokens::for_kind(ThemeKind::Medium))) {
             assert_ne!(c, was);
