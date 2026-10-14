@@ -553,6 +553,59 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(Value::Object(out))
 }
 
+/// Resolve `file.importFolder {bin}` up front (import itself creates several bins): an invalid
+/// target fails the whole command rather than leaving a half-built folder tree.
+fn valid_bin(s: &Session, bin: Option<u64>) -> Option<u64> {
+    bin.filter(|b| s.project.root.find_bin(filmcraft_project::BinId(*b)).is_some())
+}
+
+/// Import mixed file and folder paths: a folder becomes a bin named after it (in `bin`) and
+/// each sub-folder a bin inside that; files are imported as usual. Returns the `file.import`
+/// shape, plus the new `bins`.
+pub(crate) fn import_paths(s: &mut Session, paths: &[String], bin: Option<u64>) -> Result<Value> {
+    let parent = valid_bin(s, bin);
+    if paths.is_empty() {
+        return Err(bad("file.importFolder", "need `paths`"));
+    }
+    let mut files = Vec::new();
+    let mut folders = Vec::new();
+    let mut empty = Vec::new();
+    let mut budget = FOLDER_IMPORT_MAX_FOLDERS;
+    for path in paths {
+        let owned = path.to_string();
+        if matches!(s.services.list_entries(&owned), Some(Ok(_))) && kind_of(&owned).is_none() {
+            match walk_folder(&*s.services, &owned, 0, &mut budget) {
+                Some(f) => folders.push(f),
+                None => empty.push(owned),
+            }
+        } else {
+            files.push(owned);
+        }
+    }
+    if folders.is_empty() {
+        if files.is_empty() && !empty.is_empty() {
+            return Err(bad("file.importFolder", format!("no media files in {}", empty.join(", "))));
+        }
+        if files.is_empty() {
+            return Err(bad("file.importFolder", "need `paths`"));
+        }
+        let mut q = json!({"paths": files, "imageSequence": false});
+        if let Some(b) = bin {
+            q["bin"] = json!(b);
+        }
+        return s.execute("file.import", q);
+    }
+    let mut out = serde_json::Map::new();
+    merge_import(&mut out, json!({"items": [], "errors": empty.iter().map(|e| format!("{e}: no media files")).collect::<Vec<_>>(), "bins": []}));
+    if !files.is_empty() {
+        import_into(s, &files, parent, &mut out);
+    }
+    for f in &folders {
+        import_folder(s, f, parent, &mut out)?;
+    }
+    Ok(Value::Object(out))
+}
+
 /// The project item that already references a file.
 pub fn item_for_path(s: &Session, path: &str) -> Option<ItemId> {
     s.project
@@ -662,6 +715,7 @@ fn probe_cmd(s: &mut Session, p: &Value) -> Result<Value> {
 
 pub(crate) fn commands() -> Vec<CommandSpec> {
     let c = |id, label, params, run| CommandSpec { id, label, menu: &[], shortcut: None, params, enabled: always, run, journal: true };
+    let cmd = |id, label, menu, shortcut, params, run| CommandSpec { id, label, menu, shortcut, params, enabled: always, run, journal: true };
     let q = |id, label, params, run| CommandSpec { id, label, menu: &[], shortcut: None, params, enabled: always, run, journal: false };
     vec![
         q("mediaBrowser.roots", "Media Browser Locations", "{}", roots),
@@ -693,6 +747,11 @@ pub(crate) fn commands() -> Vec<CommandSpec> {
             journal: true,
         },
         q("mediaBrowser.probe", "Media File Properties", r#"{"path":str}"#, probe_cmd),
+        cmd("file.importFolder", "Import Folder…", &["File"], None, r#"{"paths":[str],"bin":binId?}"#, |s, p| {
+            let paths: Vec<String> =
+                p.get("paths").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
+            import_paths(s, &paths, u64_p(p, "bin"))
+        }),
     ]
 }
 

@@ -1246,6 +1246,8 @@ mod locked_clip_edits_tests;
 #[cfg(test)]
 mod masks_tests;
 #[cfg(test)]
+mod media_browser_import_folder_tests;
+#[cfg(test)]
 mod media_browser_tests;
 #[cfg(test)]
 mod media_test_util;

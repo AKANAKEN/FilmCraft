@@ -369,6 +369,9 @@
 	Zoom to Sequence	シーケンス全体にズーム
 	Home	ホーム
 	Import	読み込み
+	Import Folder…	フォルダを読み込み…
+	Browse folders…	フォルダを参照…
+	Import a folder and its sub-folders as bins	フォルダとそのサブフォルダをビンとして読み込む
 	{name} - Edited	{name} - 編集済み
 	Full screen	全画面表示
 	Volume	音量
