@@ -22,12 +22,6 @@ pub mod timing {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::Duration;
 
-    static UPLOAD_NS: AtomicU64 = AtomicU64::new(0);
-    static UPLOAD_BYTES: AtomicU64 = AtomicU64::new(0);
-    static PLAN_NS: AtomicU64 = AtomicU64::new(0);
-    static PREPARE_NS: AtomicU64 = AtomicU64::new(0);
-    static CPU_COMPOSITES: AtomicU64 = AtomicU64::new(0);
-    static CPU_FRAMES: AtomicU64 = AtomicU64::new(0);
     static SUBMIT_NS: AtomicU64 = AtomicU64::new(0);
     static MAP_WAIT_NS: AtomicU64 = AtomicU64::new(0);
     static CONVERT_NS: AtomicU64 = AtomicU64::new(0);
@@ -38,17 +32,6 @@ pub mod timing {
     pub struct GpuTimings {
         /// Recording and submitting the frame's commands.
         pub submit: Duration,
-        /// Host allocation/staging of texture uploads (included in submit).
-        pub upload: Duration,
-        pub uploaded_bytes: u64,
-        /// Planning, including decoding and CPU fallback rendering.
-        pub plan: Duration,
-        /// CPU packing of input textures before upload.
-        pub prepare: Duration,
-        /// Whole-frame CPU images returned by the planner.
-        pub cpu_frames: u64,
-        /// Composite plans executed on CPU because the GPU effect stage was unavailable.
-        pub cpu_composites: u64,
         /// Waiting for the GPU and the staging buffer's mapping.
         pub map_wait: Duration,
         /// Half float → f32 conversion of the read-back pixels.
@@ -59,25 +42,6 @@ pub mod timing {
 
     fn add(counter: &AtomicU64, d: Duration) {
         counter.fetch_add(u64::try_from(d.as_nanos()).unwrap_or(u64::MAX), Ordering::Relaxed);
-    }
-
-    pub(crate) fn add_upload(d: Duration, bytes: u64) {
-        add(&UPLOAD_NS, d);
-        UPLOAD_BYTES.fetch_add(bytes, Ordering::Relaxed);
-    }
-
-    pub(crate) fn add_plan(d: Duration) {
-        add(&PLAN_NS, d);
-    }
-    pub(crate) fn add_prepare(d: Duration) {
-        add(&PREPARE_NS, d);
-    }
-    pub(crate) fn add_cpu_composite() {
-        CPU_COMPOSITES.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub(crate) fn add_cpu_frame() {
-        CPU_FRAMES.fetch_add(1, Ordering::Relaxed);
     }
 
     pub(crate) fn add_submit(d: Duration) {
@@ -98,22 +62,11 @@ pub mod timing {
 
     pub fn get() -> GpuTimings {
         let d = |c: &AtomicU64| Duration::from_nanos(c.load(Ordering::Relaxed));
-        GpuTimings {
-            upload: d(&UPLOAD_NS),
-            uploaded_bytes: UPLOAD_BYTES.load(Ordering::Relaxed),
-            plan: d(&PLAN_NS),
-            prepare: d(&PREPARE_NS),
-            cpu_frames: CPU_FRAMES.load(Ordering::Relaxed),
-            cpu_composites: CPU_COMPOSITES.load(Ordering::Relaxed),
-            submit: d(&SUBMIT_NS),
-            map_wait: d(&MAP_WAIT_NS),
-            convert: d(&CONVERT_NS),
-            frames: FRAMES.load(Ordering::Relaxed),
-        }
+        GpuTimings { submit: d(&SUBMIT_NS), map_wait: d(&MAP_WAIT_NS), convert: d(&CONVERT_NS), frames: FRAMES.load(Ordering::Relaxed) }
     }
 
     pub fn reset() {
-        for c in [&CPU_COMPOSITES, &UPLOAD_NS, &UPLOAD_BYTES, &PLAN_NS, &PREPARE_NS, &CPU_FRAMES, &SUBMIT_NS, &MAP_WAIT_NS, &CONVERT_NS, &FRAMES] {
+        for c in [&SUBMIT_NS, &MAP_WAIT_NS, &CONVERT_NS, &FRAMES] {
             c.store(0, Ordering::Relaxed);
         }
     }
@@ -135,15 +88,6 @@ fn device_failed() -> bool {
     DEVICE_FAILED.load(std::sync::atomic::Ordering::SeqCst)
 }
 
-fn export_instance(backends: wgpu::Backends) -> Option<wgpu::Instance> {
-    // Instance::default panics when no backend is compiled for this platform.
-    // Unsupported targets must keep the ordinary CPU export fallback instead.
-    if backends.is_empty() {
-        return None;
-    }
-    Some(wgpu::Instance::default())
-}
-
 pub struct ExportRenderer {
     _instance: wgpu::Instance,
     #[expect(dead_code, reason = "kept for future frame-accuracy flows (readback fences)")]
@@ -161,7 +105,13 @@ impl ExportRenderer {
         static SHARED: std::sync::OnceLock<Option<(wgpu::Instance, wgpu::Device, wgpu::Queue)>> = std::sync::OnceLock::new();
         let (instance, device, queue) = SHARED
             .get_or_init(|| {
-                let instance = export_instance(wgpu::Instance::enabled_backend_features())?;
+                // A build without a wgpu backend for this platform (`cargo build -p filmcraft-cli`
+                // alone: this crate asks for none) has no GPU to offer, and `Instance::default()`
+                // panics there.
+                if wgpu::Instance::enabled_backend_features().is_empty() {
+                    return None;
+                }
+                let instance = wgpu::Instance::default();
                 let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
                 let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()?;
                 // wgpu's default handler panics on a validation or out-of-memory error; log it and
@@ -182,27 +132,16 @@ impl ExportRenderer {
     /// One frame as `render_sequence` would return it (premultiplied linear-light RGBA at the
     /// render size), or `None` when this frame must go to the CPU renderer.
     pub fn render(&mut self, project: &Project, seq: ItemId, t: Tick, opts: RenderOptions, sources: &dyn SourceProvider) -> Option<Image> {
-        let started = std::time::Instant::now();
         let plan = plan_frame(project, seq, t, opts, sources);
-        timing::add_plan(started.elapsed());
-        match plan {
+        match &plan {
             // Already the CPU image: return it unchanged instead of rendering it twice.
-            FramePlan::Image(img) => {
-                timing::add_cpu_frame();
-                Some(img)
-            }
-            ref layers @ (FramePlan::Layers { .. } | FramePlan::Composite { .. }) => {
+            FramePlan::Image(img) => Some(img.clone()),
+            FramePlan::Layers { .. } => {
                 if device_failed() {
                     return None;
                 }
-                let started = std::time::Instant::now();
-                let prep = prepare(layers);
-                timing::add_prepare(started.elapsed());
-                let cpu_before = self.compositor.cpu_transitions;
-                let (w, h, px) = self.compositor.render_export_prepared(layers, Some(&prep))?;
-                if self.compositor.cpu_transitions != cpu_before {
-                    timing::add_cpu_composite();
-                }
+                let prep = prepare(&plan);
+                let (w, h, px) = self.compositor.render_export_prepared(&plan, Some(&prep))?;
                 // an error reported while this frame was drawn leaves its pixels untrusted
                 if device_failed() {
                     return None;
@@ -210,6 +149,8 @@ impl ExportRenderer {
                 timing::add_frame();
                 Some(Image { w: w as usize, h: h as usize, px })
             }
+            // Transitions: the export path leaves them to the CPU reference renderer.
+            FramePlan::Composite { .. } => None,
         }
     }
 }
@@ -227,11 +168,6 @@ mod tests {
     use std::sync::Arc;
 
     const EPS: f32 = 1e-4;
-
-    #[test]
-    fn no_compiled_backend_does_not_panic() {
-        assert!(export_instance(wgpu::Backends::empty()).is_none());
-    }
 
     /// A solid colour generator at 320×180 plus a tone generator (mirrors the export tests'
     /// fixture-free project helper).

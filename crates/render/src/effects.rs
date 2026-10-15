@@ -29,6 +29,8 @@ pub struct FxCtx<'a> {
     /// The clip's surroundings (other frames, other tracks, sequence geometry) for temporal,
     /// track-reading and reframing effects; `None` in isolated tests and adjustment layers.
     pub env: Option<&'a dyn crate::vfx::FxEnv>,
+    /// Sequence frame rate (shutter-angle motion blur); also known where `env` is `None`.
+    pub frame_rate: f64,
     /// The sequence's working colour space: Lumetri grades HDR (PQ / HLG) working spaces in their
     /// own signal, normalised to HDR White ([`filmcraft_color::GradeSpace`]).
     pub working: filmcraft_color::WorkingSpace,
@@ -111,11 +113,6 @@ fn median_radius(radius: f32, px_scale: f32, longest_side: usize) -> isize {
 }
 
 pub fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
-    let _timing = crate::timing::start(match e.effect.as_str() {
-        "gaussian_blur" | "fast_blur" => crate::timing::Stage::Blur,
-        "lumetri" => crate::timing::Stage::Lumetri,
-        _ => crate::timing::Stage::OtherEffect,
-    });
     if !e.enabled || img.w == 0 || img.h == 0 {
         return;
     }
@@ -939,6 +936,7 @@ mod tests {
             clip_name: "x",
             project: None,
             env: None,
+            frame_rate: 24.0,
             working: filmcraft_color::WorkingSpace::Rec709,
         }
     }
@@ -1534,6 +1532,7 @@ mod lumetri_cpu_parity_tests {
             clip_name: "",
             project: None,
             env: None,
+            frame_rate: 24.0,
             working: filmcraft_color::WorkingSpace::Rec709,
         };
 
@@ -1573,6 +1572,7 @@ mod lumetri_cpu_parity_tests {
             clip_name: "",
             project: None,
             env: None,
+            frame_rate: 24.0,
             working: filmcraft_color::WorkingSpace::Rec709,
         };
         let render = |roundness: f64| {

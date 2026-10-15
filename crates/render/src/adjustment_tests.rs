@@ -157,6 +157,26 @@ fn motion_and_masks_restrict_the_region() {
 }
 
 #[test]
+fn a_transform_replaces_the_picture_below() {
+    // Premiere: Transform on an adjustment layer moves the composite below; it is not a copy
+    // drawn over the untouched original (#1524).
+    let mut s = scene(2);
+    let red = matte(&mut s.p, &mut s.map, [1.0, 0.0, 0.0, 1.0]);
+    place(&mut s.p, s.seq, 0, red);
+    let adj = adjustment(&mut s.p, s.seq, 1);
+    fx(&mut s, adj, "transform");
+    let tf = clip(&mut s, adj).effects.iter_mut().find(|e| e.effect == "transform").unwrap();
+    tf.params.get_mut("scale_height").unwrap().value = ParamValue::Float(50.0);
+    let img = render(&s);
+    assert!(near(img.get(160, 90), [1.0, 0.0, 0.0], 1e-4), "{:?}", img.get(160, 90));
+    assert_eq!(img.get(10, 10), [0.0; 4], "the original is gone outside the scaled picture");
+    // at 50 % opacity: half the original, half the (empty) transformed picture
+    clip(&mut s, adj).effect_mut("opacity").unwrap().params.get_mut("opacity").unwrap().value = ParamValue::Float(50.0);
+    let c = render(&s).get(10, 10);
+    assert!((c[0] - 0.5).abs() < 1e-3 && (c[3] - 0.5).abs() < 1e-3, "{c:?}");
+}
+
+#[test]
 fn nested_adjustment_layers_stay_in_their_sequence() {
     let mut s = scene(2);
     let red = matte(&mut s.p, &mut s.map, [1.0, 0.0, 0.0, 1.0]);
@@ -184,166 +204,121 @@ fn nested_adjustment_layers_stay_in_their_sequence() {
     };
     assert_eq!(img.get(5, 5), plain.get(5, 5));
 }
-#[test]
-fn full_frame_faded_print_plans_adjustment_and_preserves_alpha() {
-    for alpha in [0.0, 0.4, 1.0] {
-        for opacity in [0.0, 25.0, 100.0] {
-            let mut s = scene(3);
-            let color = matte(&mut s.p, &mut s.map, [0.2, 0.5, 0.8, alpha]);
-            place(&mut s.p, s.seq, 0, color);
-            let adj = adjustment(&mut s.p, s.seq, 1);
-            let e = crate::lumetri_presets::find("Faded Print").unwrap().instance();
-            clip(&mut s, adj).effects.insert(0, e);
-            clip(&mut s, adj).effect_mut("opacity").unwrap().param_mut("opacity").unwrap().value = ParamValue::Float(opacity);
-            let p = crate::plan::plan_frame(&s.p, s.seq, R.tick_of(12), RenderOptions::default(), &s.map);
-            assert!(
-                matches!(&p, crate::plan::FramePlan::Composite { steps, .. } if steps.iter().any(|s| matches!(s, crate::plan::PlanStep::Adjustment { .. })))
-            );
-            let cpu = render(&s);
-            let planned = crate::plan::execute_cpu(&p);
-            let max = cpu.px.iter().zip(&planned.px).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max);
-            assert!(max < 1e-5, "alpha {alpha} opacity {opacity}: {max}");
-        }
-    }
-}
 
 #[test]
-fn unsupported_adjustments_keep_cpu_fallback() {
+fn transform_shutter_on_an_adjustment_layer_spans_one_sequence_frame() {
+    // A 60 fps sequence: at 360° the shutter is one 60 fps frame, so the frames just outside
+    // the move stay sharp (they were blurred with a 24 fps shutter, #1088).
+    use filmcraft_project::{Interpolation, Keyframe};
+    let r60 = FrameRate::FPS_60;
     let mut s = scene(2);
-    let color = matte(&mut s.p, &mut s.map, [0.2, 0.5, 0.8, 1.0]);
-    place(&mut s.p, s.seq, 0, color);
+    s.p.sequence_mut(s.seq).unwrap().settings.frame_rate = r60;
+    let red = matte(&mut s.p, &mut s.map, [1.0, 0.0, 0.0, 1.0]);
+    let below = place(&mut s.p, s.seq, 0, red);
+    clip(&mut s, below).effect_mut("motion").unwrap().params.get_mut("scale").unwrap().value = ParamValue::Float(25.0);
     let adj = adjustment(&mut s.p, s.seq, 1);
-    fx(&mut s, adj, "lumetri");
-    clip(&mut s, adj).effect_mut("lumetri").unwrap().param_mut("look").unwrap().value = ParamValue::Choice(4);
-    let p = crate::plan::plan_frame(&s.p, s.seq, R.tick_of(12), RenderOptions::default(), &s.map);
-    assert!(matches!(p, crate::plan::FramePlan::Image(_)));
-    clip(&mut s, adj).effect_mut("lumetri").unwrap().param_mut("look").unwrap().value = ParamValue::Choice(0);
-    clip(&mut s, adj).effect_mut("motion").unwrap().param_mut("scale").unwrap().value = ParamValue::Float(50.0);
-    let p = crate::plan::plan_frame(&s.p, s.seq, R.tick_of(12), RenderOptions::default(), &s.map);
-    assert!(matches!(p, crate::plan::FramePlan::Image(_)));
+    fx(&mut s, adj, "transform");
+    let key = |sec: f64, x: f64| {
+        let mut k = Keyframe::new(Tick::from_seconds_f64(sec), ParamValue::Vec2(filmcraft_geom::Vec2::new(x, 90.0)));
+        k.interp = Interpolation::Linear;
+        k
+    };
+    let e = clip(&mut s, adj).effect_mut("transform").unwrap();
+    e.params.get_mut("shutter_angle").unwrap().value = ParamValue::Float(360.0);
+    e.params.get_mut("position").unwrap().keyframes = vec![key(0.5, 160.0), key(1.0, 260.0)];
+    let mut diff = |frame: i64| {
+        let mut at = |shutter: bool| {
+            clip(&mut s, adj).effect_mut("transform").unwrap().params.get_mut("shutter_override").unwrap().value = ParamValue::Bool(shutter);
+            render_sequence(&s.p, s.seq, r60.tick_of(frame), RenderOptions::default(), &s.map)
+        };
+        let (sharp, blurred) = (at(false), at(true));
+        sharp.px.iter().zip(&blurred.px).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max)
+    };
+    assert!(diff(29) < 1e-4, "frame before the move is blurred");
+    assert!(diff(61) < 1e-4, "frame after the move is blurred");
+    assert!(diff(45) > 1e-2, "moving frame is sharp");
 }
 
+fn dissolve(s: &mut Scene, track: usize, from: Option<ClipId>, to: Option<ClipId>, start: i64) {
+    let tr = filmcraft_project::Transition {
+        id: filmcraft_project::TransitionId(900 + start as u64),
+        effect: find_effect("cross_dissolve").unwrap().instance(),
+        start: R.tick_of(start),
+        duration: R.tick_of(12),
+        from,
+        to,
+        align: Default::default(),
+        reverse: false,
+    };
+    s.p.sequence_mut(s.seq).unwrap().video_tracks[track].transitions.push(tr);
+}
+
+fn at(s: &Scene, frame: i64) -> [f32; 4] {
+    render_sequence(&s.p, s.seq, R.tick_of(frame), RenderOptions::default(), &s.map).get(160, 90)
+}
+
+/// A dissolve at the start of an adjustment layer (Cmd+D) fades its effects in, and one at its
+/// end fades them out, instead of leaving them off for the transition and cutting in after it.
 #[test]
-fn masked_adjustment_and_non_normal_blend_keep_cpu_fallback() {
+fn a_dissolve_fades_the_adjustment_layers_effects_in_and_out() {
     let mut s = scene(2);
-    let color = matte(&mut s.p, &mut s.map, [0.2, 0.5, 0.8, 1.0]);
-    place(&mut s.p, s.seq, 0, color);
+    let red = matte(&mut s.p, &mut s.map, [1.0, 0.0, 0.0, 1.0]);
+    place(&mut s.p, s.seq, 0, red);
     let adj = adjustment(&mut s.p, s.seq, 1);
     fx(&mut s, adj, "invert");
-    clip(&mut s, adj).effect_mut("invert").unwrap().masks.push(Mask::new("region", MaskPath::rect(0.0, 0.0, 100.0, 100.0)));
-    let p = crate::plan::plan_frame(&s.p, s.seq, R.tick_of(12), RenderOptions::default(), &s.map);
-    assert!(matches!(p, crate::plan::FramePlan::Image(_)));
-    clip(&mut s, adj).effect_mut("invert").unwrap().masks.clear();
-    clip(&mut s, adj).effect_mut("opacity").unwrap().param_mut("blend").unwrap().value =
+    dissolve(&mut s, 1, None, Some(adj), 0);
+    dissolve(&mut s, 1, Some(adj), None, 36);
+    // fade in over frames 0..12: red → halfway → cyan
+    assert!(near(at(&s, 0), [1.0, 0.0, 0.0], 1e-3), "{:?}", at(&s, 0));
+    assert!(near(at(&s, 3), [0.75, 0.25, 0.25], 1e-3), "a quarter in: {:?}", at(&s, 3));
+    assert!(near(at(&s, 6), [0.5, 0.5, 0.5], 1e-3), "halfway in: {:?}", at(&s, 6));
+    assert!(near(at(&s, 24), [0.0, 1.0, 1.0], 1e-3), "{:?}", at(&s, 24));
+    // fade out over frames 36..48
+    assert!(near(at(&s, 42), [0.5, 0.5, 0.5], 1e-3), "halfway out: {:?}", at(&s, 42));
+    assert!(near(at(&s, 45), [0.75, 0.25, 0.25], 1e-3), "three quarters out: {:?}", at(&s, 45));
+}
+
+/// The layer's own opacity and blend mode still count during the fade.
+#[test]
+fn a_dissolve_on_an_adjustment_layer_keeps_its_opacity_and_blend_mode() {
+    let mut s = scene(2);
+    let red = matte(&mut s.p, &mut s.map, [1.0, 0.0, 0.0, 1.0]);
+    place(&mut s.p, s.seq, 0, red);
+    let adj = adjustment(&mut s.p, s.seq, 1);
+    fx(&mut s, adj, "invert");
+    clip(&mut s, adj).effect_mut("opacity").unwrap().params.get_mut("opacity").unwrap().value = ParamValue::Float(50.0);
+    dissolve(&mut s, 1, None, Some(adj), 0);
+    // halfway through the fade, at 50 % opacity: a quarter of the way to cyan
+    assert!(near(at(&s, 6), [0.75, 0.25, 0.25], 1e-3), "{:?}", at(&s, 6));
+    // Multiply (red × cyan = black) fades from red to black
+    let op = clip(&mut s, adj).effect_mut("opacity").unwrap();
+    op.params.get_mut("opacity").unwrap().value = ParamValue::Float(100.0);
+    op.params.get_mut("blend").unwrap().value =
         ParamValue::Choice(filmcraft_project::effect::BLEND_MODES.iter().position(|b| *b == "Multiply").unwrap() as u32);
-    let p = crate::plan::plan_frame(&s.p, s.seq, R.tick_of(12), RenderOptions::default(), &s.map);
-    assert!(matches!(p, crate::plan::FramePlan::Image(_)));
+    assert!(near(at(&s, 6), [0.5, 0.0, 0.0], 1e-3), "{:?}", at(&s, 6));
+    assert!(near(at(&s, 24), [0.0, 0.0, 0.0], 1e-3), "{:?}", at(&s, 24));
 }
 
-fn assert_adjustment_plan_parity(s: &Scene, opts: RenderOptions) -> crate::plan::FramePlan {
-    let plan = crate::plan::plan_frame(&s.p, s.seq, R.tick_of(12), opts, &s.map);
-    assert_eq!(
-        crate::plan::is_cpu_frame(&s.p, s.seq, R.tick_of(12), opts),
-        matches!(plan, crate::plan::FramePlan::Image(_)),
-        "export pool admission must agree with the planner, including disabled effects and output scale"
-    );
-    let cpu = render_sequence(&s.p, s.seq, R.tick_of(12), opts, &s.map);
-    let planned = crate::plan::execute_cpu(&plan);
-    let max = cpu.px.iter().zip(&planned.px).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max);
-    assert!(max < 1e-5, "planned adjustment diff {max}");
-    plan
-}
-
+/// A frame where a transition touches an adjustment layer is composited on the CPU, which knows
+/// how to fade one; the layered (GPU) plan does not.
 #[test]
-fn adjustment_planning_handles_disabled_effects_and_multiple_alpha_overlays() {
-    let mut s = scene(3);
-    let color = matte(&mut s.p, &mut s.map, [0.2, 0.5, 0.8, 0.4]);
-    place(&mut s.p, s.seq, 0, color);
-    let first = adjustment(&mut s.p, s.seq, 1);
-    let second = adjustment(&mut s.p, s.seq, 2);
-    // Even a no-effect adjustment composites its translucent backdrop over itself.
-    assert!(matches!(assert_adjustment_plan_parity(&s, RenderOptions::default()), crate::plan::FramePlan::Composite { .. }));
-    fx(&mut s, first, "invert");
-    fx(&mut s, second, "brightness_contrast");
-    clip(&mut s, second).effect_mut("opacity").unwrap().param_mut("opacity").unwrap().value = ParamValue::Float(35.0);
-    assert_adjustment_plan_parity(&s, RenderOptions::default());
-    assert!(matches!(assert_adjustment_plan_parity(&s, RenderOptions { effects: false, ..Default::default() }), crate::plan::FramePlan::Layers { .. }));
-    clip(&mut s, first).enabled = false;
-    clip(&mut s, second).enabled = false;
-    assert!(matches!(assert_adjustment_plan_parity(&s, RenderOptions::default()), crate::plan::FramePlan::Layers { .. }));
-}
-
-#[test]
-fn nested_full_frame_adjustment_does_not_touch_parent_backdrop() {
-    let mut s = scene(2);
-    let background = matte(&mut s.p, &mut s.map, [0.8, 0.2, 0.1, 1.0]);
-    let foreground = matte(&mut s.p, &mut s.map, [0.2, 0.5, 0.8, 0.4]);
-    place(&mut s.p, s.seq, 0, background);
-    let inner = s.p.new_sequence("inner", SequenceSettings { width: 320, height: 180, frame_rate: R, ..Default::default() }, 2, 0, None);
-    place(&mut s.p, inner, 0, foreground);
-    let adj = adjustment(&mut s.p, inner, 1);
-    s.p.sequence_mut(inner).unwrap().find_item_mut(adj).unwrap().1.effects.insert(0, find_effect("invert").unwrap().instance());
-    place(&mut s.p, s.seq, 1, inner);
-    assert_adjustment_plan_parity(&s, RenderOptions::default());
-}
-
-#[test]
-fn differently_sized_adjustment_stays_cpu() {
-    let mut s = scene(2);
-    let color = matte(&mut s.p, &mut s.map, [0.2, 0.5, 0.8, 1.0]);
-    place(&mut s.p, s.seq, 0, color);
-    let source =
-        s.p.add_item("small adjustment", Label::Lavender, ItemKind::AdjustmentLayer { width: 160, height: 180, rate: R, duration: R.tick_of(48) }, None);
-    let adj = place(&mut s.p, s.seq, 1, source);
-    fx(&mut s, adj, "invert");
-    assert!(matches!(assert_adjustment_plan_parity(&s, RenderOptions::default()), crate::plan::FramePlan::Image(_)));
-}
-
-#[test]
-fn nonfinite_adjustment_parameters_keep_cpu_fallback() {
-    let mut s = scene(2);
-    let color = matte(&mut s.p, &mut s.map, [0.2, 0.5, 0.8, 1.0]);
-    place(&mut s.p, s.seq, 0, color);
-    let adj = adjustment(&mut s.p, s.seq, 1);
-    fx(&mut s, adj, "brightness_contrast");
-    clip(&mut s, adj).effect_mut("brightness_contrast").unwrap().param_mut("brightness").unwrap().value = ParamValue::Float(f64::NAN);
-    let p = crate::plan::plan_frame(&s.p, s.seq, R.tick_of(12), RenderOptions::default(), &s.map);
-    assert!(matches!(p, crate::plan::FramePlan::Image(_)));
-}
-
-#[test]
-fn adjustment_with_translucent_dissolve_keeps_whole_frame_cpu_fallback() {
+fn a_transition_with_an_adjustment_layer_is_not_planned_as_layers() {
     let mut s = scene(2);
     let red = matte(&mut s.p, &mut s.map, [1.0, 0.0, 0.0, 1.0]);
     let blue = matte(&mut s.p, &mut s.map, [0.0, 0.0, 1.0, 1.0]);
-    let a = place(&mut s.p, s.seq, 0, red);
-    let b = place(&mut s.p, s.seq, 0, blue);
-    clip(&mut s, b).start = R.tick_of(24);
-    clip(&mut s, a).duration = R.tick_of(24);
+    place(&mut s.p, s.seq, 0, red);
+    // V2: a blue clip from 0 to 24, then an adjustment layer from 24, a dissolve centred on the cut
+    let b = place(&mut s.p, s.seq, 1, blue);
     clip(&mut s, b).duration = R.tick_of(24);
-    s.p.sequence_mut(s.seq).unwrap().video_tracks[0].sort();
-    for id in [a, b] {
-        clip(&mut s, id).effect_mut("opacity").unwrap().param_mut("opacity").unwrap().value = ParamValue::Float(50.0);
-    }
-    let adj = adjustment(&mut s.p, s.seq, 1);
-    s.p.sequence_mut(s.seq).unwrap().video_tracks[0].transitions.push(filmcraft_project::Transition {
-        id: filmcraft_project::TransitionId(999),
-        effect: find_effect("cross_dissolve").unwrap().instance(),
-        start: R.tick_of(18),
-        duration: R.tick_of(12),
-        from: Some(a),
-        to: Some(b),
-        align: Default::default(),
-        reverse: false,
-    });
-    let opts = RenderOptions::default();
-    let time = R.tick_of(24);
-    let cpu = render_sequence(&s.p, s.seq, time, opts, &s.map);
-    let plan = crate::plan::plan_frame(&s.p, s.seq, time, opts, &s.map);
-    assert!(matches!(plan, crate::plan::FramePlan::Image(_)));
-    assert_eq!(crate::plan::execute_cpu(&plan).px, cpu.px);
-    // The dissolve produces alpha .5; the no-op adjustment composites it over itself.
-    assert!((cpu.get(100, 100)[3] - 0.75).abs() < 1e-5);
-    clip(&mut s, adj).enabled = false;
-    assert!(matches!(crate::plan::plan_frame(&s.p, s.seq, time, opts, &s.map), crate::plan::FramePlan::Layers { .. }));
+    let a = s.p.add_item("Adjustment Layer", Label::Lavender, ItemKind::AdjustmentLayer { width: 320, height: 180, rate: R, duration: R.tick_of(48) }, None);
+    let mut ti = s.p.make_track_item(a, TrackKind::Video, R.tick_of(24), TimeRange::new(Tick::ZERO, R.tick_of(24)), R).unwrap();
+    ti.effects.insert(0, find_effect("invert").unwrap().instance());
+    let ac = ti.id;
+    s.p.sequence_mut(s.seq).unwrap().video_tracks[1].items.push(ti);
+    dissolve(&mut s, 1, Some(b), Some(ac), 18);
+    let q = s.p.sequence(s.seq).unwrap();
+    // frame 20 is still on the blue clip, but the dissolve into the adjustment layer shows
+    assert!(!crate::plan::layered_at(&s.p, q, R.tick_of(20)));
+    // halfway (frame 24): half blue, half the inverted red (cyan)
+    assert!(near(at(&s, 24), [0.0, 0.5, 1.0], 1e-3), "{:?}", at(&s, 24));
 }
