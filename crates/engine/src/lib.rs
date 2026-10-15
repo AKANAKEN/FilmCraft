@@ -1240,6 +1240,8 @@ mod individual_selection_tests;
 #[cfg(test)]
 mod interchange_auto_points_tests;
 #[cfg(test)]
+mod interchange_bin_tests;
+#[cfg(test)]
 mod keyboard_tests;
 #[cfg(test)]
 mod linked_speed_tests;
