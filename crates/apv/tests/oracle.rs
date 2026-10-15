@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use filmcraft_apv::{
-    ChromaFormat, ContentLightLevel, DecodeOptions, Encoder, EncoderConfig, Frame, MasteringDisplay, Profile, decode_frame, decode_frame_with, probe,
+    decode_frame, decode_frame_with, probe, ChromaFormat, ContentLightLevel, DecodeOptions, Encoder, EncoderConfig, Frame, MasteringDisplay, Profile,
 };
 
 fn ffmpeg() -> Option<PathBuf> {
@@ -99,7 +99,11 @@ fn psnr(a: &[u16], b: &[u16], peak: f64) -> f64 {
         return 99.0;
     }
     let mse: f64 = a.iter().zip(b).map(|(&x, &y)| (x as f64 - y as f64).powi(2)).sum::<f64>() / a.len() as f64;
-    if mse == 0.0 { 99.0 } else { 10.0 * (peak * peak / mse).log10() }
+    if mse == 0.0 {
+        99.0
+    } else {
+        10.0 * (peak * peak / mse).log10()
+    }
 }
 
 #[test]
