@@ -2,6 +2,7 @@
 resolver = "3"
 members = ["crates/*", "apps/*", "xtask"]
 default-members = ["crates/*", "apps/*", "xtask"]
+exclude = ["vendor"]
 
 [workspace.package]
 version = "0.8.0"
@@ -145,3 +146,7 @@ opt-level = 3
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+# Patched copies of crates.io dependencies; see vendor/README.md.
+[patch.crates-io]
+wgpu-hal = { path = "vendor/wgpu-hal" }
