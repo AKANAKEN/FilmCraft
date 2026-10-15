@@ -494,6 +494,55 @@ fn asc_bytes(object_type: u8, sf_index: u8, channel_config: u8) -> Vec<u8> {
     v.to_be_bytes().to_vec()
 }
 
+/// Raw ADTS (`.aac`): frame after frame, skipping an ID3v2 tag. `None` when no frame decodes.
+fn decode_adts(bytes: &[u8]) -> Option<(u32, Vec<Vec<f32>>)> {
+    let mut p = 0usize;
+    if bytes.len() >= 10 && &bytes[..3] == b"ID3" {
+        let size = ((bytes[6] as usize & 0x7F) << 21) | ((bytes[7] as usize & 0x7F) << 14) | ((bytes[8] as usize & 0x7F) << 7) | (bytes[9] as usize & 0x7F);
+        p = (10 + size).min(bytes.len());
+    }
+    let mut dec = PacketDecoder::lazy_aac();
+    let mut samples: Vec<Vec<f32>> = Vec::new();
+    let mut rate = 0u32;
+    while p + 7 <= bytes.len() {
+        let sync = bytes[p] == 0xFF && bytes[p + 1] & 0xF6 == 0xF0;
+        let len = if sync {
+            (((bytes[p + 3] & 3) as usize) << 11) | ((bytes[p + 4] as usize) << 3) | ((bytes[p + 5] as usize) >> 5)
+        } else {
+            0
+        };
+        if !sync || len < 7 || p + len > bytes.len() {
+            p += 1;
+            continue;
+        }
+        let Some((asc, raw)) = adts_split(&bytes[p..p + len]) else {
+            p += 1;
+            continue;
+        };
+        if dec.ensure_aac(&asc).is_ok()
+            && let Ok(frame) = dec.decode(raw, 0)
+            && !frame.is_empty()
+            && frame.iter().all(|c| !c.is_empty())
+        {
+            if rate == 0
+                && let Inner::Aac { dec, .. } = &dec.inner
+            {
+                rate = dec.sample_rate();
+            }
+            if samples.is_empty() {
+                samples = vec![Vec::new(); frame.len()];
+            }
+            if frame.len() == samples.len() {
+                for (o, c) in samples.iter_mut().zip(frame) {
+                    o.extend(c);
+                }
+            }
+        }
+        p += len;
+    }
+    (rate > 0 && samples.first().is_some_and(|c| !c.is_empty())).then_some((rate, samples))
+}
+
 /// An ADTS frame (ISO/IEC 13818-7 §6.2): the equivalent AudioSpecificConfig and the raw data
 /// block. Frames with several raw data blocks are not split (`None`).
 pub fn adts_split(frame: &[u8]) -> Option<(Vec<u8>, &[u8])> {
@@ -798,6 +847,22 @@ pub struct AudioFileSource {
 impl AudioFileSource {
     pub fn decode(name: &str, bytes: Arc<[u8]>) -> Result<Self> {
         let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+        if ext == "aac"
+            && let Some((rate, samples)) = decode_adts(&bytes)
+        {
+            let frames = samples.first().map_or(0, Vec::len);
+            let info = MediaInfo {
+                name: name.to_string(),
+                kind: MediaKind::AudioOnly,
+                duration: Tick::from_units(frames as i64, rate as i64),
+                video: None,
+                audio_streams: vec![AudioStreamInfo { sample_rate: rate, channels: samples.len() as u32, codec: "AAC".into(), bits_per_sample: None }],
+                container: "AAC".into(),
+                start_timecode: None,
+                file_size: Some(bytes.len() as u64),
+            };
+            return Ok(Self { info, rate, samples });
+        }
         if matches!(ext.as_str(), "mp2" | "mp3")
             && let Some((layer, rate, samples)) = decode_mpeg_layer12(&bytes)
         {
@@ -1353,5 +1418,43 @@ mod gapless_tests {
     fn mp3_encoder_delay_is_trimmed() {
         let src = AudioFileSource::decode("tagged.mp3", Arc::from(tagged_mp3())).unwrap();
         assert_eq!(src.samples[0].len(), AUDIO_FRAMES * 1152 - (576 + 529));
+    }
+}
+
+#[cfg(test)]
+mod adts_tests {
+    use super::*;
+
+    /// One ADTS frame around a raw AAC access unit (LC, one raw data block, no CRC).
+    fn adts_frame(rate: u32, channels: u8, raw: &[u8]) -> Vec<u8> {
+        let sf = filmcraft_aac::sample_rate_index(rate).unwrap();
+        let profile = 1u8; // AAC-LC is object type 2
+        let len = 7 + raw.len();
+        let mut f = vec![0u8; len];
+        f[0] = 0xFF;
+        f[1] = 0xF1;
+        f[2] = (profile << 6) | (sf << 2) | ((channels >> 2) & 1);
+        f[3] = ((channels & 3) << 6) | (((len >> 11) as u8) & 3);
+        f[4] = ((len >> 3) & 0xFF) as u8;
+        f[5] = ((len & 7) as u8) << 5;
+        f[6] = 0;
+        f[7..].copy_from_slice(raw);
+        f
+    }
+
+    /// #1291: a raw ADTS `.aac`, including one FilmCraft's encoder can write, imports as audio.
+    #[test]
+    fn an_adts_aac_file_decodes() {
+        let rate = 48_000u32;
+        let mut enc = filmcraft_aac::Encoder::new(filmcraft_aac::EncoderConfig::cbr(rate, 1, 64_000)).unwrap();
+        let pcm = vec![0.2f32; 1024];
+        let mut units = enc.encode(&[&pcm]);
+        units.extend(enc.flush());
+        assert!(!units.is_empty(), "the encoder produced an access unit");
+        let file: Vec<u8> = units.iter().flat_map(|u| adts_frame(rate, 1, u)).collect();
+        let src = AudioFileSource::decode("tone.aac", Arc::from(file)).unwrap();
+        let a = src.info().audio().unwrap();
+        assert_eq!((a.channels, a.sample_rate, a.codec.as_str()), (1, rate, "AAC"));
+        assert!(!src.samples[0].is_empty());
     }
 }
