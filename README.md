@@ -369,6 +369,7 @@ duplicate. With one driver per GPU the adapter is the one wgpu picks, as before.
 | Flatpak | `filmcraft-<ver>-linux-x86_64.flatpak` | `filmcraft-<ver>-linux-aarch64.flatpak` | Sandboxed; `flatpak install --user <file>` |
 | Debian/Ubuntu | `filmcraft-<ver>-linux-x86_64.deb` | `filmcraft-<ver>-linux-aarch64.deb` | |
 | Fedora/RHEL/openSUSE | `filmcraft-<ver>-linux-x86_64.rpm` | `filmcraft-<ver>-linux-aarch64.rpm` | |
+| Arch Linux/Manjaro | `filmcraft-<ver>-linux-x86_64.pkg.tar.zst` | `filmcraft-<ver>-linux-aarch64.pkg.tar.zst` | `sudo pacman -U <file>`; installs as `ai.storyteller.filmcraft`, replacing an AUR package |
 | Tarball | `filmcraft-<ver>-linux-x86_64.tar.gz` | `filmcraft-<ver>-linux-aarch64.tar.gz` | Unpack and run `./install.sh` |
 
 RISC-V (riscv64): `filmcraft-<ver>-linux-riscv64.tar.gz` (tarball only; needs glibc 2.39+, e.g. Ubuntu 24.04
