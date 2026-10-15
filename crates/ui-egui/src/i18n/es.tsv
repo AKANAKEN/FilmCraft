@@ -3610,3 +3610,23 @@
 	Shows the version, community links and credits in a FilmCraft window.	Muestra la versión, los enlaces de la comunidad y los créditos en una ventana de FilmCraft.
 	Couldn't open your web browser	No se pudo abrir el navegador web
 	Open this address in your browser yourself:	Abre esta dirección tú mismo en el navegador:
+
+	Analysis cancelled (frame {frame} of {total})	Análisis cancelado (fotograma {frame} de {total})
+	Analysis complete ({total} frames)	Análisis completado ({total} fotogramas)
+	Analysis failed — see application log	Análisis fallido — consulta el registro de la aplicación
+	Analyzing: {percent}% (frame {frame} of {total})	Analizando: {percent}% (fotograma {frame} de {total})
+	Disabled	Desactivado
+	Not analyzed	No analizado
+	Auto-scale Mode	Modo de escalado automático
+	Constant	Constante
+	Fast Analysis	Análisis rápido
+	Factorizing: {percent}% (frame {frame} of {total})	Factorizando: {percent}% (fotograma {frame} de {total})
+	Stabilizing: {percent}% (frame {frame} of {total})	Estabilizando: {percent}% (fotograma {frame} de {total})
+	Subspace Warp: {frames} of {total} frames	Deformación de subespacio: {frames} de {total} fotogramas
+	Using Position, Scale, Rotation: insufficient persistent tracks	Usando Posición, escala, rotación: pistas persistentes insuficientes
+	Using Position, Scale, Rotation: numerical failure	Usando Posición, escala, rotación: fallo numérico
+	Using Position, Scale, Rotation: invalid analysis data	Usando Posición, escala, rotación: datos de análisis no válidos
+	Using Position, Scale, Rotation: no usable mesh	Usando Posición, escala, rotación: sin malla utilizable
+	Auto-scale	Escalado automático
+	Analysis is not running	No hay ningún análisis en curso
+	Fast Analysis prioritizes execution speed; Detailed Analysis spends more effort finding tracks. These settings are independent.	El análisis rápido prioriza la velocidad de ejecución; el análisis detallado dedica más esfuerzo a encontrar puntos de seguimiento. Estos ajustes son independientes.

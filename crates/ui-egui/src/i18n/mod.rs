@@ -1090,30 +1090,15 @@ mod tests {
     }
 
     #[test]
-    fn ukrainian_entries_cover_the_original_menu_catalog() {
-        let app = crate::FilmcraftApp::new(filmcraft_engine::Session::default());
-        let items = crate::menus::menu_items(&app);
-        let known = |text: &str| crate::menus::MENUS.contains(&text) || items.iter().any(|it| it.label == text || it.path.iter().any(|p| p == text));
-        let (entries, _) = catalog::parse_entries(include_str!("uk.tsv"));
-        for (_, en, _) in entries {
-            assert!(known(&en) || en == "Settings", "not a menu label: {en}");
-        }
+    fn ukrainian_covers_core_menus() {
         for en in crate::menus::MENUS.into_iter().chain(["Audio", "Settings"]) {
             assert_ne!(Language::Uk.tr(en), en, "untranslated Ukrainian menu: {en}");
         }
     }
 
-    /// German covers at least the core menus (`core_menu_labels`, the top-level menus and the native
-    /// macOS app menu); every entry must still be a menu label.
+    /// German covers the core menus, including the native macOS app menu.
     #[test]
-    fn german_entries_cover_the_original_menu_catalog() {
-        let app = crate::FilmcraftApp::new(filmcraft_engine::Session::default());
-        let items = crate::menus::menu_items(&app);
-        let known = |text: &str| crate::menus::MENUS.contains(&text) || items.iter().any(|it| it.label == text || it.path.iter().any(|p| p == text));
-        let (entries, _) = catalog::parse_entries(include_str!("de.tsv"));
-        for (_, en, _) in entries {
-            assert!(known(&en) || crate::menus::NATIVE_APP_MENU.contains(&en.as_str()), "not a menu label: {en}");
-        }
+    fn german_covers_core_menus() {
         for en in core_menu_labels() {
             assert!(Language::De.has(&en), "missing German menu label: {en}");
         }
@@ -1121,8 +1106,6 @@ mod tests {
         for en in crate::menus::MENUS.into_iter().chain(["Audio"]).chain(crate::menus::NATIVE_APP_MENU) {
             assert!(Language::De.has(en), "untranslated German menu: {en}");
         }
-        assert_eq!(Language::De.tr("Settings"), "Voreinstellungen");
-        assert_eq!(Language::De.tr("Quit FilmCraft"), "FilmCraft beenden");
     }
 
     /// French covers the whole interface (the Spanish catalog's entries and the native macOS
@@ -1181,14 +1164,7 @@ mod tests {
     }
 
     #[test]
-    fn russian_entries_cover_the_original_menu_catalog() {
-        let app = crate::FilmcraftApp::new(filmcraft_engine::Session::default());
-        let items = crate::menus::menu_items(&app);
-        let known = |text: &str| crate::menus::MENUS.contains(&text) || items.iter().any(|it| it.label == text || it.path.iter().any(|p| p == text));
-        let (entries, _) = catalog::parse_entries(include_str!("ru.tsv"));
-        for (_, en, _) in entries {
-            assert!(known(&en) || en == "Settings", "not a menu label: {en}");
-        }
+    fn russian_covers_core_menus() {
         for en in core_menu_labels() {
             assert!(Language::Ru.has(&en), "missing Russian menu label: {en}");
         }

@@ -129,16 +129,17 @@ fn damaged_ycbcr_tiffs_fail_without_panicking() {
 
 /// ffmpeg (an external oracle) writes YCbCr TIFFs from YUV frames; our decode must match ffmpeg's
 /// own RGB decode of the same file. A smooth gradient, so the chroma upsampling (we repeat chroma
-/// across a data unit) does not dominate; 95 × 63 so the data units do not line up.
+/// across a data unit) does not dominate; 95 × 63 so the data units do not line up. The explicit
+/// endpoint colors keep ffmpeg's `gradients` source deterministic (its defaults are random).
 #[test]
 fn ffmpeg_ycbcr_tiffs_match_ffmpeg_decode() {
     let Some(ff) = filmcraft_testkit::oracle::ffmpeg_or_skip("YCbCr TIFF oracle") else { return };
     let dir = filmcraft_testkit::fixtures::fixtures_dir("media/tiff_ycbcr");
     for pix_fmt in ["yuv420p", "yuv422p", "yuv444p"] {
-        let tiff = dir.join(format!("gradient_{pix_fmt}.tiff"));
+        let tiff = dir.join(format!("gradient_blue_orange_{pix_fmt}.tiff"));
         let made = filmcraft_testkit::fixtures::generate(&tiff, |tmp| {
             std::process::Command::new(&ff)
-                .args(["-y", "-v", "error", "-f", "lavfi", "-i", "gradients=size=95x63:seed=7", "-frames:v", "1", "-pix_fmt", pix_fmt])
+                .args(["-y", "-v", "error", "-f", "lavfi", "-i", "gradients=size=95x63:seed=7:c0=0x204080:c1=0xe09040", "-frames:v", "1", "-pix_fmt", pix_fmt])
                 .arg(tmp)
                 .status()
                 .is_ok_and(|s| s.success())

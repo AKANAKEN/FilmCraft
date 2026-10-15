@@ -3601,3 +3601,23 @@
 	Shows the version, community links and credits in a FilmCraft window.	Mostra la versione, i link della community e i riconoscimenti in una finestra di FilmCraft.
 	Couldn't open your web browser	Impossibile aprire il browser web
 	Open this address in your browser yourself:	Apri tu questo indirizzo nel browser:
+
+	Analysis cancelled (frame {frame} of {total})	Analisi annullata (fotogramma {frame} di {total})
+	Analysis complete ({total} frames)	Analisi completata ({total} fotogrammi)
+	Analysis failed — see application log	Analisi non riuscita — consulta il registro dell'applicazione
+	Analyzing: {percent}% (frame {frame} of {total})	Analisi in corso: {percent}% (fotogramma {frame} di {total})
+	Disabled	Disattivato
+	Not analyzed	Non analizzato
+	Auto-scale Mode	Modalità di ridimensionamento automatico
+	Constant	Fisso
+	Fast Analysis	Analisi rapida
+	Factorizing: {percent}% (frame {frame} of {total})	Fattorizzazione: {percent}% (fotogramma {frame} di {total})
+	Stabilizing: {percent}% (frame {frame} of {total})	Stabilizzazione: {percent}% (fotogramma {frame} di {total})
+	Subspace Warp: {frames} of {total} frames	Deformazione subspaziale: {frames} di {total} fotogrammi
+	Using Position, Scale, Rotation: insufficient persistent tracks	Uso di Posizione, scala, rotazione: tracce persistenti insufficienti
+	Using Position, Scale, Rotation: numerical failure	Uso di Posizione, scala, rotazione: errore numerico
+	Using Position, Scale, Rotation: invalid analysis data	Uso di Posizione, scala, rotazione: dati di analisi non validi
+	Using Position, Scale, Rotation: no usable mesh	Uso di Posizione, scala, rotazione: nessuna mesh utilizzabile
+	Auto-scale	Ridimensionamento automatico
+	Analysis is not running	Nessuna analisi in corso
+	Fast Analysis prioritizes execution speed; Detailed Analysis spends more effort finding tracks. These settings are independent.	L’analisi rapida privilegia la velocità di esecuzione; l’analisi dettagliata impiega più sforzo nel trovare punti di tracciamento. Queste impostazioni sono indipendenti.
