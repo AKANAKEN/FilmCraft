@@ -200,6 +200,11 @@ pub(crate) fn marker_color_p(p: &Value, cmd: &str) -> Result<Option<Label>> {
 pub(crate) fn str_p<'a>(p: &'a Value, k: &str) -> Option<&'a str> {
     p.get(k).and_then(Value::as_str)
 }
+/// Marker `color`: omitted is default Green; unknown names are an error (never stored as Green).
+pub(crate) fn marker_color_p(p: &Value, cmd: &str) -> Result<Option<Label>> {
+    let Some(n) = str_p(p, "color") else { return Ok(None) };
+    Label::from_marker_name(n).map(Some).ok_or_else(|| bad(cmd, format!("unknown colour `{n}` ({})", Label::accepted_colour_names())))
+}
 pub(crate) fn f64_p(p: &Value, k: &str) -> Option<f64> {
     p.get(k).and_then(Value::as_f64)
 }
