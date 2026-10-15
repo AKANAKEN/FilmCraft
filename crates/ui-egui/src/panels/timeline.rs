@@ -2007,8 +2007,7 @@ pub(crate) const CLIP_MENU: &[&[(&str, &str)]] = &[
         ("Reveal Nested Sequence", "sequence.revealNested"),
         ("Multi-Camera", "clip.multicam"),
     ],
-    &[("Label", "edit.label")],
-    &[("Add Marker", "markers.add")],
+    &[("Label", "edit.label"), ("Add Marker", "markers.add")],
     &[("Speed/Duration…", "clip.speedDuration"), ("Scene Edit Detection…", "clip.sceneEditDetection")],
     &[
         ("Frame Hold Options…", "clip.frameHoldOptions"),
@@ -3416,5 +3415,15 @@ mod ruler_tests {
         }
         let (minor, label) = ruler_steps(1.0, i64::MAX);
         assert!(minor >= 1 && label >= 1 && label % minor == 0, "an unrepresentable rate: tick {minor}, label {label}");
+    }
+}
+
+#[cfg(test)]
+mod clip_menu_tests {
+    use super::CLIP_MENU;
+
+    #[test]
+    fn the_clip_menu_offers_add_marker() {
+        assert!(CLIP_MENU.iter().flat_map(|group| group.iter()).any(|&(label, cmd)| label == "Add Marker" && cmd == "markers.add"));
     }
 }
