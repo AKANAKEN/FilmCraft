@@ -125,6 +125,9 @@ fn main() -> eframe::Result {
     // see graphics.rs.
     let backend_override = eframe::wgpu::Backends::from_env();
     let mut graphics = graphics::GraphicsStart::begin(data_root.as_deref(), backend_override.is_some(), launch.graphics);
+    // A start stuck in the graphics driver never dies, so nothing above counts it (#1061): after
+    // graphics::HANG_TIMEOUT without a graphics device, the next mode is saved for the next launch.
+    graphics.watch_for_hang();
     // The GPU export renderer creates its own wgpu instance with every backend; after a start
     // fell back, that would load the driver that failed. Exports then composite on the CPU.
     if graphics.mode() == graphics::Mode::Default {
@@ -190,6 +193,8 @@ fn app_creator(launch: Launch, graphics: graphics::GraphicsStart, created: Arc<A
     let Launch { control_port, control_input_only, files, demo, startup_flag, recover, data_dir, graphics: _ } = launch;
     Box::new(move |cc| {
         created.store(true, Ordering::Relaxed);
+        // eframe has the window and graphics device: whatever the app does next is no hang
+        graphics.device_ready();
         // A fallback graphics mode says so in the window, with a button back to the default.
         let notice = graphics.degraded().then(|| {
             let start = graphics.clone();
