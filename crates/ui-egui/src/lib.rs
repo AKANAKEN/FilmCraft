@@ -1730,6 +1730,8 @@ impl FilmcraftApp {
         }
         self.sync_pool();
         self.apply_prefs(&ctx);
+        panels::timeline::queue_imported_audio_peaks(self);
+        panels::timeline::start_next_audio_peak(self, &ctx);
         #[cfg(not(target_arch = "wasm32"))]
         self.tick_media_refresh(&ctx);
         for ev in self.session.drain_events() {

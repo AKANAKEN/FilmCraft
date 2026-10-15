@@ -13,7 +13,7 @@ use filmcraft_time::{Tick, TimeDisplay, format_time};
 use serde_json::json;
 
 use crate::FilmcraftApp;
-use crate::frames::{FrameKey, Target};
+use crate::frames::{FrameKey, PlaybackHealth, Target};
 use crate::icons::{self, Icon};
 use crate::panels::monitor_view;
 use crate::state::{DisplayMode, PlaybackRes};
@@ -279,7 +279,11 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, which: Which)
     }
     // Dropped-frame indicator (Program only)
     if which == Which::Program && app.playback.playing {
-        let c = if app.playback.meter.counts().1 > 0 { t.render_yellow } else { t.render_green };
+        let c = match app.playback.meter.health() {
+            PlaybackHealth::Smooth => t.render_green,
+            PlaybackHealth::SomeDrops => t.render_yellow,
+            PlaybackHealth::FrequentDrops => t.render_red,
+        };
         ui.painter().circle_filled(pos2(video_area.min.x + 10.0, video_area.min.y + 10.0), 4.0, c);
     }
     // A click on the Program monitor around the picture lets go of what is selected on it (#683;
