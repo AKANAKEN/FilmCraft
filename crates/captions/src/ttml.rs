@@ -777,4 +777,31 @@ mod tests {
         let d = write(&doc, Flavor::Dfxp, Some(r), "en");
         assert!(d.contains(DFXP_PROFILE) && d.contains("begin=\"00:00:01.001\""), "{d}");
     }
+
+    #[test]
+    fn inherits_container_timing_when_paragraph_has_none() {
+        let xml = r#"<tt xmlns="http://www.w3.org/ns/ttml"><body begin="0s" end="5s"><div><p>Hello</p></div></body></tt>"#;
+        let doc = parse(xml).unwrap();
+        assert_eq!(doc.cues.len(), 1);
+        assert_eq!(doc.cues[0].text, "Hello");
+        assert_eq!(doc.cues[0].start, Tick::ZERO);
+        assert_eq!(doc.cues[0].end, Tick(5 * TICKS_PER_SECOND));
+    }
+
+    #[test]
+    fn duration_without_begin_starts_at_zero_or_container() {
+        let xml = r#"<tt xmlns="http://www.w3.org/ns/ttml"><body><div><p dur="2s">Hello</p></div></body></tt>"#;
+        let doc = parse(xml).unwrap();
+        assert_eq!(doc.cues.len(), 1);
+        assert_eq!(doc.cues[0].text, "Hello");
+        assert_eq!(doc.cues[0].start, Tick::ZERO);
+        assert_eq!(doc.cues[0].end, Tick(2 * TICKS_PER_SECOND));
+
+        let xml = r#"<tt xmlns="http://www.w3.org/ns/ttml"><body><div begin="3s"><p dur="2s">Hi</p></div></body></tt>"#;
+        let doc = parse(xml).unwrap();
+        assert_eq!(doc.cues.len(), 1);
+        assert_eq!(doc.cues[0].text, "Hi");
+        assert_eq!(doc.cues[0].start, Tick(3 * TICKS_PER_SECOND));
+        assert_eq!(doc.cues[0].end, Tick(5 * TICKS_PER_SECOND));
+    }
 }
