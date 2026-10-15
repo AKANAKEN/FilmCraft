@@ -44,6 +44,69 @@ impl Drop for Scratch {
     }
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn stepped_jobs_publish_cancellation_and_io_failure_distinctly() {
+    use std::sync::atomic::Ordering;
+    use std::time::{Duration, Instant};
+
+    use filmcraft_export::{ExportSettings, Exporter, Format};
+    use filmcraft_time::{Tick, TimeRange};
+
+    let dir = Scratch::new("stepped-terminal-cause");
+    let blocker = dir.path("blocked");
+    std::fs::write(&blocker, b"regular file").unwrap();
+    let path = dir.path("blocked/cancel-marker.mov");
+    for cancel in [true, false] {
+        let mut s = Session::default();
+        s.execute("file.newSequence", json!({"name": "Stepped", "fps": 25, "width": 16, "height": 16, "video": 0, "audio": 0})).unwrap();
+        let seq = s.state.active_sequence.unwrap();
+        let job = crate::Job { id: 1, label: "Stepped export".into(), progress: Default::default(), result: Default::default() };
+        let settings = ExportSettings {
+            format: Format::Mjpeg,
+            path: path.clone(),
+            include_audio: false,
+            range: Some(TimeRange::new(Tick::ZERO, s.sequence_rate().tick_of(1))),
+            ..Default::default()
+        };
+        let mut exporter = Exporter::new(s.project.clone(), seq, &settings, &job.progress).unwrap();
+        exporter.set_batch(1);
+        exporter.set_overlap(false);
+        s.stepped.push(crate::SteppedJob {
+            job: job.id,
+            exporter,
+            provider: s.media.full_res_provider(s.project.clone(), s.services.clone()),
+            progress: job.progress.clone(),
+            result: job.result.clone(),
+        });
+        s.jobs.push(job.clone());
+        if cancel {
+            s.execute("jobs.cancel", json!({"job": job.id})).unwrap();
+        }
+        assert!(job.result.lock().unwrap().is_none());
+        assert!(!job.progress.cancelled.load(Ordering::Relaxed));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while s.pump_jobs(Duration::from_millis(1)) {
+            assert!(Instant::now() < deadline, "the one-frame native stepped job did not finish");
+        }
+        assert!(s.stepped.is_empty());
+        let error = job.result.lock().unwrap().clone().unwrap().unwrap_err();
+        if cancel {
+            assert_eq!(error, "cancelled");
+        } else {
+            assert!(error.starts_with("I/O: ") && error.contains(&path), "actual output creation must fail: {error}");
+        }
+        assert_eq!(job.progress.cancelled.load(Ordering::Relaxed), cancel);
+        assert!(job.progress.finished.load(Ordering::Relaxed));
+        assert_eq!(job.progress.error.lock().unwrap().as_deref(), Some(error.as_str()));
+        let result = job.to_json();
+        assert_eq!(result["finished"], true);
+        assert_eq!(result["result"], json!({"error": error}));
+        assert!(!Path::new(&path).exists());
+    }
+    assert_eq!(std::fs::read(blocker).unwrap(), b"regular file");
+}
+
 fn demo() -> Session {
     let mut s = Session::default();
     s.execute("file.openDemoProject", json!({})).unwrap();
